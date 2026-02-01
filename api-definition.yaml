@@ -1,0 +1,153 @@
+openapi: 3.0.1
+info:
+  title: Rork Honest Eats API
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+  /api/v1/status:
+    get:
+      summary: Get service status
+      responses:
+        '200':
+          description: Service status information
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/v1/orders:
+    get:
+      summary: List all orders
+      responses:
+        '200':
+          description: List of orders
+          content:
+            application/json:
+              schema:
+                type: object
+    post:
+      summary: Create a new order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Order created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+        '500':
+          description: Error creating order
+  /api/v1/orders/{order_id}:
+    get:
+      summary: Get order by ID
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Order details
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/v1/auth/request-otp:
+    post:
+      summary: Request OTP for phone number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - phone
+              properties:
+                phone:
+                  type: string
+                  description: Phone number with country code (e.g., +919876543210)
+      responses:
+        '200':
+          description: OTP sent successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '400':
+          description: Invalid request
+        '500':
+          description: Error sending OTP
+  /api/v1/auth/verify-otp:
+    post:
+      summary: Verify OTP and login user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - phone
+                - otp
+              properties:
+                phone:
+                  type: string
+                  description: Phone number with country code
+                otp:
+                  type: string
+                  description: 6-digit OTP code
+      responses:
+        '200':
+          description: OTP verified and user logged in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      phone:
+                        type: string
+                      name:
+                        type: string
+                      email:
+                        type: string
+                  token:
+                    type: string
+        '400':
+          description: Invalid request
+        '401':
+          description: Invalid or expired OTP
+        '500':
+          description: Error verifying OTP
+

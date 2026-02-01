@@ -1,0 +1,42 @@
+{
+  "httpMethod": "GET",
+  "path": "/health",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "multiValueHeaders": {},
+  "queryStringParameters": null,
+  "multiValueQueryStringParameters": null,
+  "pathParameters": null,
+  "stageVariables": null,
+  "requestContext": {
+    "requestId": "test-request-id",
+    "accountId": "123456789012",
+    "apiId": "test-api-id",
+    "protocol": "HTTP/1.1",
+    "httpMethod": "GET",
+    "path": "/health",
+    "stage": "prod",
+    "requestTime": "09/Apr/2024:12:34:56 +0000",
+    "requestTimeEpoch": 1712660096000,
+    "identity": {
+      "cognitoIdentityPoolId": null,
+      "accountId": null,
+      "cognitoIdentityId": null,
+      "caller": null,
+      "sourceIp": "127.0.0.1",
+      "principalOrgId": null,
+      "accessKey": null,
+      "cognitoAuthenticationType": null,
+      "cognitoAuthenticationProvider": null,
+      "userArn": null,
+      "userAgent": "Custom User Agent String",
+      "user": null
+    },
+    "domainName": "test.execute-api.us-east-1.amazonaws.com",
+    "domainPrefix": "test"
+  },
+  "body": null,
+  "isBase64Encoded": false
+}
+

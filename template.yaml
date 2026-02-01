@@ -1,0 +1,946 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  rork-honesteats-api
+
+  AWS Lambda API for handling requests from rork-honesteats
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+    Description: Environment name (dev or prod)
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.9
+    Environment:
+      Variables:
+        POWERTOOLS_SERVICE_NAME: rork-honesteats-api
+        LOG_LEVEL: INFO
+
+Resources:
+  # ---------------- API ----------------
+  RorkHonestEatsApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: default
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+  # ---------------- LAMBDA FUNCTION ----------------
+  RorkHonestEatsApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-api-${Environment}'
+      CodeUri: .
+      Handler: app.lambda_handler
+      Architectures:
+        - x86_64
+      Events:
+        HealthCheck:
+          Type: Api
+          Properties:
+            Path: /health
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        Status:
+          Type: Api
+          Properties:
+            Path: /api/v1/status
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        # Auth routes
+        SendOTP:
+          Type: Api
+          Properties:
+            Path: /api/v1/auth/send-otp
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        VerifyOTP:
+          Type: Api
+          Properties:
+            Path: /api/v1/auth/verify-otp
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        # User routes
+        GetUser:
+          Type: Api
+          Properties:
+            Path: /api/v1/users/{phone}
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        CreateUser:
+          Type: Api
+          Properties:
+            Path: /api/v1/users
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        UpdateUser:
+          Type: Api
+          Properties:
+            Path: /api/v1/users/{phone}
+            Method: PUT
+            RestApiId: !Ref RorkHonestEatsApi
+        RegisterFCMToken:
+          Type: Api
+          Properties:
+            Path: /api/v1/users/{phone}/fcm-token
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        # Restaurant routes
+        ListRestaurants:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        GetRestaurant:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants/{restaurant_id}
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        CreateRestaurant:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        UpdateRestaurant:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants/{restaurant_id}
+            Method: PUT
+            RestApiId: !Ref RorkHonestEatsApi
+        # Menu routes
+        ListMenuItems:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants/{restaurant_id}/menu
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        GetMenuItem:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants/{restaurant_id}/menu/{item_id}
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        CreateMenuItem:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants/{restaurant_id}/menu
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        UpdateMenuItem:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants/{restaurant_id}/menu/{item_id}
+            Method: PUT
+            RestApiId: !Ref RorkHonestEatsApi
+        DeleteMenuItem:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants/{restaurant_id}/menu/{item_id}
+            Method: DELETE
+            RestApiId: !Ref RorkHonestEatsApi
+        # Order routes
+        ListOrders:
+          Type: Api
+          Properties:
+            Path: /api/v1/orders
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        GetOrder:
+          Type: Api
+          Properties:
+            Path: /api/v1/orders/{order_id}
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        CreateOrder:
+          Type: Api
+          Properties:
+            Path: /api/v1/orders
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        UpdateOrderStatus:
+          Type: Api
+          Properties:
+            Path: /api/v1/orders/{order_id}/status
+            Method: PUT
+            RestApiId: !Ref RorkHonestEatsApi
+        # Rider routes
+        ListRiders:
+          Type: Api
+          Properties:
+            Path: /api/v1/riders
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        GetRider:
+          Type: Api
+          Properties:
+            Path: /api/v1/riders/{rider_id}
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        CreateRider:
+          Type: Api
+          Properties:
+            Path: /api/v1/riders
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        UpdateRiderLocation:
+          Type: Api
+          Properties:
+            Path: /api/v1/riders/{rider_id}/location
+            Method: PUT
+            RestApiId: !Ref RorkHonestEatsApi
+        # Address routes
+        ListAddresses:
+          Type: Api
+          Properties:
+            Path: /api/v1/users/{phone}/addresses
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        GetAddress:
+          Type: Api
+          Properties:
+            Path: /api/v1/users/{phone}/addresses/{address_id}
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        CreateAddress:
+          Type: Api
+          Properties:
+            Path: /api/v1/users/{phone}/addresses
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        UpdateAddress:
+          Type: Api
+          Properties:
+            Path: /api/v1/users/{phone}/addresses/{address_id}
+            Method: PUT
+            RestApiId: !Ref RorkHonestEatsApi
+        DeleteAddress:
+          Type: Api
+          Properties:
+            Path: /api/v1/users/{phone}/addresses/{address_id}
+            Method: DELETE
+            RestApiId: !Ref RorkHonestEatsApi
+        # Location routes
+        ReverseGeocode:
+          Type: Api
+          Properties:
+            Path: /api/v1/location/reverse-geocode
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        GenerateGeohash:
+          Type: Api
+          Properties:
+            Path: /api/v1/location/geohash
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        # Payment routes
+        InitiatePayment:
+          Type: Api
+          Properties:
+            Path: /api/v1/payments/initiate
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        VerifyPayment:
+          Type: Api
+          Properties:
+            Path: /api/v1/payments/verify
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        GetPayment:
+          Type: Api
+          Properties:
+            Path: /api/v1/payments/{payment_id}
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        ListPayments:
+          Type: Api
+          Properties:
+            Path: /api/v1/payments
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        RazorpayWebhook:
+          Type: Api
+          Properties:
+            Path: /api/v1/payments/webhook
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        CalculateDeliveryFee:
+          Type: Api
+          Properties:
+            Path: /api/v1/delivery/calculate-fee
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        # Rider Document Upload (S3)
+        UploadDocument:
+          Type: Api
+          Properties:
+            Path: /api/v1/riders/documents/upload
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        # Rider Signup
+        RiderSignup:
+          Type: Api
+          Properties:
+            Path: /api/v1/riders/signup
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        Proxy:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+            RestApiId: !Ref RorkHonestEatsApi
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+                - dynamodb:Scan
+              Resource:
+                - !GetAtt UsersTableV2.Arn
+                - !GetAtt RestaurantsTable.Arn
+                - !GetAtt MenuItemsTable.Arn
+                - !GetAtt OrdersTable.Arn
+                - !GetAtt RidersTable.Arn
+                - !GetAtt AddressesTable.Arn
+                - !GetAtt PaymentsTable.Arn
+                - !GetAtt OTPStorageTable.Arn
+                - !GetAtt RateLimitTable.Arn
+                - !GetAtt RiderEarningsTable.Arn
+                - !Sub '${OrdersTable.Arn}/index/customer-phone-statusCreatedAt-index'
+                - !Sub '${OrdersTable.Arn}/index/restaurantId-statusCreatedAt-index'
+                - !Sub '${OrdersTable.Arn}/index/riderId-statusCreatedAt-index'
+                - !Sub '${RidersTable.Arn}/index/phone-index'
+                - !Sub '${RidersTable.Arn}/index/GSI1'
+                - !Sub '${RidersTable.Arn}/index/GSI2'
+                - !Sub '${RidersTable.Arn}/index/GSI3'
+                - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
+                - !Sub '${RestaurantsTable.Arn}/index/GSI1'
+                - !Sub '${RestaurantsTable.Arn}/index/GSI2'
+                - !Sub '${RestaurantsTable.Arn}/index/GSI3'
+                - !Sub '${PaymentsTable.Arn}/index/customer-phone-createdAt-index'
+                - !Sub '${RiderEarningsTable.Arn}/index/riderId-date-index'
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+                - s3:DeleteObject
+              Resource:
+                - !Sub '${RiderDocumentsBucket.Arn}/*'
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource:
+                - !GetAtt RiderDocumentsBucket.Arn
+      Environment:
+        Variables:
+          USERS_TABLE_NAME: !Ref UsersTableV2
+          RESTAURANTS_TABLE_NAME: !Ref RestaurantsTable
+          MENU_ITEMS_TABLE_NAME: !Ref MenuItemsTable
+          ORDERS_TABLE_NAME: !Ref OrdersTable
+          RIDERS_TABLE_NAME: !Ref RidersTable
+          ADDRESSES_TABLE_NAME: !Ref AddressesTable
+          PAYMENTS_TABLE_NAME: !Ref PaymentsTable
+          EARNINGS_TABLE_NAME: !Ref RiderEarningsTable
+          OTP_TABLE_NAME: !Ref OTPStorageTable
+          RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
+          RIDER_DOCUMENTS_BUCKET: !Ref RiderDocumentsBucket
+          ENVIRONMENT: !Ref Environment
+          GOOGLE_MAPS_API_KEY: AIzaSyCL5AHrcH6PHCA4Lh1poEOk2nUPpQLNTK0
+          RAZORPAY_MODE: test
+          RAZORPAY_TEST_KEY_ID: rzp_test_S29cM7srG3pwX6
+          RAZORPAY_TEST_KEY_SECRET: hkcURSnzUksXZVWPbNaTaXXK
+          RAZORPAY_LIVE_KEY_ID: rzp_live_PLACEHOLDER_REPLACE_WHEN_READY
+          RAZORPAY_LIVE_KEY_SECRET: PLACEHOLDER_REPLACE_WHEN_READY
+          RAZORPAY_WEBHOOK_SECRET: 7c3e9b8a-4d2f-4f6e-9a1b-2e8f6c0a5d41
+          # OTP handled by Firebase SDK directly in mobile app (no backend OTP service needed)
+          # API Keys for authentication (dev keys - change for production)
+          MOBILE_API_KEY: dev-mobile-key-12345
+          WEB_API_KEY: dev-web-key-12345
+          ADMIN_API_KEY: dev-admin-key-12345
+          # OTP Rate Limiting
+          OTP_RATE_LIMIT: "3"
+          OTP_RATE_WINDOW_HOURS: "1"
+
+  # ---------------- NOTIFICATION LAMBDA ----------------
+  NotificationHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-notification-handler-${Environment}'
+      CodeUri: .
+      Handler: notification_handler.lambda_handler
+      Architectures:
+        - x86_64
+      Events:
+        OrdersStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt OrdersTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 5
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName": ["MODIFY"]}'
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource:
+                - !GetAtt UsersTableV2.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:DescribeStream
+                - dynamodb:GetRecords
+                - dynamodb:GetShardIterator
+                - dynamodb:ListStreams
+              Resource:
+                - !GetAtt OrdersTable.StreamArn
+      Environment:
+        Variables:
+          USERS_TABLE_NAME: !Ref UsersTableV2
+          ENVIRONMENT: !Ref Environment
+          FIREBASE_PROJECT_ID: appnearbites-85b8c
+          NOTIFICATION_SERVICE: FIREBASE
+  
+  OrderAssignmentHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-order-assignment-${Environment}'
+      CodeUri: ./
+      Handler: order_assignment_handler.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - x86_64
+      Timeout: 30
+      MemorySize: 512
+      Events:
+        OrdersStreamEvent:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt OrdersTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 5
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName": ["MODIFY"], "dynamodb": {"NewImage": {"status": {"S": ["READY_FOR_PICKUP"]}}}}'
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt RestaurantsTable.Arn
+                - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
+                - !GetAtt RidersTable.Arn
+                - !Sub '${RidersTable.Arn}/index/GSI1'
+                - !Sub '${RidersTable.Arn}/index/GSI2'
+                - !Sub '${RidersTable.Arn}/index/GSI3'
+                - !GetAtt OrdersTable.Arn
+                - !GetAtt UsersTableV2.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
+              Resource:
+                - !GetAtt OrdersTable.Arn
+                - !GetAtt RidersTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:DescribeStream
+                - dynamodb:GetRecords
+                - dynamodb:GetShardIterator
+                - dynamodb:ListStreams
+              Resource:
+                - !GetAtt OrdersTable.StreamArn
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+                - sqs:GetQueueUrl
+              Resource:
+                - !GetAtt OrderAssignmentQueue.Arn
+      Environment:
+        Variables:
+          RESTAURANTS_TABLE_NAME: !Ref RestaurantsTable
+          RIDERS_TABLE_NAME: !Ref RidersTable
+          ORDERS_TABLE_NAME: !Ref OrdersTable
+          USERS_TABLE_NAME: !Ref UsersTableV2
+          ORDER_ASSIGNMENT_QUEUE_URL: !Ref OrderAssignmentQueue
+          ENVIRONMENT: !Ref Environment
+          FIREBASE_PROJECT_ID: appnearbites-85b8c
+          NOTIFICATION_SERVICE: FIREBASE
+  
+  # ---------------- QUEUE ASSIGNMENT CONSUMER ----------------
+  QueueAssignmentConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-queue-consumer-${Environment}'
+      CodeUri: ./
+      Handler: queue_assignment_consumer.lambda_handler
+      Runtime: python3.9
+      Timeout: 60
+      MemorySize: 512
+      Events:
+        ScheduledEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(2 minutes)
+            Enabled: true
+            Description: Process orders awaiting rider assignment
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+              Resource:
+                - !GetAtt OrderAssignmentQueue.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt OrdersTable.Arn
+                - !GetAtt RidersTable.Arn
+                - !GetAtt RestaurantsTable.Arn
+                - !GetAtt UsersTableV2.Arn
+                - !Sub '${RidersTable.Arn}/index/GSI1'
+                - !Sub '${RidersTable.Arn}/index/GSI2'
+                - !Sub '${RidersTable.Arn}/index/GSI3'
+                - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
+              Resource:
+                - !GetAtt OrdersTable.Arn
+                - !GetAtt RidersTable.Arn
+      Environment:
+        Variables:
+          ORDER_ASSIGNMENT_QUEUE_URL: !Ref OrderAssignmentQueue
+          ORDERS_TABLE_NAME: !Ref OrdersTable
+          RIDERS_TABLE_NAME: !Ref RidersTable
+          RESTAURANTS_TABLE_NAME: !Ref RestaurantsTable
+          USERS_TABLE_NAME: !Ref UsersTableV2
+          ENVIRONMENT: !Ref Environment
+          FIREBASE_PROJECT_ID: appnearbites-85b8c
+          NOTIFICATION_SERVICE: FIREBASE
+
+  # ---------------- SQS QUEUE ----------------
+  OrderAssignmentQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'order-assignment-queue-${Environment}'
+      VisibilityTimeout: 120  # 2 minutes - time to process before message reappears
+      MessageRetentionPeriod: 86400  # 24 hours
+      ReceiveMessageWaitTimeSeconds: 10  # Long polling
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # ---------------- DYNAMODB TABLES ----------------
+  UsersTableV2:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'food-delivery-users-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: phone
+          AttributeType: S
+        - AttributeName: role
+          AttributeType: S
+      KeySchema:
+        - AttributeName: phone
+          KeyType: HASH
+        - AttributeName: role
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  RestaurantsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'food-delivery-restaurants-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: restaurantId
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        - AttributeName: GSI2PK
+          AttributeType: S
+        - AttributeName: GSI2SK
+          AttributeType: S
+        - AttributeName: GSI3PK
+          AttributeType: S
+        - AttributeName: GSI3SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: restaurantId-index
+          KeySchema:
+            - AttributeName: restaurantId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI2
+          KeySchema:
+            - AttributeName: GSI2PK
+              KeyType: HASH
+            - AttributeName: GSI2SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI3
+          KeySchema:
+            - AttributeName: GSI3PK
+              KeyType: HASH
+            - AttributeName: GSI3SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  MenuItemsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'food-delivery-menu-items-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'food-delivery-orders-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: orderId
+          AttributeType: S
+        - AttributeName: customerPhone
+          AttributeType: S
+        - AttributeName: customerStatusCreatedAt
+          AttributeType: S
+        - AttributeName: restaurantId
+          AttributeType: S
+        - AttributeName: restaurantStatusCreatedAt
+          AttributeType: S
+        - AttributeName: riderId
+          AttributeType: S
+        - AttributeName: riderStatusCreatedAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: orderId
+          KeyType: HASH
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      GlobalSecondaryIndexes:
+        - IndexName: customer-phone-statusCreatedAt-index
+          KeySchema:
+            - AttributeName: customerPhone
+              KeyType: HASH
+            - AttributeName: customerStatusCreatedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: restaurantId-statusCreatedAt-index
+          KeySchema:
+            - AttributeName: restaurantId
+              KeyType: HASH
+            - AttributeName: restaurantStatusCreatedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: riderId-statusCreatedAt-index
+          KeySchema:
+            - AttributeName: riderId
+              KeyType: HASH
+            - AttributeName: riderStatusCreatedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  RidersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'food-delivery-riders-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: riderId
+          AttributeType: S
+        - AttributeName: phone
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        - AttributeName: GSI2PK
+          AttributeType: S
+        - AttributeName: GSI2SK
+          AttributeType: S
+        - AttributeName: GSI3PK
+          AttributeType: S
+        - AttributeName: GSI3SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: riderId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: phone-index
+          KeySchema:
+            - AttributeName: phone
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI2
+          KeySchema:
+            - AttributeName: GSI2PK
+              KeyType: HASH
+            - AttributeName: GSI2SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI3
+          KeySchema:
+            - AttributeName: GSI3PK
+              KeyType: HASH
+            - AttributeName: GSI3SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  AddressesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'food-delivery-addresses-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: phone
+          AttributeType: S
+        - AttributeName: addressId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: phone
+          KeyType: HASH
+        - AttributeName: addressId
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  PaymentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'food-delivery-payments-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: paymentId
+          AttributeType: S
+        - AttributeName: customerPhone
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: N
+      KeySchema:
+        - AttributeName: paymentId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: customer-phone-createdAt-index
+          KeySchema:
+            - AttributeName: customerPhone
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  OTPStorageTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'rork-honesteats-otp-storage-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: phone
+          AttributeType: S
+      KeySchema:
+        - AttributeName: phone
+          KeyType: HASH
+      TimeToLiveSpecification:
+        Enabled: true
+        AttributeName: ttl
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  RateLimitTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'rork-honesteats-rate-limits-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: phone
+          AttributeType: S
+      KeySchema:
+        - AttributeName: phone
+          KeyType: HASH
+      TimeToLiveSpecification:
+        Enabled: true
+        AttributeName: expiresAt
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  RiderEarningsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'food-delivery-rider-earnings-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: riderId
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: riderId
+          KeyType: HASH
+        - AttributeName: date
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: riderId-date-index
+          KeySchema:
+            - AttributeName: riderId
+              KeyType: HASH
+            - AttributeName: date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ---------------- S3 BUCKET FOR RIDER DOCUMENTS ----------------
+  RiderDocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'rider-documents-${Environment}'
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - '*'
+            AllowedMethods:
+              - PUT
+              - POST
+            AllowedHeaders:
+              - '*'
+            MaxAge: 3000
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldDocuments
+            Status: Enabled
+            ExpirationInDays: 365  # Keep documents for 1 year
+            NoncurrentVersionExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: RiderDocuments
+
+# ---------------- OUTPUTS ----------------
+Outputs:
+  RorkHonestEatsApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${RorkHonestEatsApi}.execute-api.${AWS::Region}.amazonaws.com/default/"
+
+  Environment:
+    Description: Deployed environment
+    Value: !Ref Environment
+
+  RorkHonestEatsApiFunctionArn:
+    Description: Rork Honest Eats API Lambda Function ARN
+    Value: !GetAtt RorkHonestEatsApiFunction.Arn
+
+  RiderDocumentsBucketName:
+    Description: S3 bucket for rider documents
+    Value: !Ref RiderDocumentsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-RiderDocumentsBucket'
