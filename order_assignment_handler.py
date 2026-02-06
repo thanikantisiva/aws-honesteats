@@ -1,6 +1,6 @@
 """
 Lambda function to handle DynamoDB Stream events from OrdersTable
-Automatically assigns orders to nearest available riders when status = READY_FOR_PICKUP
+Automatically assigns orders to nearest available riders when status = PREPARING
 """
 import json
 import os
@@ -14,7 +14,7 @@ logger = Logger(service="order-assignment-handler")
 
 def lambda_handler(event: dict, context: LambdaContext) -> dict:
     """
-    Process DynamoDB Stream events for READY_FOR_PICKUP orders
+    Process DynamoDB Stream events for PREPARING orders
     Automatically assigns to nearest available rider
     
     Args:
@@ -40,12 +40,12 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             old_image = record['dynamodb'].get('OldImage', {})
             new_image = record['dynamodb'].get('NewImage', {})
             
-            # Check if status changed to READY_FOR_PICKUP
+            # Check if status changed to PREPARING
             old_status = old_image.get('status', {}).get('S', '')
             new_status = new_image.get('status', {}).get('S', '')
             
-            if new_status != 'READY_FOR_PICKUP':
-                logger.info(f"Status is {new_status}, not READY_FOR_PICKUP - skipping")
+            if new_status != 'PREPARING':
+                logger.info(f"Status is {new_status}, not PREPARING - skipping")
                 continue
             
             if old_status == new_status:
@@ -57,7 +57,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             restaurant_id = new_image.get('restaurantId', {}).get('S', '')
             customer_phone = new_image.get('customerPhone', {}).get('S', '')
             
-            logger.info(f"🍽️ Order ready for pickup: {order_id}")
+            logger.info(f"🍽️ Order is preparing : {order_id}")
             logger.info(f"   Restaurant: {restaurant_id}")
             logger.info(f"   Customer: {customer_phone}")
             logger.info(f"   Status: {old_status} → {new_status}")

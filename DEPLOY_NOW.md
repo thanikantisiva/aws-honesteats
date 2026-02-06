@@ -4,7 +4,7 @@
 
 ```bash
 cd /Users/user/startup/aws-honesteats
-sam build && sam deploy --parameter-overrides Environment=dev
+sam build && sam deploy
 python3 scripts/migrate_add_role_sk.py
 ```
 

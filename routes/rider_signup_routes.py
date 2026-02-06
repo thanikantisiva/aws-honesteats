@@ -21,6 +21,9 @@ RIDER_DOCUMENTS_BUCKET = os.environ.get('RIDER_DOCUMENTS_BUCKET', 'rider-documen
 
 def register_rider_signup_routes(app):
     """Register rider signup routes"""
+
+    # @app.post(f"/api/v1/riders/documents/download/{}/{}")
+    # @tracer.capture_method
     
     @app.post("/api/v1/riders/documents/upload")
     @tracer.capture_method
