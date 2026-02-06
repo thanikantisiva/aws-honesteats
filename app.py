@@ -22,6 +22,7 @@ from routes.address_routes import register_address_routes
 from routes.location_routes import register_location_routes
 from routes.payment_routes import register_payment_routes
 from routes.delivery_routes import register_delivery_routes
+from routes.image_routes import register_image_routes
 
 # Initialize AWS Lambda Power Tools
 logger = Logger(service="rork-honesteats-api")
@@ -53,6 +54,7 @@ register_address_routes(app)
 register_location_routes(app)
 register_payment_routes(app)
 register_delivery_routes(app)
+register_image_routes(app)
 
 
 @app.get("/health")
