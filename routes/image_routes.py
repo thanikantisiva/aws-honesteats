@@ -8,7 +8,7 @@ logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
 
-S3_BUCKET = "customerapp"
+S3_BUCKET = "customerapp-offers"
 S3_PREFIX = "homescreen/"
 
 

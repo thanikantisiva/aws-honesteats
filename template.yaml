@@ -282,6 +282,13 @@ Resources:
             Path: /api/v1/delivery/calculate-fee
             Method: POST
             RestApiId: !Ref RorkHonestEatsApi
+        # Homescreen images
+        ListHomescreenImages:
+          Type: Api
+          Properties:
+            Path: /api/v1/homescreen/images
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
         # Rider Document Upload (S3)
         UploadDocument:
           Type: Api
@@ -349,6 +356,16 @@ Resources:
                 - s3:ListBucket
               Resource:
                 - !GetAtt RiderDocumentsBucket.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource:
+                - arn:aws:s3:::customerapp-offers/homescreen/*
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource:
+                - arn:aws:s3:::customerapp-offers
       Environment:
         Variables:
           USERS_TABLE_NAME: !Ref UsersTableV2
