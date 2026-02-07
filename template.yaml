@@ -303,6 +303,12 @@ Resources:
             Path: /api/v1/riders/signup
             Method: POST
             RestApiId: !Ref RorkHonestEatsApi
+        RiderDocumentsFetch:
+          Type: Api
+          Properties:
+            Path: /api/v1/riders/{rider_id}/documents
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
         Proxy:
           Type: Api
           Properties:
@@ -322,6 +328,9 @@ Resources:
                 - dynamodb:Scan
               Resource:
                 - !GetAtt UsersTableV2.Arn
+                - !Sub '${UsersTableV2.Arn}/index/riderId-index'
+                - !Sub '${UsersTableV2.Arn}/index/aadharNumber-index'
+                - !Sub '${UsersTableV2.Arn}/index/panNumber-index'
                 - !GetAtt RestaurantsTable.Arn
                 - !GetAtt MenuItemsTable.Arn
                 - !GetAtt OrdersTable.Arn
@@ -590,11 +599,36 @@ Resources:
           AttributeType: S
         - AttributeName: role
           AttributeType: S
+        - AttributeName: riderId
+          AttributeType: S
+        - AttributeName: aadharNumber
+          AttributeType: S
+        - AttributeName: panNumber
+          AttributeType: S
       KeySchema:
         - AttributeName: phone
           KeyType: HASH
         - AttributeName: role
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: riderId-index
+          KeySchema:
+            - AttributeName: riderId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: aadharNumber-index
+          KeySchema:
+            - AttributeName: aadharNumber
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: panNumber-index
+          KeySchema:
+            - AttributeName: panNumber
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       Tags:
         - Key: Environment
           Value: !Ref Environment

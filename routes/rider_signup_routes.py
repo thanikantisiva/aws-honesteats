@@ -2,6 +2,7 @@
 import re
 import os
 import boto3
+import base64
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.user_service import UserService
 from services.rider_service import RiderService
@@ -44,8 +45,6 @@ def register_rider_signup_routes(app):
         }
         """
         try:
-            import base64
-            
             body = app.current_event.json_body
             
             phone = body.get('phone')
@@ -158,6 +157,18 @@ def register_rider_signup_routes(app):
             # Validate PAN
             if not re.match(r'^[A-Z]{5}\d{4}[A-Z]$', body['panNumber'].upper()):
                 return {"error": "Invalid PAN number. Format: ABCDE1234F"}, 400
+
+            aadhar_number = body['aadharNumber']
+            pan_number = body['panNumber'].upper()
+
+            # Check if Aadhar or PAN already used by another rider
+            existing_aadhar_rider = UserService.get_rider_by_aadhar(aadhar_number)
+            if existing_aadhar_rider and existing_aadhar_rider.phone != phone:
+                return {"error": "Aadhar number already used by another rider"}, 400
+
+            existing_pan_rider = UserService.get_rider_by_pan(pan_number)
+            if existing_pan_rider and existing_pan_rider.phone != phone:
+                return {"error": "PAN number already used by another rider"}, 400
             
             # Generate rider ID
             rider_id = generate_id('RDR')
@@ -170,9 +181,9 @@ def register_rider_signup_routes(app):
                 first_name=body['firstName'],
                 last_name=body['lastName'],
                 address=body['address'],
-                aadhar_number=body['aadharNumber'],
+                aadhar_number=aadhar_number,
                 aadhar_image_url=body['aadharImageUrl'],  # S3 URL instead of base64
-                pan_number=body['panNumber'].upper(),
+                pan_number=pan_number,
                 pan_image_url=body['panImageUrl'],  # S3 URL instead of base64
                 rider_status=User.RIDER_STATUS_SIGNUP_DONE,
                 is_active=False
@@ -209,6 +220,56 @@ def register_rider_signup_routes(app):
             logger.error("Error in rider signup", exc_info=True)
             metrics.add_metric(name="RiderSignupFailed", unit="Count", value=1)
             return {"error": "Failed to submit signup", "message": str(e)}, 500
+
+    @app.get("/api/v1/riders/<rider_id>/documents")
+    @tracer.capture_method
+    def get_rider_documents(rider_id: str):
+        """
+        Fetch rider's Aadhar and PAN document images as base64 from S3.
+        """
+        try:
+            if not rider_id:
+                return {"error": "riderId is required"}, 400
+
+            user = UserService.get_rider_by_rider_id(rider_id)
+            if not user:
+                return {"error": "Rider not found"}, 404
+
+            def _extract_key_parts(url: str):
+                if not url:
+                    return None, None
+                parts = url.split('/')
+                if len(parts) < 2:
+                    return None, None
+                return parts[-2], parts[-1]
+
+            def _get_base64_for_url(url: str):
+                mobile, filename = _extract_key_parts(url)
+                if not mobile or not filename:
+                    return None
+                key = f"riders/{mobile}/{filename}"
+                s3_object = s3_client.get_object(
+                    Bucket=RIDER_DOCUMENTS_BUCKET,
+                    Key=key
+                )
+                image_bytes = s3_object["Body"].read()
+                return base64.b64encode(image_bytes).decode("utf-8")
+
+            aadhar_base64 = _get_base64_for_url(user.aadhar_image_url)
+            pan_base64 = _get_base64_for_url(user.pan_image_url)
+
+            response = user.to_dict()
+            response.update({
+                "aadharImageBase64": aadhar_base64,
+                "panImageBase64": pan_base64
+            })
+
+            metrics.add_metric(name="RiderDocumentsFetched", unit="Count", value=1)
+            return response, 200
+        except Exception as e:
+            logger.error("Error fetching rider documents", exc_info=True)
+            metrics.add_metric(name="RiderDocumentsFetchFailed", unit="Count", value=1)
+            return {"error": "Failed to fetch rider documents", "message": str(e)}, 500
     
     @app.post("/api/v1/riders/login/check")
     @tracer.capture_method

@@ -182,3 +182,80 @@ class UserService:
         except ClientError as e:
             raise Exception(f"Failed to list riders: {str(e)}")
 
+    @staticmethod
+    def get_rider_by_aadhar(aadhar_number: str) -> Optional[User]:
+        """Get rider by Aadhar number (role=RIDER)"""
+        try:
+            response = dynamodb_client.query(
+                TableName=TABLES['USERS'],
+                IndexName='aadharNumber-index',
+                KeyConditionExpression='aadharNumber = :aadhar',
+                FilterExpression='#role = :role',
+                ExpressionAttributeNames={
+                    '#role': 'role'
+                },
+                ExpressionAttributeValues={
+                    ':aadhar': {'S': aadhar_number},
+                    ':role': {'S': 'RIDER'}
+                }
+            )
+
+            items = response.get('Items', [])
+            if not items:
+                return None
+
+            return User.from_dynamodb_item(items[0])
+        except ClientError as e:
+            raise Exception(f"Failed to get rider by aadhar: {str(e)}")
+
+    @staticmethod
+    def get_rider_by_pan(pan_number: str) -> Optional[User]:
+        """Get rider by PAN number (role=RIDER)"""
+        try:
+            response = dynamodb_client.query(
+                TableName=TABLES['USERS'],
+                IndexName='panNumber-index',
+                KeyConditionExpression='panNumber = :pan',
+                FilterExpression='#role = :role',
+                ExpressionAttributeNames={
+                    '#role': 'role'
+                },
+                ExpressionAttributeValues={
+                    ':pan': {'S': pan_number},
+                    ':role': {'S': 'RIDER'}
+                }
+            )
+
+            items = response.get('Items', [])
+            if not items:
+                return None
+
+            return User.from_dynamodb_item(items[0])
+        except ClientError as e:
+            raise Exception(f"Failed to get rider by pan: {str(e)}")
+
+    @staticmethod
+    def get_rider_by_rider_id(rider_id: str) -> Optional[User]:
+        """Get rider by rider_id using GSI (role=RIDER)"""
+        try:
+            response = dynamodb_client.query(
+                TableName=TABLES['USERS'],
+                IndexName='riderId-index',
+                KeyConditionExpression='riderId = :riderId',
+                FilterExpression='#role = :role',
+                ExpressionAttributeNames={
+                    '#role': 'role'
+                },
+                ExpressionAttributeValues={
+                    ':riderId': {'S': rider_id},
+                    ':role': {'S': 'RIDER'}
+                }
+            )
+
+            items = response.get('Items', [])
+            if not items:
+                return None
+
+            return User.from_dynamodb_item(items[0])
+        except ClientError as e:
+            raise Exception(f"Failed to get rider by riderId: {str(e)}")
