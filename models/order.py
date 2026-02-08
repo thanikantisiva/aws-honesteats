@@ -65,6 +65,9 @@ class Order:
         # Rider assignment tracking
         rider_assignment_attempts: int = 0,
         last_assignment_attempt_at: Optional[str] = None,
+        # Rider offer tracking
+        offered_at: Optional[str] = None,
+        rejected_by_riders: Optional[List[str]] = None,
         created_at: Optional[int] = None
     ):
         self.order_id = order_id
@@ -104,6 +107,8 @@ class Order:
         # Rider assignment tracking
         self.rider_assignment_attempts = rider_assignment_attempts
         self.last_assignment_attempt_at = last_assignment_attempt_at
+        self.offered_at = offered_at
+        self.rejected_by_riders = rejected_by_riders or []
         # Use timestamp in milliseconds for sorting
         self.created_at = created_at or int(time.time() * 1000)
     
@@ -173,6 +178,10 @@ class Order:
             result["riderAssignmentAttempts"] = self.rider_assignment_attempts
         if self.last_assignment_attempt_at:
             result["lastAssignmentAttemptAt"] = self.last_assignment_attempt_at
+        if self.offered_at:
+            result["offeredAt"] = self.offered_at
+        if self.rejected_by_riders:
+            result["rejectedByRiders"] = self.rejected_by_riders
         return result
     
     @classmethod
@@ -241,6 +250,9 @@ class Order:
             # Rider assignment tracking
             rider_assignment_attempts=int(item.get("riderAssignmentAttempts", {}).get("N", "0")),
             last_assignment_attempt_at=item.get("lastAssignmentAttemptAt", {}).get("S") if "lastAssignmentAttemptAt" in item else None,
+            # Rider offer tracking
+            offered_at=item.get("offeredAt", {}).get("S") if "offeredAt" in item else None,
+            rejected_by_riders=dynamodb_to_python(item["rejectedByRiders"]) if "rejectedByRiders" in item else [],
             created_at=created_at
         )
     
@@ -323,4 +335,9 @@ class Order:
             item["riderHeading"] = {"N": str(self.rider_heading)}
         if self.rider_location_updated_at:
             item["riderLocationUpdatedAt"] = {"S": self.rider_location_updated_at}
+        # Rider offer tracking
+        if self.offered_at:
+            item["offeredAt"] = {"S": self.offered_at}
+        if self.rejected_by_riders:
+            item["rejectedByRiders"] = python_to_dynamodb(self.rejected_by_riders)
         return item

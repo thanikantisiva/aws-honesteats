@@ -159,6 +159,7 @@ class OrderService:
     def update_order(order_id: str, updates: dict) -> Order:
         """Update order with arbitrary fields and update composite keys if status/riderId changes"""
         try:
+            from utils.dynamodb_helpers import python_to_dynamodb
             # Get current order to access createdAt for composite keys
             order = OrderService.get_order(order_id)
             if not order:
@@ -188,6 +189,8 @@ class OrderService:
                     expr_attr_values[attr_value] = {'BOOL': value}
                 elif isinstance(value, (int, float)):
                     expr_attr_values[attr_value] = {'N': str(value)}
+                elif isinstance(value, (list, dict)):
+                    expr_attr_values[attr_value] = python_to_dynamodb(value)
                 elif value is None:
                     # For removing rider assignment
                     continue
@@ -269,4 +272,3 @@ class OrderService:
             return OrderService.get_order(order_id)
         except ClientError as e:
             raise Exception(f"Failed to update order status: {str(e)}")
-

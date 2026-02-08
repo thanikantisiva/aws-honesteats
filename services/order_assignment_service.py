@@ -5,11 +5,12 @@ from services.rider_service import RiderService
 from services.order_service import OrderService
 from services.notification_service import NotificationService
 from models.order import Order
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 import json
 import os
 import boto3
+import time
 
 logger = Logger()
 
@@ -20,21 +21,21 @@ class OrderAssignmentService:
     @staticmethod
     def assign_order_to_rider(order_id: str, restaurant_lat: float, restaurant_lng: float) -> Optional[str]:
         """
-        Auto-assign order to nearest available rider
+        Offer order to nearest available rider
         
         Algorithm:
         1. Find online riders within 5km of restaurant
         2. Filter riders not currently working on an order
         3. Sort by distance
-        4. Assign to nearest rider
-        5. Send FCM notification
-        6. Generate delivery OTP
+        4. Offer to nearest rider (status OFFERED_TO_RIDER)
+        5. Send FCM notification to rider
+        6. Emit EventBridge event to check acceptance
         
         Returns:
             rider_id if assigned, None if no riders available
         """
         try:
-            logger.info(f"Assigning order {order_id} to rider near ({restaurant_lat}, {restaurant_lng})")
+            logger.info(f"Offering order {order_id} to rider near ({restaurant_lat}, {restaurant_lng})")
             
             # Find available riders within 5km
             available_riders = RiderService.find_available_riders_near(
@@ -42,6 +43,15 @@ class OrderAssignmentService:
                 restaurant_lng,
                 radius_km=5
             )
+
+            # Load order to check rejected riders
+            order = OrderService.get_order(order_id)
+            rejected_by_riders = order.rejected_by_riders if order else []
+            if rejected_by_riders:
+                available_riders = [
+                    (r, d) for (r, d) in available_riders
+                    if r.rider_id not in rejected_by_riders
+                ]
             
             if not available_riders:
                 logger.warning(f"No available riders found for order {order_id}")
@@ -83,27 +93,14 @@ class OrderAssignmentService:
             
             # Get nearest rider (returns list of tuples: (Rider, distance))
             nearest_rider, distance = available_riders[0]
-            logger.info(f"Assigning order {order_id} to rider {nearest_rider.rider_id} ({distance:.2f}km away)")
+            logger.info(f"Offering order {order_id} to rider {nearest_rider.rider_id} ({distance:.2f}km away)")
             
-            # Generate delivery OTP
-            delivery_otp = OrderAssignmentService.generate_delivery_otp()
-            
-            # Update order with rider assignment, status, and rider's current location
+            # Update order with offered rider and status
             OrderService.update_order(order_id, {
                 'riderId': nearest_rider.rider_id,
-                'deliveryOtp': delivery_otp,
-                'riderAssignedAt': datetime.utcnow().isoformat(),
-                'status': 'RIDER_ASSIGNED',
-                # Copy rider's current location for initial tracking
-                'riderCurrentLat': nearest_rider.lat,
-                'riderCurrentLng': nearest_rider.lng,
-                'riderSpeed': nearest_rider.speed,
-                'riderHeading': nearest_rider.heading,
-                'riderLocationUpdatedAt': datetime.utcnow().isoformat()
+                'status': Order.OFFERED_TO_RIDER,
+                'offeredAt': datetime.utcnow().isoformat()
             })
-            
-            # Mark rider as working on order
-            RiderService.set_working_on_order(nearest_rider.rider_id, order_id)
             
             # Send notification to rider
             try:
@@ -119,7 +116,37 @@ class OrderAssignmentService:
             except Exception as e:
                 logger.error(f"Failed to send notification to rider: {str(e)}")
             
-            logger.info(f"Order {order_id} assigned to rider {nearest_rider.rider_id}")
+            # Create EventBridge Scheduler one-time schedule to check acceptance
+            try:
+                scheduler = boto3.client('scheduler')
+                checker_arn = os.environ.get('ORDER_ACCEPT_REJECT_CHECKER_ARN')
+                checker_role_arn = os.environ.get('ORDER_ACCEPT_REJECT_CHECKER_ROLE_ARN')
+                delay_seconds = int(os.environ.get('OFFER_CHECK_DELAY_SECONDS', '120'))
+
+                if checker_arn and checker_role_arn:
+                    run_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
+                    schedule_name = f"order-accept-check-{order_id[:12]}-{int(time.time())}"
+                    scheduler.create_schedule(
+                        Name=schedule_name,
+                        ScheduleExpression=f"at({run_at.strftime('%Y-%m-%dT%H:%M:%S')})",
+                        FlexibleTimeWindow={"Mode": "OFF"},
+                        Target={
+                            "Arn": checker_arn,
+                            "RoleArn": checker_role_arn,
+                            "Input": json.dumps({
+                                "orderId": order_id,
+                                "riderId": nearest_rider.rider_id
+                            })
+                        },
+                        ActionAfterCompletion="DELETE"
+                    )
+                    logger.info(f"Created offer check schedule {schedule_name} for order {order_id}")
+                else:
+                    logger.error("Order accept/reject checker ARNs not configured")
+            except Exception as e:
+                logger.error(f"Failed to create EventBridge schedule: {str(e)}")
+            
+            logger.info(f"Order {order_id} offered to rider {nearest_rider.rider_id}")
             return nearest_rider.rider_id
             
         except Exception as e:
