@@ -54,6 +54,10 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             logger.info(f"   Customer: {customer_phone}")
             logger.info(f"   Status: {old_status} → {new_status}")
             logger.info(f"   Restaurant: {restaurant_name}")
+
+            if new_status == "OFFERED_TO_RIDER":
+                logger.info("Skipping customer notification for OFFERED_TO_RIDER status")
+                continue
             
             # Get user's FCM token from UsersTable
             # UsersTableV2 has composite key: phone (HASH) + role (RANGE)
@@ -111,4 +115,3 @@ def get_users_table_name():
     import os
     env = os.environ.get('ENVIRONMENT', 'dev')
     return f'food-delivery-users-{env}'
-

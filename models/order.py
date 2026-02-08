@@ -17,6 +17,7 @@ class Order:
     STATUS_PREPARING = "PREPARING"   
     READY_FOR_PICKUP = "READY_FOR_PICKUP"
     STATUS_AWAITING_RIDER_ASSIGNMENT = "AWAITING_RIDER_ASSIGNMENT"
+    OFFERED_TO_RIDER = "OFFERED_TO_RIDER"
 
     #Rider statuses
     RIDER_ASSIGNED = "RIDER_ASSIGNED"
@@ -323,4 +324,3 @@ class Order:
         if self.rider_location_updated_at:
             item["riderLocationUpdatedAt"] = {"S": self.rider_location_updated_at}
         return item
-

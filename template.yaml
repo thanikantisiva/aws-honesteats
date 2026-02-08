@@ -529,12 +529,11 @@ Resources:
       Timeout: 60
       MemorySize: 512
       Events:
-        ScheduledEvent:
-          Type: Schedule
+        OrderAssignmentQueueEvent:
+          Type: SQS
           Properties:
-            Schedule: rate(2 minutes)
-            Enabled: true
-            Description: Process orders awaiting rider assignment
+            Queue: !GetAtt OrderAssignmentQueue.Arn
+            BatchSize: 10
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:
