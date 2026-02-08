@@ -630,26 +630,26 @@ Resources:
                   - lambda:InvokeFunction
                 Resource:
                   - !GetAtt OrderAcceptRejectCheckerFunction.Arn
-            - Effect: Allow
-              Action:
-                - dynamodb:GetItem
-                - dynamodb:Query
-              Resource:
-                - !GetAtt OrdersTable.Arn
-                - !GetAtt RidersTable.Arn
-                - !GetAtt RestaurantsTable.Arn
-                - !GetAtt UsersTableV2.Arn
-                - !Sub '${RidersTable.Arn}/index/GSI1'
-                - !Sub '${RidersTable.Arn}/index/GSI2'
-                - !Sub '${RidersTable.Arn}/index/GSI3'
-                - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
-            - Effect: Allow
-              Action:
-                - dynamodb:UpdateItem
-                - dynamodb:PutItem
-              Resource:
-                - !GetAtt OrdersTable.Arn
-                - !GetAtt RidersTable.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt OrdersTable.Arn
+                  - !GetAtt RidersTable.Arn
+                  - !GetAtt RestaurantsTable.Arn
+                  - !GetAtt UsersTableV2.Arn
+                  - !Sub '${RidersTable.Arn}/index/GSI1'
+                  - !Sub '${RidersTable.Arn}/index/GSI2'
+                  - !Sub '${RidersTable.Arn}/index/GSI3'
+                  - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                  - dynamodb:PutItem
+                Resource:
+                  - !GetAtt OrdersTable.Arn
+                  - !GetAtt RidersTable.Arn
       Environment:
         Variables:
           ORDER_ASSIGNMENT_QUEUE_URL: !Ref OrderAssignmentQueue

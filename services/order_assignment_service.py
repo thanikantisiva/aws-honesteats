@@ -47,8 +47,9 @@ class OrderAssignmentService:
             # Load order to check rejected riders
             order = OrderService.get_order(order_id)
             rejected_by_riders = order.rejected_by_riders if order else []
+            filtered_riders = available_riders
             if rejected_by_riders:
-                available_riders = [
+                filtered_riders = [
                     (r, d) for (r, d) in available_riders
                     if r.rider_id not in rejected_by_riders
                 ]
@@ -91,8 +92,46 @@ class OrderAssignmentService:
                 
                 return None
             
-            # Get nearest rider (returns list of tuples: (Rider, distance))
-            nearest_rider, distance = available_riders[0]
+            # If everyone has rejected, assign directly to nearest rider
+            if not filtered_riders and available_riders:
+                nearest_rider, distance = available_riders[0]
+                logger.info(f"All riders rejected; assigning order {order_id} directly to rider {nearest_rider.rider_id} ({distance:.2f}km away)")
+
+                delivery_otp = OrderAssignmentService.generate_delivery_otp()
+                pickup_otp = OrderAssignmentService.generate_delivery_otp()
+                OrderService.update_order(order_id, {
+                    'riderId': nearest_rider.rider_id,
+                    'deliveryOtp': delivery_otp,
+                    'pickupOtp': pickup_otp,
+                    'riderAssignedAt': datetime.utcnow().isoformat(),
+                    'status': Order.RIDER_ASSIGNED,
+                    # Copy rider's current location for initial tracking
+                    'riderCurrentLat': nearest_rider.lat,
+                    'riderCurrentLng': nearest_rider.lng,
+                    'riderSpeed': nearest_rider.speed,
+                    'riderHeading': nearest_rider.heading,
+                    'riderLocationUpdatedAt': datetime.utcnow().isoformat()
+                })
+
+                RiderService.set_working_on_order(nearest_rider.rider_id, order_id)
+
+                try:
+                    order = OrderService.get_order(order_id)
+                    if order:
+                        NotificationService.send_order_assigned_notification(
+                            rider_mobile=nearest_rider.phone,
+                            order_id=order_id,
+                            restaurant_name=order.restaurant_name or "Restaurant",
+                            delivery_fee=order.delivery_fee
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to send notification to rider: {str(e)}")
+
+                logger.info(f"Order {order_id} assigned directly to rider {nearest_rider.rider_id}")
+                return nearest_rider.rider_id
+
+            # Get nearest rider from filtered list (returns list of tuples: (Rider, distance))
+            nearest_rider, distance = filtered_riders[0]
             logger.info(f"Offering order {order_id} to rider {nearest_rider.rider_id} ({distance:.2f}km away)")
             
             # Update order with offered rider and status
@@ -125,7 +164,7 @@ class OrderAssignmentService:
 
                 if checker_arn and checker_role_arn:
                     run_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
-                    schedule_name = f"order-accept-check-{order_id[:12]}-{int(time.time())}"
+                    schedule_name = f"order-accept-check-{order_id}"
                     scheduler.create_schedule(
                         Name=schedule_name,
                         ScheduleExpression=f"at({run_at.strftime('%Y-%m-%dT%H:%M:%S')})",

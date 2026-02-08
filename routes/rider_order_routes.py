@@ -78,9 +78,9 @@ def register_rider_order_routes(app):
             logger.error("Error getting rider orders", exc_info=True)
             return {"error": "Failed to get orders", "message": str(e)}, 500
     
-    @app.post("/api/v1/riders/<rider_id>/orders/<order_id>/accept")
+    @app.post("/api/v1/riders/<rider_id>/orders/<order_id>/accept/<status>")
     @tracer.capture_method
-    def accept_order(rider_id: str, order_id: str):
+    def accept_order(rider_id: str, order_id: str, status: str):
         """Accept an assigned order"""
         try:
             logger.info(f"Rider {rider_id} accepting order {order_id}")
@@ -93,12 +93,11 @@ def register_rider_order_routes(app):
             if order.rider_id != rider_id:
                 return {"error": "Order not assigned to this rider"}, 403
             
-            # Only allow accepting orders in RIDER_ASSIGNED status
-            if order.status != 'RIDER_ASSIGNED':
-                return {"error": f"Order cannot be accepted in {order.status} status"}, 400
-            
-            # Update order status to PICKED_UP (rider accepts means picking up)
-            OrderService.update_order_status(order_id, Order.PICKED_UP)
+            # Update order status to requested status from path param
+            new_status = status or Order.RIDER_ASSIGNED
+            OrderService.update_order(order_id, {
+                'status': new_status
+            })
             
             # Update rider working_on_order
             RiderService.set_working_on_order(rider_id, order_id)
@@ -124,7 +123,7 @@ def register_rider_order_routes(app):
             logger.info(f"Order {order_id} accepted by rider {rider_id}")
             metrics.add_metric(name="OrderAcceptedByRider", unit="Count", value=1)
             
-            return {"message": "Order accepted", "orderId": order_id}, 200
+            return {"message": "Order accepted", "orderId": order_id, "status": new_status}, 200
             
         except Exception as e:
             logger.error("Error accepting order", exc_info=True)

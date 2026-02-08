@@ -53,6 +53,7 @@ class Order:
         delivery_lat: Optional[float] = None,
         delivery_lng: Optional[float] = None,
         delivery_otp: Optional[str] = None,
+        pickup_otp: Optional[str] = None,
         rider_assigned_at: Optional[str] = None,
         rider_pickup_at: Optional[str] = None,
         rider_delivered_at: Optional[str] = None,
@@ -95,6 +96,7 @@ class Order:
         self.delivery_lat = delivery_lat
         self.delivery_lng = delivery_lng
         self.delivery_otp = delivery_otp
+        self.pickup_otp = pickup_otp
         self.rider_assigned_at = rider_assigned_at
         self.rider_pickup_at = rider_pickup_at
         self.rider_delivered_at = rider_delivered_at
@@ -156,6 +158,8 @@ class Order:
             result["deliveryLng"] = self.delivery_lng
         if self.delivery_otp:
             result["deliveryOtp"] = self.delivery_otp
+        if self.pickup_otp:
+            result["pickupOtp"] = self.pickup_otp
         if self.rider_assigned_at:
             result["riderAssignedAt"] = self.rider_assigned_at
         if self.rider_pickup_at:
@@ -238,6 +242,7 @@ class Order:
             delivery_lat=float(item.get("deliveryLat", {}).get("N")) if "deliveryLat" in item else None,
             delivery_lng=float(item.get("deliveryLng", {}).get("N")) if "deliveryLng" in item else None,
             delivery_otp=item.get("deliveryOtp", {}).get("S") if "deliveryOtp" in item else None,
+            pickup_otp=item.get("pickupOtp", {}).get("S") if "pickupOtp" in item else None,
             rider_assigned_at=item.get("riderAssignedAt", {}).get("S") if "riderAssignedAt" in item else None,
             rider_pickup_at=item.get("riderPickupAt", {}).get("S") if "riderPickupAt" in item else None,
             rider_delivered_at=item.get("riderDeliveredAt", {}).get("S") if "riderDeliveredAt" in item else None,
@@ -318,6 +323,8 @@ class Order:
             item["deliveryLng"] = {"N": str(self.delivery_lng)}
         if self.delivery_otp:
             item["deliveryOtp"] = {"S": self.delivery_otp}
+        if self.pickup_otp:
+            item["pickupOtp"] = {"S": self.pickup_otp}
         if self.rider_assigned_at:
             item["riderAssignedAt"] = {"S": self.rider_assigned_at}
         if self.rider_pickup_at:
