@@ -307,6 +307,11 @@ Resources:
           Type: Api
           Properties:
             Path: /api/v1/riders/{rider_id}/documents
+        # Rider List (for admin approval)
+        ListRiders:
+          Type: Api
+          Properties:
+            Path: /api/v1/riders/list
             Method: GET
             RestApiId: !Ref RorkHonestEatsApi
         Proxy:

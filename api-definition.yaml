@@ -150,4 +150,66 @@ paths:
           description: Invalid or expired OTP
         '500':
           description: Error verifying OTP
-
+  /api/v1/riders/list:
+    get:
+      summary: List riders by status
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [SIGNUP_DONE, APPROVED, REJECTED]
+            default: SIGNUP_DONE
+          description: Filter riders by their approval status
+      responses:
+        '200':
+          description: List of riders matching the status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  riders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        phone:
+                          type: string
+                        riderId:
+                          type: string
+                        firstName:
+                          type: string
+                        lastName:
+                          type: string
+                        email:
+                          type: string
+                        address:
+                          type: string
+                        aadharNumber:
+                          type: string
+                        aadharImageUrl:
+                          type: string
+                        panNumber:
+                          type: string
+                        panImageUrl:
+                          type: string
+                        riderStatus:
+                          type: string
+                        rejectionReason:
+                          type: string
+                        approvedAt:
+                          type: string
+                        createdAt:
+                          type: string
+                        isActive:
+                          type: boolean
+                  count:
+                    type: integer
+                  status:
+                    type: string
+        '400':
+          description: Invalid status parameter
+        '500':
+          description: Error fetching riders

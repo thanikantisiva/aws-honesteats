@@ -332,6 +332,70 @@ def register_rider_signup_routes(app):
             logger.error("Error checking rider login", exc_info=True)
             return {"error": "Failed to check login status", "message": str(e)}, 500
     
+    @app.get("/api/v1/riders/list")
+    @tracer.capture_method
+    def list_riders():
+        """
+        List riders by status
+        Query Parameters:
+        - status: SIGNUP_DONE (default), APPROVED, or REJECTED
+        
+        Response:
+        {
+            "riders": [
+                {
+                    "phone": "+919876543210",
+                    "riderId": "RDR123",
+                    "firstName": "John",
+                    "lastName": "Doe",
+                    "email": "john@example.com",
+                    "address": "123 Street",
+                    "aadharNumber": "123456789012",
+                    "aadharImageUrl": "s3://...",
+                    "panNumber": "ABCDE1234F",
+                    "panImageUrl": "s3://...",
+                    "riderStatus": "SIGNUP_DONE",
+                    "createdAt": "2024-01-01T00:00:00",
+                    "isActive": false
+                }
+            ],
+            "count": 1
+        }
+        """
+        try:
+            # Get status from query parameters, default to SIGNUP_DONE (pending approval)
+            query_params = app.current_event.query_string_parameters or {}
+            status = query_params.get('status', User.RIDER_STATUS_SIGNUP_DONE)
+            
+            # Validate status
+            valid_statuses = [
+                User.RIDER_STATUS_SIGNUP_DONE,
+                User.RIDER_STATUS_APPROVED,
+                User.RIDER_STATUS_REJECTED
+            ]
+            if status not in valid_statuses:
+                return {
+                    "error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
+                }, 400
+            
+            # Fetch riders from database
+            riders = UserService.list_riders_by_status(status)
+            
+            # Convert to dictionary format
+            riders_data = [rider.to_dict() for rider in riders]
+            
+            logger.info(f"Listed {len(riders_data)} riders with status: {status}")
+            
+            return {
+                "riders": riders_data,
+                "count": len(riders_data),
+                "status": status
+            }, 200
+            
+        except Exception as e:
+            logger.error("Error listing riders", exc_info=True)
+            return {"error": "Failed to list riders", "message": str(e)}, 500
+    
     @app.put("/api/v1/riders/approve")
     @tracer.capture_method
     def approve_rider():
