@@ -3,10 +3,13 @@ import os
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.user_service import UserService
 from middleware.api_key_auth import APIKeyAuth
+from services.msg91_service import MSG91Service
 
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+
+OTP_TABLE_NAME = os.environ.get('OTP_TABLE_NAME', '')
 
 
 def register_auth_routes(app):
@@ -14,6 +17,38 @@ def register_auth_routes(app):
     
     # Note: OTP send/verify now handled by Firebase SDK directly in mobile app
     # These endpoints are kept for backward compatibility or future use
+
+    @app.post("/api/v1/auth/send-otp")
+    @tracer.capture_method
+    def send_otp():
+        """Send OTP code via MSG91"""
+        try:
+            # Validate API key
+            is_valid, error_response = APIKeyAuth.require_api_key(app.current_event.raw_event)
+            if not is_valid:
+                return error_response['body'], error_response['statusCode']
+
+            body = app.current_event.json_body or {}
+            phone = body.get('phone')
+
+            if not phone:
+                return {"error": "Phone number is required"}, 400
+
+            logger.info(f"📨 Sending OTP for phone: {str(phone)[:5]}***")
+
+            result = MSG91Service.send_otp(phone)
+
+            if not result.get('success'):
+                metrics.add_metric(name="OTPSendFailed", unit="Count", value=1)
+                return {"error": result.get('error', 'Failed to send OTP')}, 400
+
+            metrics.add_metric(name="OTPSent", unit="Count", value=1)
+            return {"success": True, "message": "OTP sent successfully"}, 200
+
+        except Exception as e:
+            logger.error("Error in send_otp", exc_info=True)
+            metrics.add_metric(name="OTPSendError", unit="Count", value=1)
+            return {"error": "Failed to send OTP", "message": str(e)}, 500
     
     @app.post("/api/v1/auth/verify-otp")
     @tracer.capture_method
@@ -67,4 +102,3 @@ def register_auth_routes(app):
             logger.error("Error in verify_otp", exc_info=True)
             metrics.add_metric(name="OTPVerifyError", unit="Count", value=1)
             return {"error": "Failed to verify OTP", "message": str(e)}, 500
-

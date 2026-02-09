@@ -43,16 +43,20 @@ class OrderAssignmentService:
                 restaurant_lng,
                 radius_km=5
             )
+            logger.info(f"Found {len(available_riders)} available riders before filtering")
 
             # Load order to check rejected riders
             order = OrderService.get_order(order_id)
             rejected_by_riders = order.rejected_by_riders if order else []
+            if rejected_by_riders:
+                logger.info(f"Order {order_id} rejectedByRiders count: {len(rejected_by_riders)}")
             filtered_riders = available_riders
             if rejected_by_riders:
                 filtered_riders = [
                     (r, d) for (r, d) in available_riders
                     if r.rider_id not in rejected_by_riders
                 ]
+            logger.info(f"{len(filtered_riders)} available riders after filtering rejected riders")
             
             if not available_riders:
                 logger.warning(f"No available riders found for order {order_id}")
@@ -96,6 +100,7 @@ class OrderAssignmentService:
             if not filtered_riders and available_riders:
                 nearest_rider, distance = available_riders[0]
                 logger.info(f"All riders rejected; assigning order {order_id} directly to rider {nearest_rider.rider_id} ({distance:.2f}km away)")
+                logger.info(f"Direct assignment rider details: id={nearest_rider.rider_id} phone={nearest_rider.phone} lat={nearest_rider.lat} lng={nearest_rider.lng}")
 
                 delivery_otp = OrderAssignmentService.generate_delivery_otp()
                 pickup_otp = OrderAssignmentService.generate_delivery_otp()
@@ -124,6 +129,7 @@ class OrderAssignmentService:
                             restaurant_name=order.restaurant_name or "Restaurant",
                             delivery_fee=order.delivery_fee
                         )
+                        logger.info(f"Direct assignment notification sent to rider {nearest_rider.phone}")
                 except Exception as e:
                     logger.error(f"Failed to send notification to rider: {str(e)}")
 
@@ -133,6 +139,7 @@ class OrderAssignmentService:
             # Get nearest rider from filtered list (returns list of tuples: (Rider, distance))
             nearest_rider, distance = filtered_riders[0]
             logger.info(f"Offering order {order_id} to rider {nearest_rider.rider_id} ({distance:.2f}km away)")
+            logger.info(f"Offer rider details: id={nearest_rider.rider_id} phone={nearest_rider.phone} lat={nearest_rider.lat} lng={nearest_rider.lng}")
             
             # Update order with offered rider and status
             OrderService.update_order(order_id, {
@@ -140,6 +147,7 @@ class OrderAssignmentService:
                 'status': Order.OFFERED_TO_RIDER,
                 'offeredAt': datetime.utcnow().isoformat()
             })
+            logger.info(f"Order {order_id} updated to OFFERED_TO_RIDER for rider {nearest_rider.rider_id}")
             
             # Send notification to rider
             try:
@@ -152,6 +160,7 @@ class OrderAssignmentService:
                         restaurant_name=order.restaurant_name or "Restaurant",
                         delivery_fee=order.delivery_fee
                     )
+                    logger.info(f"Offer notification sent to rider {nearest_rider.phone}")
             except Exception as e:
                 logger.error(f"Failed to send notification to rider: {str(e)}")
             
@@ -160,7 +169,7 @@ class OrderAssignmentService:
                 scheduler = boto3.client('scheduler')
                 checker_arn = os.environ.get('ORDER_ACCEPT_REJECT_CHECKER_ARN')
                 checker_role_arn = os.environ.get('ORDER_ACCEPT_REJECT_CHECKER_ROLE_ARN')
-                delay_seconds = int(os.environ.get('OFFER_CHECK_DELAY_SECONDS', '120'))
+                delay_seconds = int(os.environ.get('OFFER_CHECK_DELAY_SECONDS', '90'))
 
                 if checker_arn and checker_role_arn:
                     run_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
@@ -179,7 +188,7 @@ class OrderAssignmentService:
                         },
                         ActionAfterCompletion="DELETE"
                     )
-                    logger.info(f"Created offer check schedule {schedule_name} for order {order_id}")
+                    logger.info(f"Offer check scheduled at {run_at.isoformat()} with name {schedule_name} for order {order_id}")
                 else:
                     logger.error("Order accept/reject checker ARNs not configured")
             except Exception as e:

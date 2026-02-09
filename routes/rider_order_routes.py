@@ -1,6 +1,7 @@
 """Rider order management routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.order_service import OrderService
+from services.order_assignment_service import OrderAssignmentService
 from services.rider_service import RiderService
 from services.earnings_service import EarningsService
 from services.restaurant_service import RestaurantService
@@ -148,15 +149,28 @@ def register_rider_order_routes(app):
                 return {"error": "Order not assigned to this rider"}, 403
             
             # Only allow rejecting orders in RIDER_ASSIGNED status
-            if order.status != 'RIDER_ASSIGNED':
+            if order.status != 'OFFERED_TO_RIDER':
                 return {"error": f"Order cannot be rejected in {order.status} status"}, 400
             
-            # Clear rider assignment
+            # Clear rider assignment and mark awaiting reassignment
             OrderService.update_order(order_id, {
-                'riderId': None
+                'riderId': None,
+                'status': Order.STATUS_AWAITING_RIDER_ASSIGNMENT
             })
-            
-            # TODO: Trigger reassignment to another rider
+
+            # Reassign to next available rider
+            restaurant_lat = order.pickup_lat
+            restaurant_lng = order.pickup_lng
+            if restaurant_lat is None or restaurant_lng is None:
+                restaurant = RestaurantService.get_restaurant_by_id(order.restaurant_id)
+                if restaurant:
+                    restaurant_lat = restaurant.latitude
+                    restaurant_lng = restaurant.longitude
+
+            if restaurant_lat is not None and restaurant_lng is not None:
+                OrderAssignmentService.assign_order_to_rider(order_id, restaurant_lat, restaurant_lng)
+            else:
+                logger.warning(f"Missing restaurant location for order {order_id}, cannot reassign")
             
             logger.info(f"Order {order_id} rejected by rider {rider_id}")
             metrics.add_metric(name="OrderRejectedByRider", unit="Count", value=1)

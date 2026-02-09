@@ -36,7 +36,7 @@ def register_restaurant_routes(app):
                 float(user_lat),
                 float(user_lng),
                 min_results=50,
-                max_distance_km=5.0
+                max_distance_km=10.0
             )
             
             restaurant_list = []

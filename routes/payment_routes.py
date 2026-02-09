@@ -82,10 +82,12 @@ def register_payment_routes(app):
             
             # Calculate revenue
             food_commission = round(total_customer_amount - total_restaurant_amount, 2)
-            total_platform_revenue = round(food_commission + delivery_fee + platform_fee, 2)
+            total_discount = float(body.get('totalDiscount', 0))
+            total_platform_revenue = round(food_commission + platform_fee - total_discount, 2)
             
             revenue = {
                 'totalCustomerPaid': round(amount, 2),
+                'totalDiscount': round(total_discount, 2),
                 'restaurantSettlement': round(total_restaurant_amount, 2),
                 'platformRevenue': {
                     'foodCommission': food_commission,
@@ -512,4 +514,3 @@ def register_payment_routes(app):
         except Exception as e:
             logger.error("Error processing webhook", exc_info=True)
             return {"error": "Webhook processing failed"}, 500
-

@@ -389,6 +389,8 @@ Resources:
           RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
           RIDER_DOCUMENTS_BUCKET: !Ref RiderDocumentsBucket
           ENVIRONMENT: !Ref Environment
+          MSG91_AUTH_KEY: 488382AxH6BrN7gVmV69692811P1
+          MSG91_TEMPLATE_ID: 69692941ff1c8f04bb4698a5
           GOOGLE_MAPS_API_KEY: AIzaSyCL5AHrcH6PHCA4Lh1poEOk2nUPpQLNTK0
           RAZORPAY_MODE: test
           RAZORPAY_TEST_KEY_ID: rzp_test_S29cM7srG3pwX6
@@ -469,7 +471,7 @@ Resources:
             MaximumBatchingWindowInSeconds: 5
             FilterCriteria:
               Filters:
-                - Pattern: '{"eventName": ["MODIFY"], "dynamodb": {"NewImage": {"status": {"S": ["READY_FOR_PICKUP"]}}}}'
+                - Pattern: '{"eventName": ["MODIFY"], "dynamodb": {"NewImage": {"status": {"S": ["PREPARING", "READY_FOR_PICKUP"]}}}}'
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:
@@ -517,6 +519,17 @@ Resources:
                 - iam:PassRole
               Resource:
                 - !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
+            - Effect: Allow
+              Action:
+                - scheduler:CreateSchedule
+                - scheduler:GetSchedule
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource:
+                - !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
+            
       Environment:
         Variables:
           RESTAURANTS_TABLE_NAME: !Ref RestaurantsTable
@@ -524,9 +537,9 @@ Resources:
           ORDERS_TABLE_NAME: !Ref OrdersTable
           USERS_TABLE_NAME: !Ref UsersTableV2
           ORDER_ASSIGNMENT_QUEUE_URL: !Ref OrderAssignmentQueue
-          ORDER_ACCEPT_REJECT_CHECKER_ARN: !GetAtt OrderAcceptRejectCheckerFunction.Arn
+          ORDER_ACCEPT_REJECT_CHECKER_ARN: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-accept-reject-${Environment}'
           ORDER_ACCEPT_REJECT_CHECKER_ROLE_ARN: !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
-          OFFER_CHECK_DELAY_SECONDS: "120"
+          OFFER_CHECK_DELAY_SECONDS: "90"
           ENVIRONMENT: !Ref Environment
           FIREBASE_PROJECT_ID: appnearbites-85b8c
           NOTIFICATION_SERVICE: FIREBASE
@@ -599,6 +612,16 @@ Resources:
                 - sqs:GetQueueUrl
               Resource:
                 - !GetAtt OrderAssignmentQueue.Arn
+            - Effect: Allow
+              Action:
+                - scheduler:CreateSchedule
+                - scheduler:GetSchedule
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource:
+                - !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
       Environment:
         Variables:
           RESTAURANTS_TABLE_NAME: !Ref RestaurantsTable
@@ -606,6 +629,9 @@ Resources:
           ORDERS_TABLE_NAME: !Ref OrdersTable
           USERS_TABLE_NAME: !Ref UsersTableV2
           ORDER_ASSIGNMENT_QUEUE_URL: !Ref OrderAssignmentQueue
+          ORDER_ACCEPT_REJECT_CHECKER_ARN: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-accept-reject-${Environment}'
+          ORDER_ACCEPT_REJECT_CHECKER_ROLE_ARN: !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
+          OFFER_CHECK_DELAY_SECONDS: "90"
           ENVIRONMENT: !Ref Environment
           FIREBASE_PROJECT_ID: appnearbites-85b8c
           NOTIFICATION_SERVICE: FIREBASE
@@ -629,7 +655,7 @@ Resources:
                 Action:
                   - lambda:InvokeFunction
                 Resource:
-                  - !GetAtt OrderAcceptRejectCheckerFunction.Arn
+                  - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-accept-reject-${Environment}'
               - Effect: Allow
                 Action:
                   - dynamodb:GetItem
@@ -650,16 +676,16 @@ Resources:
                 Resource:
                   - !GetAtt OrdersTable.Arn
                   - !GetAtt RidersTable.Arn
-      Environment:
-        Variables:
-          ORDER_ASSIGNMENT_QUEUE_URL: !Ref OrderAssignmentQueue
-          ORDERS_TABLE_NAME: !Ref OrdersTable
-          RIDERS_TABLE_NAME: !Ref RidersTable
-          RESTAURANTS_TABLE_NAME: !Ref RestaurantsTable
-          USERS_TABLE_NAME: !Ref UsersTableV2
-          ENVIRONMENT: !Ref Environment
-          FIREBASE_PROJECT_ID: appnearbites-85b8c
-          NOTIFICATION_SERVICE: FIREBASE
+      # Environment:
+      #   Variables:
+      #     ORDER_ASSIGNMENT_QUEUE_URL: !Ref OrderAssignmentQueue
+      #     ORDERS_TABLE_NAME: !Ref OrdersTable
+      #     RIDERS_TABLE_NAME: !Ref RidersTable
+      #     RESTAURANTS_TABLE_NAME: !Ref RestaurantsTable
+      #     USERS_TABLE_NAME: !Ref UsersTableV2
+      #     ENVIRONMENT: !Ref Environment
+      #     FIREBASE_PROJECT_ID: appnearbites-85b8c
+      #     NOTIFICATION_SERVICE: FIREBASE
 
   # ---------------- SQS QUEUE ----------------
   OrderAssignmentQueue:

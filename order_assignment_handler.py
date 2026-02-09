@@ -40,12 +40,12 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             old_image = record['dynamodb'].get('OldImage', {})
             new_image = record['dynamodb'].get('NewImage', {})
             
-            # Check if status changed to PREPARING
+            # Check if status changed to PREPARING or READY_FOR_PICKUP
             old_status = old_image.get('status', {}).get('S', '')
             new_status = new_image.get('status', {}).get('S', '')
             
-            if new_status != 'PREPARING':
-                logger.info(f"Status is {new_status}, not PREPARING - skipping")
+            if new_status not in ['PREPARING', 'READY_FOR_PICKUP']:
+                logger.info(f"Status is {new_status}, not PREPARING/READY_FOR_PICKUP - skipping")
                 continue
             
             if old_status == new_status:

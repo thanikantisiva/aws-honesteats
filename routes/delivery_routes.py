@@ -25,7 +25,7 @@ def calculate_delivery_fee(distance_km: float, item_count: int, item_total: floa
         dict with deliveryFee, breakdown, and discount info
     """
     # Base delivery fee: ₹12/km, minimum ₹60
-    base_fee = max(60, int(distance_km * 12))
+    base_fee = max(30, int(distance_km * 10))
     
     # Handling fee: ₹10 for every 5 items (bulk order handling)
     handling_fee = (item_count // 5) * 10
@@ -45,7 +45,6 @@ def calculate_delivery_fee(distance_km: float, item_count: int, item_total: floa
     
     if item_total >= 500:
         discount = total_before_discount
-        final_fee = 0
         logger.info(f"🎉 FREE DELIVERY applied (order ₹{item_total} >= ₹500)")
     
     return {

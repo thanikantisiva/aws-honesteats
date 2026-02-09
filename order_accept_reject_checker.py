@@ -61,6 +61,16 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             "status": Order.STATUS_AWAITING_RIDER_ASSIGNMENT
         })
 
+        # Clear rider's workingOnOrder if set
+        if order.rider_id:
+            from utils.dynamodb import dynamodb_client, TABLES
+            dynamodb_client.update_item(
+                TableName=TABLES['RIDERS'],
+                Key={'riderId': {'S': order.rider_id}},
+                UpdateExpression="REMOVE workingOnOrder"
+            )
+        
+
         # Reassign to next available rider
         restaurant_lat = order.pickup_lat
         restaurant_lng = order.pickup_lng

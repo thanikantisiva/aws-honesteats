@@ -2,6 +2,8 @@
 from typing import List, Optional, Set
 import math
 import concurrent.futures
+import os
+import requests
 from botocore.exceptions import ClientError
 from models.restaurant import Restaurant
 from utils.dynamodb import dynamodb_client, TABLES
@@ -17,7 +19,8 @@ class RestaurantService:
     @staticmethod
     def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """
-        Calculate distance between two coordinates using Haversine formula
+        Calculate distance between two coordinates using Google Maps Directions API
+        Falls back to Haversine on error or missing API key.
         
         Args:
             lat1, lon1: First coordinate
@@ -26,6 +29,28 @@ class RestaurantService:
         Returns:
             Distance in kilometers
         """
+        api_key = os.environ.get('GOOGLE_MAPS_API_KEY')
+        if api_key:
+            try:
+                url = "https://maps.googleapis.com/maps/api/directions/json"
+                params = {
+                    "origin": f"{lat1},{lon1}",
+                    "destination": f"{lat2},{lon2}",
+                    "mode": "driving",
+                    "key": api_key
+                }
+                response = requests.get(url, params=params, timeout=10)
+                data = response.json() if response.content else {}
+                if data.get("status") == "OK":
+                    routes = data.get("routes", [])
+                    if routes and routes[0].get("legs"):
+                        meters = routes[0]["legs"][0]["distance"]["value"]
+                        return round(meters / 1000.0, 3)
+                logger.warning(f"Google Directions API failed: {data.get('status')}")
+            except Exception as e:
+                logger.warning(f"Google Directions API error, falling back to Haversine: {str(e)}")
+
+        # Fallback: Haversine distance
         R = 6371  # Earth's radius in km
         
         dLat = math.radians(lat2 - lat1)

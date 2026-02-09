@@ -166,7 +166,8 @@ class OrderService:
                 raise Exception("Order not found")
             
             # Build update expression
-            update_expr = "SET "
+            set_expr_parts = []
+            remove_expr_parts = []
             expr_attr_names = {}
             expr_attr_values = {}
             
@@ -176,25 +177,27 @@ class OrderService:
             new_status = updates.get('status', order.status)
             new_rider_id = updates.get('riderId', order.rider_id)
             
-            for i, (key, value) in enumerate(updates.items()):
-                if i > 0:
-                    update_expr += ", "
+            for key, value in updates.items():
                 attr_name = f"#{key}"
                 attr_value = f":{key}"
-                update_expr += f"{attr_name} = {attr_value}"
                 expr_attr_names[attr_name] = key
                 
                 # Handle different value types
                 if isinstance(value, bool):
+                    set_expr_parts.append(f"{attr_name} = {attr_value}")
                     expr_attr_values[attr_value] = {'BOOL': value}
                 elif isinstance(value, (int, float)):
+                    set_expr_parts.append(f"{attr_name} = {attr_value}")
                     expr_attr_values[attr_value] = {'N': str(value)}
                 elif isinstance(value, (list, dict)):
+                    set_expr_parts.append(f"{attr_name} = {attr_value}")
                     expr_attr_values[attr_value] = python_to_dynamodb(value)
                 elif value is None:
-                    # For removing rider assignment
+                    # Remove attribute when value is None
+                    remove_expr_parts.append(attr_name)
                     continue
                 else:
+                    set_expr_parts.append(f"{attr_name} = {attr_value}")
                     expr_attr_values[attr_value] = {'S': str(value)}
             
             # Update composite keys if status or riderId changed
@@ -203,18 +206,26 @@ class OrderService:
                 
                 if status_changed:
                     # Update all composite keys with new status
-                    update_expr += ", customerStatusCreatedAt = :csc, restaurantStatusCreatedAt = :rsc"
+                    set_expr_parts.append("customerStatusCreatedAt = :csc")
+                    set_expr_parts.append("restaurantStatusCreatedAt = :rsc")
                     expr_attr_values[':csc'] = {'S': f'{new_status}#{created_at}'}
                     expr_attr_values[':rsc'] = {'S': f'{new_status}#{created_at}'}
                     
                     if new_rider_id:
-                        update_expr += ", riderStatusCreatedAt = :risc"
+                        set_expr_parts.append("riderStatusCreatedAt = :risc")
                         expr_attr_values[':risc'] = {'S': f'{new_status}#{created_at}'}
                 
                 elif rider_changed and new_rider_id:
                     # Rider assigned - add riderStatusCreatedAt
-                    update_expr += ", riderStatusCreatedAt = :risc"
+                    set_expr_parts.append("riderStatusCreatedAt = :risc")
                     expr_attr_values[':risc'] = {'S': f'{new_status}#{created_at}'}
+
+            update_expr_parts = []
+            if set_expr_parts:
+                update_expr_parts.append("SET " + ", ".join(set_expr_parts))
+            if remove_expr_parts:
+                update_expr_parts.append("REMOVE " + ", ".join(remove_expr_parts))
+            update_expr = " ".join(update_expr_parts)
             
             dynamodb_client.update_item(
                 TableName=TABLES['ORDERS'],
