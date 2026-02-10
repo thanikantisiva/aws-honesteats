@@ -9,7 +9,7 @@ class Order:
     
     #restaurant statuses
     STATUS_INITIATED = "INITIATED"  # Order created, payment pending
-    STATUS_PENDING = "PENDING"  # Payment completed, awaiting restaurant confirmation
+    STATUS_PENDING = "PENDING"  # Payment completed, awaiting restaurant confirmation # old flow
     STATUS_CONFIRMED = "CONFIRMED"  # Payment successful, confirmed by platform
     STATUS_ACCEPTED = "ACCEPTED"  # Accepted by restaurant
 
