@@ -13,18 +13,37 @@ class Order:
     STATUS_CONFIRMED = "CONFIRMED"  # Payment successful, confirmed by platform
     STATUS_ACCEPTED = "ACCEPTED"  # Accepted by restaurant
 
-    #Order assign status
+    # Order assignment statuses
     STATUS_PREPARING = "PREPARING"   
     READY_FOR_PICKUP = "READY_FOR_PICKUP"
     STATUS_AWAITING_RIDER_ASSIGNMENT = "AWAITING_RIDER_ASSIGNMENT"
     OFFERED_TO_RIDER = "OFFERED_TO_RIDER"
 
-    #Rider statuses
+    # Rider statuses
     RIDER_ASSIGNED = "RIDER_ASSIGNED"
     PICKED_UP = "PICKED_UP"
     STATUS_OUT_FOR_DELIVERY = "OUT_FOR_DELIVERY"
     STATUS_DELIVERED = "DELIVERED"
     STATUS_CANCELLED = "CANCELLED"
+    
+    @classmethod
+    def get_all_statuses(cls):
+        """Get all valid order statuses"""
+        return [
+            cls.STATUS_INITIATED,
+            cls.STATUS_PENDING,
+            cls.STATUS_CONFIRMED,
+            cls.STATUS_ACCEPTED,
+            cls.STATUS_PREPARING,
+            cls.READY_FOR_PICKUP,
+            cls.STATUS_AWAITING_RIDER_ASSIGNMENT,
+            cls.OFFERED_TO_RIDER,
+            cls.RIDER_ASSIGNED,
+            cls.PICKED_UP,
+            cls.STATUS_OUT_FOR_DELIVERY,
+            cls.STATUS_DELIVERED,
+            cls.STATUS_CANCELLED
+        ]
     
     def __init__(
         self,

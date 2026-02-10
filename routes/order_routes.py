@@ -225,19 +225,7 @@ def register_order_routes(app):
             if not status:
                 return {"error": "Status is required"}, 400
             
-            valid_statuses = [
-                Order.STATUS_PENDING,
-                Order.STATUS_CONFIRMED,
-                Order.STATUS_PREPARING,
-                Order.READY_FOR_PICKUP,
-                Order.RIDER_ASSIGNED,
-                Order.RIDER_PICKED_UP,
-                Order.STATUS_ACCEPTED,
-                Order.PICKED_UP,
-                Order.STATUS_OUT_FOR_DELIVERY,
-                Order.STATUS_DELIVERED,
-                Order.STATUS_CANCELLED
-            ]
+            valid_statuses = Order.get_all_statuses()
             
             if status not in valid_statuses:
                 return {"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}, 400
