@@ -102,12 +102,8 @@ class OrderAssignmentService:
                 logger.info(f"[orderId={order_id}] All riders rejected; direct assign to {nearest_rider.rider_id} ({distance:.2f}km)")
                 logger.info(f"[orderId={order_id}] Direct assignment rider: id={nearest_rider.rider_id} phone={nearest_rider.phone} lat={nearest_rider.lat} lng={nearest_rider.lng}")
 
-                delivery_otp = OrderAssignmentService.generate_delivery_otp()
-                pickup_otp = OrderAssignmentService.generate_delivery_otp()
                 OrderService.update_order(order_id, {
                     'riderId': nearest_rider.rider_id,
-                    'deliveryOtp': delivery_otp,
-                    'pickupOtp': pickup_otp,
                     'riderAssignedAt': datetime.utcnow().isoformat(),
                     'status': Order.RIDER_ASSIGNED,
                     # Copy rider's current location for initial tracking
@@ -230,8 +226,4 @@ class OrderAssignmentService:
         except Exception as e:
             logger.error(f"Error reassigning order: {str(e)}", exc_info=True)
             return None
-    
-    @staticmethod
-    def generate_delivery_otp() -> str:
-        """Generate 4-digit delivery OTP"""
-        return str(random.randint(1000, 9999))
+

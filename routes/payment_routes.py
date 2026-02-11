@@ -7,6 +7,7 @@ from services.address_service import AddressService
 from models.payment import Payment
 from models.order import Order
 from utils.dynamodb import generate_id, dynamodb_client, TABLES
+import random
 
 logger = Logger()
 tracer = Tracer()
@@ -276,7 +277,9 @@ def register_payment_routes(app):
                 # Update order with payment details
                 OrderService.update_order(order_id, {
                     'paymentId': payment_id,
-                    'paymentMethod': payment_method
+                    'paymentMethod': payment_method,
+                    'deliveryOtp': str(random.randint(1000, 9999)),
+                    'pickupOtp': str(random.randint(1000, 9999))
                 })
             else:
                 # Fallback: Create order if it doesn't exist (shouldn't happen with new flow)
