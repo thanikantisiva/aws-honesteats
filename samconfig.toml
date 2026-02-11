@@ -1,0 +1,35 @@
+# SAM Configuration file for deployment settings
+# Supports dev and prod environments
+
+version = 0.1
+
+[default]
+[default.global.parameters]
+stack_name = "rork-honesteats-api-dev"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+region = "ap-south-1"
+confirm_changeset = false
+resolve_s3 = true
+parameter_overrides = "Environment=dev"
+
+[prod]
+[prod.global.parameters]
+stack_name = "rork-honesteats-api-prod"
+
+[prod.build.parameters]
+cached = true
+parallel = true
+
+[prod.deploy.parameters]
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+region = "ap-south-1"
+confirm_changeset = false
+resolve_s3 = false
+s3_bucket = "sam-deployments-982934028540"
+parameter_overrides = "Environment=prod"
