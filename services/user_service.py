@@ -85,6 +85,7 @@ class UserService:
         """Update user information (requires role for composite key)"""
         try:
             update_expressions = []
+            remove_expressions = []
             expression_attribute_names = {}
             expression_attribute_values = {}
             
@@ -109,9 +110,12 @@ class UserService:
                 expression_attribute_values[':dateOfBirth'] = {'S': updates['dateOfBirth']}
             
             if 'fcmToken' in updates:
-                update_expressions.append('#fcmToken = :fcmToken')
                 expression_attribute_names['#fcmToken'] = 'fcmToken'
-                expression_attribute_values[':fcmToken'] = {'S': updates['fcmToken']}
+                if updates['fcmToken'] is None:
+                    remove_expressions.append('#fcmToken')
+                else:
+                    update_expressions.append('#fcmToken = :fcmToken')
+                    expression_attribute_values[':fcmToken'] = {'S': updates['fcmToken']}
             
             if 'fcmTokenUpdatedAt' in updates:
                 update_expressions.append('#fcmTokenUpdatedAt = :fcmTokenUpdatedAt')
@@ -134,16 +138,22 @@ class UserService:
                 expression_attribute_names['#approvedAt'] = 'approvedAt'
                 expression_attribute_values[':approvedAt'] = {'S': updates['approvedAt']}
             
-            if not update_expressions:
+            if not update_expressions and not remove_expressions:
                 return UserService.get_user_by_role(phone, role)
             
+            update_parts = []
+            if update_expressions:
+                update_parts.append(f"SET {', '.join(update_expressions)}")
+            if remove_expressions:
+                update_parts.append(f"REMOVE {', '.join(remove_expressions)}")
+
             dynamodb_client.update_item(
                 TableName=TABLES['USERS'],
                 Key={
                     'phone': {'S': phone},
                     'role': {'S': role}
                 },
-                UpdateExpression=f"SET {', '.join(update_expressions)}",
+                UpdateExpression=" ".join(update_parts),
                 ExpressionAttributeNames=expression_attribute_names,
                 ExpressionAttributeValues=expression_attribute_values
             )

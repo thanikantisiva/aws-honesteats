@@ -144,3 +144,22 @@ def register_user_routes(app):
             logger.error(f"❌ Error registering FCM token: {str(e)}", exc_info=True)
             return {"error": "Failed to register FCM token", "message": str(e)}, 500
 
+    @app.post("/api/v1/users/<phone>/logout")
+    @tracer.capture_method
+    def logout_user(phone: str):
+        """Logout user by clearing FCM token and setting isActive to false"""
+        try:
+            logger.info(f"Logging out user: {phone}")
+
+            updates = {
+                'fcmToken': None,
+                'isActive': False
+            }
+
+            updated_user = UserService.update_user(phone, "CUSTOMER", updates)
+            metrics.add_metric(name="UserLoggedOut", unit="Count", value=1)
+
+            return {"message": "User logged out successfully", "phone": phone}, 200
+        except Exception as e:
+            logger.error("Error logging out user", exc_info=True)
+            return {"error": "Failed to logout user", "message": str(e)}, 500
