@@ -309,6 +309,19 @@ Resources:
             Path: /api/v1/riders/{rider_id}/documents
             Method: GET
             RestApiId: !Ref RorkHonestEatsApi
+        # Restaurant earnings
+        RestaurantEarningsHistory:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants/{restaurant_id}/earnings/history
+            Method: GET
+            RestApiId: !Ref RorkHonestEatsApi
+        RestaurantEarningsSettle:
+          Type: Api
+          Properties:
+            Path: /api/v1/restaurants/{restaurant_id}/earnings/settle
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
         # Rider List (for admin approval)
         ListRiders:
           Type: Api
@@ -347,6 +360,7 @@ Resources:
                 - !GetAtt OTPStorageTable.Arn
                 - !GetAtt RateLimitTable.Arn
                 - !GetAtt RiderEarningsTable.Arn
+                - !GetAtt RestaurantEarningsTable.Arn
                 - !Sub '${OrdersTable.Arn}/index/customer-phone-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/restaurantId-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/riderId-statusCreatedAt-index'
@@ -360,6 +374,7 @@ Resources:
                 - !Sub '${RestaurantsTable.Arn}/index/GSI3'
                 - !Sub '${PaymentsTable.Arn}/index/customer-phone-createdAt-index'
                 - !Sub '${RiderEarningsTable.Arn}/index/riderId-date-index'
+                - !Sub '${RestaurantEarningsTable.Arn}/index/restaurantId-date-index'
             - Effect: Allow
               Action:
                 - s3:PutObject
@@ -392,6 +407,7 @@ Resources:
           ADDRESSES_TABLE_NAME: !Ref AddressesTable
           PAYMENTS_TABLE_NAME: !Ref PaymentsTable
           EARNINGS_TABLE_NAME: !Ref RiderEarningsTable
+          RESTAURANT_EARNINGS_TABLE_NAME: !Ref RestaurantEarningsTable
           OTP_TABLE_NAME: !Ref OTPStorageTable
           RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
           RIDER_DOCUMENTS_BUCKET: !Ref RiderDocumentsBucket
@@ -1059,6 +1075,34 @@ Resources:
         - IndexName: riderId-date-index
           KeySchema:
             - AttributeName: riderId
+              KeyType: HASH
+            - AttributeName: date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  RestaurantEarningsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'food-delivery-restaurant-earnings-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: restaurantId
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: restaurantId
+          KeyType: HASH
+        - AttributeName: date
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: restaurantId-date-index
+          KeySchema:
+            - AttributeName: restaurantId
               KeyType: HASH
             - AttributeName: date
               KeyType: RANGE

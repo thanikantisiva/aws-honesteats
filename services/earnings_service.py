@@ -147,8 +147,9 @@ class EarningsService:
         rider_id: str,
         order_ids: List[str],
         start_date: str,
-        end_date: str
-    ) -> int:
+        end_date: str,
+        settlement_id: str
+    ) -> List[str]:
         """Mark earnings rows as settled for matching orderIds in date range"""
         try:
             earnings_list = EarningsService.get_earnings_for_date_range(
@@ -158,7 +159,7 @@ class EarningsService:
             )
 
             settled_at = datetime.utcnow().isoformat()
-            updated = 0
+            updated_order_ids: List[str] = []
 
             for earning in earnings_list:
                 if not earning.order_id:
@@ -172,14 +173,15 @@ class EarningsService:
                         'riderId': {'S': rider_id},
                         'date': {'S': earning.date}
                     },
-                    UpdateExpression='SET settled = :settled, settledAt = :settledAt',
+                    UpdateExpression='SET settled = :settled, settledAt = :settledAt, settlementId = :settlementId',
                     ExpressionAttributeValues={
                         ':settled': {'BOOL': True},
-                        ':settledAt': {'S': settled_at}
+                        ':settledAt': {'S': settled_at},
+                        ':settlementId': {'S': settlement_id}
                     }
                 )
-                updated += 1
+                updated_order_ids.append(earning.order_id)
 
-            return updated
+            return updated_order_ids
         except ClientError as e:
             raise Exception(f"Failed to settle earnings: {str(e)}")

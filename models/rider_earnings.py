@@ -17,6 +17,7 @@ class RiderEarnings:
         incentives: float = 0.0,
         online_time_minutes: int = 0,
         order_id: Optional[str] = None,
+        settlement_id: Optional[str] = None,
         settled: bool = False,
         settled_at: Optional[str] = None,
         created_at: Optional[str] = None
@@ -30,6 +31,7 @@ class RiderEarnings:
         self.incentives = incentives
         self.online_time_minutes = online_time_minutes
         self.order_id = order_id
+        self.settlement_id = settlement_id
         self.settled = settled
         self.settled_at = settled_at
         self.created_at = created_at or datetime.utcnow().isoformat()
@@ -46,6 +48,7 @@ class RiderEarnings:
             "incentives": self.incentives,
             "onlineTimeMinutes": self.online_time_minutes,
             "orderId": self.order_id,
+            "settlementId": self.settlement_id,
             "settled": self.settled,
             "settledAt": self.settled_at,
             "createdAt": self.created_at
@@ -64,6 +67,7 @@ class RiderEarnings:
             incentives=float(item.get("incentives", {}).get("N", "0")),
             online_time_minutes=int(item.get("onlineTimeMinutes", {}).get("N", "0")),
             order_id=item.get("orderId", {}).get("S") if "orderId" in item else None,
+            settlement_id=item.get("settlementId", {}).get("S") if "settlementId" in item else None,
             settled=item.get("settled", {}).get("BOOL", False) if "settled" in item else False,
             settled_at=item.get("settledAt", {}).get("S") if "settledAt" in item else None,
             created_at=item.get("createdAt", {}).get("S", "")
@@ -84,6 +88,8 @@ class RiderEarnings:
         }
         if self.order_id:
             item["orderId"] = {"S": self.order_id}
+        if self.settlement_id:
+            item["settlementId"] = {"S": self.settlement_id}
         item["settled"] = {"BOOL": self.settled}
         if self.settled_at:
             item["settledAt"] = {"S": self.settled_at}

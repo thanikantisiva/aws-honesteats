@@ -17,6 +17,7 @@ TABLES = {
     'ADDRESSES': os.environ.get('ADDRESSES_TABLE_NAME', 'food-delivery-addresses'),
     'PAYMENTS': os.environ.get('PAYMENTS_TABLE_NAME', 'food-delivery-payments'),
     'EARNINGS': os.environ.get('EARNINGS_TABLE_NAME', 'food-delivery-rider-earnings'),
+    'RESTAURANT_EARNINGS': os.environ.get('RESTAURANT_EARNINGS_TABLE_NAME', 'food-delivery-restaurant-earnings'),
 }
 
 
@@ -32,4 +33,3 @@ def generate_id(prefix: str) -> str:
     import time
     import random
     return f"{prefix}-{int(time.time() * 1000)}-{random.randint(1000, 9999)}"
-

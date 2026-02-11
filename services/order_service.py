@@ -71,6 +71,9 @@ class OrderService:
             
             orders = []
             for item in response.get('Items', []):
+                status_val = item.get("status", {}).get("S")
+                if status_val == Order.STATUS_INITIATED:
+                    continue
                 orders.append(Order.from_dynamodb_item(item))
             
             return orders

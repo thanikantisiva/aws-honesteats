@@ -4,6 +4,7 @@ from services.order_service import OrderService
 from services.order_assignment_service import OrderAssignmentService
 from services.rider_service import RiderService
 from services.earnings_service import EarningsService
+from services.restaurant_earnings_service import RestaurantEarningsService
 from services.restaurant_service import RestaurantService
 from services.address_service import AddressService
 from models.order import Order
@@ -233,6 +234,12 @@ def register_rider_order_routes(app):
                 
                 # Add to rider's earnings
                 EarningsService.add_delivery(rider_id, order_id, order.delivery_fee, 0.0)
+
+                # Add restaurant earnings entry
+                restaurant_settlement = 0.0
+                if order.revenue and isinstance(order.revenue, dict):
+                    restaurant_settlement = float(order.revenue.get('restaurantSettlement', 0))
+                RestaurantEarningsService.add_order_earning(order.restaurant_id, order_id, restaurant_settlement)
             
             # Update order status
             OrderService.update_order_status(order_id, new_status)

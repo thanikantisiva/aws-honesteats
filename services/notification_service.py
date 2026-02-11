@@ -140,13 +140,13 @@ class NotificationService:
         try:
             # Map status to user-friendly messages
             status_messages = {
-                'PENDING': ('Order Placed', f'Your order from {restaurant_name} has been placed'),
                 'CONFIRMED': ('Order Confirmed! 🎉', f'Your order from {restaurant_name} has been confirmed'),
                 'PREPARING': ('Food is Being Prepared', f'{restaurant_name} is preparing your order'),
-                'READY': ('Order Ready!', f'Your order from {restaurant_name} is ready'),
+                'READY_FOR_PICKUP': ('Order Ready!', f'Your order from {restaurant_name} is ready'),
                 'OUT_FOR_DELIVERY': ('On the Way! 🛵', f'Your order from {restaurant_name} is out for delivery'),
                 'DELIVERED': ('Order Delivered ✅', f'Your order from {restaurant_name} has been delivered'),
-                'CANCELLED': ('Order Cancelled', f'Your order from {restaurant_name} has been cancelled'),
+                'AWAITING_RIDER_ASSIGNMENT': ('Order Awaiting Rider Assignment', f'Your order from {restaurant_name} is awaiting a rider assignment'),
+                'RIDER_ASSIGNED': ('Order Assigned to Rider', f'Your order from {restaurant_name} has been assigned to a rider')
             }
             
             title, body = status_messages.get(status, ('Order Update', f'Your order status: {status}'))
