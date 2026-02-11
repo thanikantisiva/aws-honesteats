@@ -21,7 +21,7 @@ def register_order_routes(app):
     def get_order(order_id: str):
         """Get order by ID with enriched rider details"""
         try:
-            logger.info(f"Getting order: {order_id}")
+            logger.info(f"[orderId={order_id}] Getting order")
             order = OrderService.get_order(order_id)
             
             if not order:
@@ -50,21 +50,21 @@ def register_order_routes(app):
                                 OrderService.update_order(order_id, update_data)
                                 # Update the dict we're returning
                                 order_dict.update(update_data)
-                                logger.info(f"Updated rider location for order {order_id}: ({rider.lat}, {rider.lng})")
+                                logger.info(f"[orderId={order_id}] Updated rider location: ({rider.lat}, {rider.lng})")
                         
                         # Then get user details from Users table using phone and RIDER role
                         rider_user = UserService.get_user_by_role(rider.phone, "RIDER")
                         if rider_user:
                             order_dict['riderName'] = f"{rider_user.first_name} {rider_user.last_name}"
                             order_dict['riderPhone'] = rider.phone
-                            logger.info(f"Enriched order {order.order_id} with rider: {order_dict['riderName']}")
+                            logger.info(f"[orderId={order.order_id}] Enriched with rider: {order_dict['riderName']}")
                 except Exception as e:
-                    logger.error(f"Failed to fetch rider {order.rider_id}: {str(e)}")
+                    logger.error(f"[orderId={order_id}] Failed to fetch rider {order.rider_id}: {str(e)}")
             
             metrics.add_metric(name="OrderRetrieved", unit="Count", value=1)
             return order_dict, 200
         except Exception as e:
-            logger.error("Error getting order", exc_info=True)
+            logger.error(f"[orderId={order_id}] Error getting order", exc_info=True)
             return {"error": "Failed to get order", "message": str(e)}, 500
     
     @app.get("/api/v1/orders")
@@ -114,9 +114,9 @@ def register_order_routes(app):
                             if rider_user:
                                 order_dict['riderName'] = f"{rider_user.first_name} {rider_user.last_name}"
                                 order_dict['riderPhone'] = rider.phone
-                                logger.info(f"Enriched order {order.order_id} with rider: {order_dict['riderName']}")
+                                logger.info(f"[orderId={order.order_id}] Enriched with rider: {order_dict['riderName']}")
                     except Exception as e:
-                        logger.error(f"Failed to fetch rider {order.rider_id}: {str(e)}")
+                        logger.error(f"[orderId={order.order_id}] Failed to fetch rider {order.rider_id}: {str(e)}")
                 
                 enriched_orders.append(order_dict)
             
@@ -239,4 +239,3 @@ def register_order_routes(app):
         except Exception as e:
             logger.error("Error updating order status", exc_info=True)
             return {"error": "Failed to update order status", "message": str(e)}, 500
-

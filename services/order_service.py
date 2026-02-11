@@ -1,8 +1,11 @@
 """Order service"""
 from typing import List, Optional
+from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 from models.order import Order
 from utils.dynamodb import dynamodb_client, TABLES
+
+logger = Logger()
 
 
 class OrderService:
@@ -200,6 +203,10 @@ class OrderService:
                     set_expr_parts.append(f"{attr_name} = {attr_value}")
                     expr_attr_values[attr_value] = {'S': str(value)}
             
+            # Log status change
+            if status_changed and order.status != new_status:
+                logger.info(f"[orderId={order_id}] Status change: {order.status} → {new_status}")
+
             # Update composite keys if status or riderId changed
             if status_changed or rider_changed:
                 created_at = order.created_at
@@ -247,6 +254,9 @@ class OrderService:
             order = OrderService.get_order(order_id)
             if not order:
                 raise Exception("Order not found")
+
+            if order.status != status:
+                logger.info(f"[orderId={order_id}] Status change: {order.status} → {status}")
             
             created_at = order.created_at
             

@@ -57,31 +57,31 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             restaurant_id = new_image.get('restaurantId', {}).get('S', '')
             customer_phone = new_image.get('customerPhone', {}).get('S', '')
             
-            logger.info(f"🍽️ Order is preparing : {order_id}")
-            logger.info(f"   Restaurant: {restaurant_id}")
-            logger.info(f"   Customer: {customer_phone}")
-            logger.info(f"   Status: {old_status} → {new_status}")
+            logger.info(f"[orderId={order_id}] 🍽️ Order is preparing")
+            logger.info(f"[orderId={order_id}] Restaurant: {restaurant_id}")
+            logger.info(f"[orderId={order_id}] Customer: {customer_phone}")
+            logger.info(f"[orderId={order_id}] Status: {old_status} → {new_status}")
             
             # Check if already assigned (avoid double assignment)
             if new_image.get('riderId', {}).get('S'):
-                logger.info(f"Order already has rider assigned, skipping")
+                logger.info(f"[orderId={order_id}] Order already has rider assigned, skipping")
                 continue
             
             # Get restaurant details by restaurantId using GSI
-            logger.info(f"📍 Fetching restaurant details using restaurantId-index GSI")
+            logger.info(f"[orderId={order_id}] 📍 Fetching restaurant details using restaurantId-index GSI")
             restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
             
             if not restaurant:
-                logger.error(f"❌ Restaurant not found: {restaurant_id}")
+                logger.error(f"[orderId={order_id}] ❌ Restaurant not found: {restaurant_id}")
                 errors += 1
                 continue
             
-            logger.info(f"✅ Restaurant found: {restaurant.name}")
-            logger.info(f"   Location: ({restaurant.latitude}, {restaurant.longitude})")
-            logger.info(f"   Geohash: {restaurant.geohash}")
+            logger.info(f"[orderId={order_id}] ✅ Restaurant found: {restaurant.name}")
+            logger.info(f"[orderId={order_id}] Location: ({restaurant.latitude}, {restaurant.longitude})")
+            logger.info(f"[orderId={order_id}] Geohash: {restaurant.geohash}")
             
             # Assign order to nearest available rider using geohash proximity search
-            logger.info(f"🔍 Searching for available riders using geohash-based GSI queries")
+            logger.info(f"[orderId={order_id}] 🔍 Searching for available riders using geohash-based GSI queries")
             rider_id = OrderAssignmentService.assign_order_to_rider(
                 order_id,
                 restaurant.latitude,
@@ -90,12 +90,12 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             
             if rider_id:
                 processed += 1
-                logger.info(f"✅ Order {order_id} assigned to rider {rider_id}")
+                logger.info(f"[orderId={order_id}] ✅ Assigned to rider {rider_id}")
             else:
                 no_riders += 1
-                logger.warning(f"⚠️ No available riders found for order {order_id}")
-                logger.warning(f"   Restaurant: {restaurant.name} at ({restaurant.latitude}, {restaurant.longitude})")
-                logger.warning(f"   Manual assignment may be required")
+                logger.warning(f"[orderId={order_id}] ⚠️ No available riders found")
+                logger.warning(f"[orderId={order_id}] Restaurant: {restaurant.name} at ({restaurant.latitude}, {restaurant.longitude})")
+                logger.warning(f"[orderId={order_id}] Manual assignment may be required")
                 
         except Exception as e:
             errors += 1

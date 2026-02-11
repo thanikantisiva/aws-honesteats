@@ -45,7 +45,7 @@ def register_payment_routes(app):
             payment_id = generate_id('PAY')
             order_id = generate_id('ORD')  # Generate order ID now
             
-            logger.info(f"💳 Initiating payment: {payment_id}, Order: {order_id}, amount: ₹{amount}")
+            logger.info(f"[orderId={order_id}] 💳 Initiating payment: {payment_id}, amount: ₹{amount}")
             
             # ENRICH items with restaurantPrice from DB
             from services.menu_service import MenuService
@@ -108,9 +108,9 @@ def register_payment_routes(app):
                     pickup_address = f"{restaurant.name}, {restaurant.location_id}"
                     pickup_lat = restaurant.latitude
                     pickup_lng = restaurant.longitude
-                    logger.info(f"Fetched restaurant location: {restaurant.name} at ({pickup_lat}, {pickup_lng})")
+                    logger.info(f"[orderId={order_id}] Fetched restaurant location: {restaurant.name} at ({pickup_lat}, {pickup_lng})")
             except Exception as e:
-                logger.error(f"Failed to fetch restaurant location: {str(e)}")
+                logger.error(f"[orderId={order_id}] Failed to fetch restaurant location: {str(e)}")
                 # Continue without location - can be added later
             
             # Fetch delivery address coordinates
@@ -123,9 +123,9 @@ def register_payment_routes(app):
                     if address:
                         delivery_lat = address.lat
                         delivery_lng = address.lng
-                        logger.info(f"Fetched delivery location from address: ({delivery_lat}, {delivery_lng})")
+                        logger.info(f"[orderId={order_id}] Fetched delivery location from address: ({delivery_lat}, {delivery_lng})")
                 except Exception as e:
-                    logger.error(f"Failed to fetch delivery address location: {str(e)}")
+                    logger.error(f"[orderId={order_id}] Failed to fetch delivery address location: {str(e)}")
             
             # Create Order in DB with INITIATED status
             order = Order(
@@ -155,7 +155,7 @@ def register_payment_routes(app):
             
             from services.order_service import OrderService
             OrderService.create_order(order)
-            logger.info(f"📦 Order created with INITIATED status: {order_id}")
+            logger.info(f"[orderId={order_id}] 📦 Created with INITIATED status")
             
             # Create Razorpay order with orderId in notes
             razorpay_order = PaymentService.create_razorpay_order(
@@ -263,14 +263,14 @@ def register_payment_routes(app):
                 'upiApp': upi_app
             })
             
-            # Payment verified - Update order status from INITIATED to CONFIRMED
-            logger.info(f"✅ Payment verified, updating order status to CONFIRMED")
             # Get orderId from payment (order was created during initiate)
             order_id = getattr(payment, 'order_id', None)
+            # Payment verified - Update order status from INITIATED to CONFIRMED
+            logger.info(f"[orderId={order_id}] ✅ Payment verified, updating order status to CONFIRMED")
             
             if order_id:
                 # Order already exists with INITIATED status - just update to CONFIRMED
-                logger.info(f"✅ Updating existing order {order_id} to CONFIRMED")
+                logger.info(f"[orderId={order_id}] ✅ Updating to CONFIRMED")
                 updated_order = OrderService.update_order_status(order_id, Order.STATUS_CONFIRMED, None)
                 
                 # Update order with payment details
@@ -280,7 +280,7 @@ def register_payment_routes(app):
                 })
             else:
                 # Fallback: Create order if it doesn't exist (shouldn't happen with new flow)
-                logger.warning("⚠️ Order not found in payment, creating new order")
+                logger.warning(f"[orderId={order_id}] ⚠️ Order not found in payment, creating new order")
                 
                 # Fetch restaurant location details
                 pickup_address = None
@@ -293,9 +293,9 @@ def register_payment_routes(app):
                         pickup_address = f"{restaurant.name}, {restaurant.location_id}"
                         pickup_lat = restaurant.latitude
                         pickup_lng = restaurant.longitude
-                        logger.info(f"Fetched restaurant location: {restaurant.name} at ({pickup_lat}, {pickup_lng})")
+                        logger.info(f"[orderId={order_id}] Fetched restaurant location: {restaurant.name} at ({pickup_lat}, {pickup_lng})")
                 except Exception as e:
-                    logger.error(f"Failed to fetch restaurant location: {str(e)}")
+                    logger.error(f"[orderId={order_id}] Failed to fetch restaurant location: {str(e)}")
                 
                 # Fetch delivery address coordinates
                 delivery_lat = None
@@ -307,9 +307,9 @@ def register_payment_routes(app):
                         if address:
                             delivery_lat = address.lat
                             delivery_lng = address.lng
-                            logger.info(f"Fetched delivery location from address: ({delivery_lat}, {delivery_lng})")
+                            logger.info(f"[orderId={order_id}] Fetched delivery location from address: ({delivery_lat}, {delivery_lng})")
                     except Exception as e:
-                        logger.error(f"Failed to fetch delivery address location: {str(e)}")
+                        logger.error(f"[orderId={order_id}] Failed to fetch delivery address location: {str(e)}")
                 
                 order = Order(
                     order_id=generate_id('ORD'),
@@ -346,7 +346,7 @@ def register_payment_routes(app):
             metrics.add_metric(name="PaymentVerified", unit="Count", value=1)
             metrics.add_metric(name="OrderConfirmed", unit="Count", value=1)
             
-            logger.info(f"✅ Payment verified and order confirmed: {order_id}")
+            logger.info(f"[orderId={order_id}] ✅ Payment verified and order confirmed")
             
             # Return order details
             return {

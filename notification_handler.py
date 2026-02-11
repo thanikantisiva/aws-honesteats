@@ -50,13 +50,13 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             customer_phone = new_image.get('customerPhone', {}).get('S', '')
             restaurant_name = new_image.get('restaurantName', {}).get('S', 'Restaurant')
             
-            logger.info(f"📦 Order status changed: {order_id}")
-            logger.info(f"   Customer: {customer_phone}")
-            logger.info(f"   Status: {old_status} → {new_status}")
-            logger.info(f"   Restaurant: {restaurant_name}")
+            logger.info(f"[orderId={order_id}] 📦 Order status changed")
+            logger.info(f"[orderId={order_id}] Customer: {customer_phone}")
+            logger.info(f"[orderId={order_id}] Status: {old_status} → {new_status}")
+            logger.info(f"[orderId={order_id}] Restaurant: {restaurant_name}")
 
             if new_status == "OFFERED_TO_RIDER":
-                logger.info("Skipping customer notification for OFFERED_TO_RIDER status")
+                logger.info(f"[orderId={order_id}] Skipping customer notification for OFFERED_TO_RIDER")
                 continue
             
             # Get user's FCM token from UsersTable
@@ -71,13 +71,13 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             )
             
             if 'Item' not in user_response:
-                logger.warning(f"User not found: {customer_phone}")
+                logger.warning(f"[orderId={order_id}] User not found: {customer_phone}")
                 continue
             
             fcm_token = user_response['Item'].get('fcmToken', {}).get('S')
             
             if not fcm_token:
-                logger.warning(f"No FCM token for user: {customer_phone}")
+                logger.warning(f"[orderId={order_id}] No FCM token for user: {customer_phone}")
                 continue
             
             # Send push notification
@@ -90,14 +90,14 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             
             if success:
                 processed += 1
-                logger.info(f"✅ Notification sent successfully")
+                logger.info(f"[orderId={order_id}] ✅ Notification sent successfully")
             else:
                 errors += 1
-                logger.error(f"❌ Failed to send notification")
+                logger.error(f"[orderId={order_id}] ❌ Failed to send notification")
                 
         except Exception as e:
             errors += 1
-            logger.error(f"Error processing record: {str(e)}", exc_info=True)
+            logger.error(f"[orderId={order_id}] Error processing record: {str(e)}", exc_info=True)
     
     logger.info(f"Stream processing complete: {processed} sent, {errors} errors")
     

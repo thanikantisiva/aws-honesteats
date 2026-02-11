@@ -11,61 +11,55 @@ class EarningsService:
     
     @staticmethod
     def get_or_create_daily_earnings(rider_id: str, date: str) -> RiderEarnings:
-        """Get or create earnings record for a specific date"""
+        """Get aggregated earnings summary for a specific date"""
         try:
-            response = dynamodb_client.get_item(
-                TableName=TABLES['EARNINGS'],
-                Key={
-                    'riderId': {'S': rider_id},
-                    'date': {'S': date}
-                }
+            earnings_list = EarningsService.get_earnings_for_date_range(
+                rider_id,
+                date,
+                date
             )
-            
-            if 'Item' in response:
-                return RiderEarnings.from_dynamodb_item(response['Item'])
-            
-            # Create new earnings record
+            total_deliveries = sum(e.total_deliveries for e in earnings_list)
+            total_earnings = sum(e.total_earnings for e in earnings_list)
+            total_fees = sum(e.delivery_fees for e in earnings_list)
+            total_tips = sum(e.tips for e in earnings_list)
+            total_incentives = sum(e.incentives for e in earnings_list)
+
+            return RiderEarnings(
+                rider_id=rider_id,
+                date=date,
+                total_deliveries=total_deliveries,
+                total_earnings=total_earnings,
+                delivery_fees=total_fees,
+                tips=total_tips,
+                incentives=total_incentives
+            )
+        except ClientError as e:
+            raise Exception(f"Failed to get earnings: {str(e)}")
+    
+    @staticmethod
+    def add_delivery(rider_id: str, order_id: str, delivery_fee: float, tip: float = 0.0):
+        """Add a delivery to rider's earnings"""
+        try:
+            today = datetime.utcnow().strftime('%Y-%m-%d')
             earnings = RiderEarnings(
                 rider_id=rider_id,
-                date=date
+                date=f"{today}#{order_id}",
+                total_deliveries=1,
+                total_earnings=delivery_fee + tip,
+                delivery_fees=delivery_fee,
+                tips=tip,
+                incentives=0.0,
+                order_id=order_id,
+                settled=False,
+                settled_at=None
             )
-            
+
             dynamodb_client.put_item(
                 TableName=TABLES['EARNINGS'],
                 Item=earnings.to_dynamodb_item()
             )
-            
-            return earnings
         except ClientError as e:
-            raise Exception(f"Failed to get/create earnings: {str(e)}")
-    
-    @staticmethod
-    def add_delivery(rider_id: str, delivery_fee: float, tip: float = 0.0):
-        """Add a delivery to rider's earnings"""
-        try:
-            today = datetime.utcnow().strftime('%Y-%m-%d')
-            
-            dynamodb_client.update_item(
-                TableName=TABLES['EARNINGS'],
-                Key={
-                    'riderId': {'S': rider_id},
-                    'date': {'S': today}
-                },
-                UpdateExpression='ADD totalDeliveries :one, deliveryFees :fee, tips :tip, totalEarnings :total',
-                ExpressionAttributeValues={
-                    ':one': {'N': '1'},
-                    ':fee': {'N': str(delivery_fee)},
-                    ':tip': {'N': str(tip)},
-                    ':total': {'N': str(delivery_fee + tip)}
-                }
-            )
-        except ClientError as e:
-            # If item doesn't exist, create it first
-            if e.response['Error']['Code'] == 'ValidationException':
-                earnings = EarningsService.get_or_create_daily_earnings(rider_id, today)
-                EarningsService.add_delivery(rider_id, delivery_fee, tip)
-            else:
-                raise Exception(f"Failed to add delivery: {str(e)}")
+            raise Exception(f"Failed to add delivery: {str(e)}")
     
     @staticmethod
     def get_earnings_for_date_range(rider_id: str, start_date: str, end_date: str) -> List[RiderEarnings]:
@@ -79,8 +73,8 @@ class EarningsService:
                 },
                 ExpressionAttributeValues={
                     ':riderId': {'S': rider_id},
-                    ':start': {'S': start_date},
-                    ':end': {'S': end_date}
+                    ':start': {'S': f'{start_date}#'},
+                    ':end': {'S': f'{end_date}#\uffff'}
                 }
             )
             
@@ -147,3 +141,45 @@ class EarningsService:
             "totalTips": total_tips,
             "dailyBreakdown": [e.to_dict() for e in earnings_list]
         }
+
+    @staticmethod
+    def settle_earnings_for_orders(
+        rider_id: str,
+        order_ids: List[str],
+        start_date: str,
+        end_date: str
+    ) -> int:
+        """Mark earnings rows as settled for matching orderIds in date range"""
+        try:
+            earnings_list = EarningsService.get_earnings_for_date_range(
+                rider_id,
+                start_date,
+                end_date
+            )
+
+            settled_at = datetime.utcnow().isoformat()
+            updated = 0
+
+            for earning in earnings_list:
+                if not earning.order_id:
+                    continue
+                if earning.order_id not in order_ids:
+                    continue
+
+                dynamodb_client.update_item(
+                    TableName=TABLES['EARNINGS'],
+                    Key={
+                        'riderId': {'S': rider_id},
+                        'date': {'S': earning.date}
+                    },
+                    UpdateExpression='SET settled = :settled, settledAt = :settledAt',
+                    ExpressionAttributeValues={
+                        ':settled': {'BOOL': True},
+                        ':settledAt': {'S': settled_at}
+                    }
+                )
+                updated += 1
+
+            return updated
+        except ClientError as e:
+            raise Exception(f"Failed to settle earnings: {str(e)}")

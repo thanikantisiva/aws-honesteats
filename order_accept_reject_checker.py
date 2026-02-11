@@ -33,21 +33,21 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
 
         order = OrderService.get_order(order_id)
         if not order:
-            logger.warning(f"Order not found: {order_id}")
+            logger.warning(f"[orderId={order_id}] Order not found")
             return {"statusCode": 200, "body": json.dumps({"message": "Order not found"})}
 
         if order.status == Order.RIDER_ASSIGNED:
-            logger.info(f"Order {order_id} already accepted by rider")
+            logger.info(f"[orderId={order_id}] Already accepted by rider")
             return {"statusCode": 200, "body": json.dumps({"message": "Already assigned"})}
 
         # If status moved beyond assigned or cancelled, do nothing
         if order.status in [Order.PICKED_UP, Order.STATUS_OUT_FOR_DELIVERY, Order.STATUS_DELIVERED, Order.STATUS_CANCELLED]:
-            logger.info(f"Order {order_id} in terminal status {order.status}, skipping")
+            logger.info(f"[orderId={order_id}] Terminal status {order.status}, skipping")
             return {"statusCode": 200, "body": json.dumps({"message": "Terminal status"})}
 
         # If rider has changed since offer, skip (stale schedule)
         if expected_rider_id and order.rider_id and order.rider_id != expected_rider_id:
-            logger.info(f"Order {order_id} rider changed, skipping stale schedule")
+            logger.info(f"[orderId={order_id}] Rider changed, skipping stale schedule")
             return {"statusCode": 200, "body": json.dumps({"message": "Stale schedule"})}
 
         # Add current rider to rejectedByRiders list
@@ -81,12 +81,12 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                 restaurant_lng = restaurant.longitude
 
         if restaurant_lat is None or restaurant_lng is None:
-            logger.error(f"Missing restaurant location for order {order_id}")
+            logger.error(f"[orderId={order_id}] Missing restaurant location")
             return {"statusCode": 500, "body": json.dumps({"error": "Missing restaurant location"})}
 
         OrderAssignmentService.assign_order_to_rider(order_id, restaurant_lat, restaurant_lng)
 
         return {"statusCode": 200, "body": json.dumps({"message": "Reassignment attempted"})}
     except Exception as e:
-        logger.error(f"Error in OrderAcceptRejectChecker: {str(e)}", exc_info=True)
+        logger.error(f"[orderId={event.get('orderId')}] Error in OrderAcceptRejectChecker: {str(e)}", exc_info=True)
         raise

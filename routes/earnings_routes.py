@@ -88,3 +88,49 @@ def register_earnings_routes(app):
         except Exception as e:
             logger.error("Error getting earnings history", exc_info=True)
             return {"error": "Failed to get earnings history", "message": str(e)}, 500
+
+    @app.post("/api/v1/riders/<rider_id>/earnings/settle")
+    @tracer.capture_method
+    def settle_earnings(rider_id: str):
+        """
+        Settle rider earnings for specific orders in a date range
+        
+        Request body:
+        {
+            "orderIds": ["ORD-1", "ORD-2"],
+            "startDate": "YYYY-MM-DD",
+            "endDate": "YYYY-MM-DD"
+        }
+        """
+        try:
+            body = app.current_event.json_body or {}
+            order_ids = body.get('orderIds', [])
+            start_date = body.get('startDate')
+            end_date = body.get('endDate')
+
+            if not order_ids or not isinstance(order_ids, list):
+                return {"error": "orderIds (list) required"}, 400
+            if not start_date or not end_date:
+                return {"error": "startDate and endDate required"}, 400
+
+            logger.info(f"Settling earnings for rider {rider_id}, orders={len(order_ids)}, range={start_date}..{end_date}")
+
+            updated = EarningsService.settle_earnings_for_orders(
+                rider_id=rider_id,
+                order_ids=order_ids,
+                start_date=start_date,
+                end_date=end_date
+            )
+
+            metrics.add_metric(name="RiderEarningsSettled", unit="Count", value=1)
+
+            return {
+                "riderId": rider_id,
+                "updated": updated,
+                "startDate": start_date,
+                "endDate": end_date
+            }, 200
+
+        except Exception as e:
+            logger.error("Error settling earnings", exc_info=True)
+            return {"error": "Failed to settle earnings", "message": str(e)}, 500

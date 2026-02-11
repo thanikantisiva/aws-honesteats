@@ -38,17 +38,17 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             restaurant_lng = body['restaurantLng']
             attempt_number = body.get('attemptNumber', 0)
             
-            logger.info(f"Processing order {order_id} (attempt #{attempt_number})")
+            logger.info(f"[orderId={order_id}] Processing (attempt #{attempt_number})")
             
             # Verify order still needs assignment
             order = OrderService.get_order(order_id)
             
             if not order:
-                logger.warning(f"Order {order_id} not found, skipping")
+                logger.warning(f"[orderId={order_id}] Order not found, skipping")
                 continue
             
             if order.status != 'AWAITING_RIDER_ASSIGNMENT':
-                logger.info(f"Order {order_id} status is {order.status}, no longer awaiting assignment")
+                logger.info(f"[orderId={order_id}] Status is {order.status}, no longer awaiting assignment")
                 continue
             
             # Try to assign rider
@@ -58,17 +58,17 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             
             if rider_id:
                 assigned += 1
-                logger.info(f"✅ Queued order {order_id} assigned to rider {rider_id}")
+                logger.info(f"[orderId={order_id}] ✅ Assigned to rider {rider_id}")
             else:
                 # Still no riders - raise to keep message for retry
                 still_waiting += 1
-                logger.info(f"⏳ Order {order_id} still awaiting rider (will retry after visibility timeout)")
+                logger.info(f"[orderId={order_id}] ⏳ Still awaiting rider (will retry after visibility timeout)")
                 raise Exception(f"No riders available for order {order_id}")
             
             processed += 1
             
         except Exception as e:
-            logger.error(f"Error processing message for order: {str(e)}", exc_info=True)
+            logger.error(f"[orderId={order_id}] Error processing message: {str(e)}", exc_info=True)
             raise
     
     logger.info(f"Queue processing complete: {processed} processed, {assigned} assigned, {still_waiting} still waiting")

@@ -9,13 +9,16 @@ class RiderEarnings:
     def __init__(
         self,
         rider_id: str,
-        date: str,  # YYYY-MM-DD format
+        date: str,  # YYYY-MM-DD#ORDER_ID format
         total_deliveries: int = 0,
         total_earnings: float = 0.0,
         delivery_fees: float = 0.0,
         tips: float = 0.0,
         incentives: float = 0.0,
         online_time_minutes: int = 0,
+        order_id: Optional[str] = None,
+        settled: bool = False,
+        settled_at: Optional[str] = None,
         created_at: Optional[str] = None
     ):
         self.rider_id = rider_id
@@ -26,6 +29,9 @@ class RiderEarnings:
         self.tips = tips
         self.incentives = incentives
         self.online_time_minutes = online_time_minutes
+        self.order_id = order_id
+        self.settled = settled
+        self.settled_at = settled_at
         self.created_at = created_at or datetime.utcnow().isoformat()
     
     def to_dict(self) -> dict:
@@ -39,6 +45,9 @@ class RiderEarnings:
             "tips": self.tips,
             "incentives": self.incentives,
             "onlineTimeMinutes": self.online_time_minutes,
+            "orderId": self.order_id,
+            "settled": self.settled,
+            "settledAt": self.settled_at,
             "createdAt": self.created_at
         }
     
@@ -54,12 +63,15 @@ class RiderEarnings:
             tips=float(item.get("tips", {}).get("N", "0")),
             incentives=float(item.get("incentives", {}).get("N", "0")),
             online_time_minutes=int(item.get("onlineTimeMinutes", {}).get("N", "0")),
+            order_id=item.get("orderId", {}).get("S") if "orderId" in item else None,
+            settled=item.get("settled", {}).get("BOOL", False) if "settled" in item else False,
+            settled_at=item.get("settledAt", {}).get("S") if "settledAt" in item else None,
             created_at=item.get("createdAt", {}).get("S", "")
         )
     
     def to_dynamodb_item(self) -> dict:
         """Convert to DynamoDB item format"""
-        return {
+        item = {
             "riderId": {"S": self.rider_id},
             "date": {"S": self.date},
             "totalDeliveries": {"N": str(self.total_deliveries)},
@@ -70,3 +82,9 @@ class RiderEarnings:
             "onlineTimeMinutes": {"N": str(self.online_time_minutes)},
             "createdAt": {"S": self.created_at}
         }
+        if self.order_id:
+            item["orderId"] = {"S": self.order_id}
+        item["settled"] = {"BOOL": self.settled}
+        if self.settled_at:
+            item["settledAt"] = {"S": self.settled_at}
+        return item

@@ -84,7 +84,7 @@ def register_rider_order_routes(app):
     def accept_order(rider_id: str, order_id: str, status: str):
         """Accept an assigned order"""
         try:
-            logger.info(f"Rider {rider_id} accepting order {order_id}")
+            logger.info(f"[orderId={order_id}] Rider {rider_id} accepting order")
             
             # Get order
             order = OrderService.get_order(order_id)
@@ -121,7 +121,7 @@ def register_rider_order_routes(app):
             
             OrderService.update_order(order_id, update_data)
             
-            logger.info(f"Order {order_id} accepted by rider {rider_id}")
+            logger.info(f"[orderId={order_id}] Accepted by rider {rider_id}")
             metrics.add_metric(name="OrderAcceptedByRider", unit="Count", value=1)
             
             return {"message": "Order accepted", "orderId": order_id, "status": new_status}, 200
@@ -138,7 +138,7 @@ def register_rider_order_routes(app):
             body = app.current_event.json_body
             reason = body.get('reason', 'Rider unavailable')
             
-            logger.info(f"Rider {rider_id} rejecting order {order_id}: {reason}")
+            logger.info(f"[orderId={order_id}] Rider {rider_id} rejecting order: {reason}")
             
             # Get order
             order = OrderService.get_order(order_id)
@@ -170,9 +170,9 @@ def register_rider_order_routes(app):
             if restaurant_lat is not None and restaurant_lng is not None:
                 OrderAssignmentService.assign_order_to_rider(order_id, restaurant_lat, restaurant_lng)
             else:
-                logger.warning(f"Missing restaurant location for order {order_id}, cannot reassign")
+                logger.warning(f"[orderId={order_id}] Missing restaurant location, cannot reassign")
             
-            logger.info(f"Order {order_id} rejected by rider {rider_id}")
+            logger.info(f"[orderId={order_id}] Rejected by rider {rider_id}")
             metrics.add_metric(name="OrderRejectedByRider", unit="Count", value=1)
             
             return {"message": "Order rejected", "orderId": order_id}, 200
@@ -199,7 +199,7 @@ def register_rider_order_routes(app):
             if not new_status:
                 return {"error": "Status required"}, 400
             
-            logger.info(f"Rider {rider_id} updating order {order_id} to {new_status}")
+            logger.info(f"[orderId={order_id}] Rider {rider_id} updating status to {new_status}")
             
             # Get order
             order = OrderService.get_order(order_id)
@@ -232,12 +232,12 @@ def register_rider_order_routes(app):
                 RiderService.set_working_on_order(rider_id, None)
                 
                 # Add to rider's earnings
-                EarningsService.add_delivery(rider_id, order.delivery_fee, 0.0)
+                EarningsService.add_delivery(rider_id, order_id, order.delivery_fee, 0.0)
             
             # Update order status
             OrderService.update_order_status(order_id, new_status)
             
-            logger.info(f"Order {order_id} status updated to {new_status}")
+            logger.info(f"[orderId={order_id}] Status updated to {new_status}")
             metrics.add_metric(name=f"Order{new_status}", unit="Count", value=1)
             
             return {"message": "Order status updated", "orderId": order_id, "status": new_status}, 200

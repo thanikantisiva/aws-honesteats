@@ -577,6 +577,12 @@ Resources:
                 - sqs:GetQueueAttributes
               Resource:
                 - !GetAtt OrderAssignmentQueue.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt OrdersTable.Arn
   
   # ---------------- ORDER ACCEPT/REJECT CHECKER ----------------
   OrderAcceptRejectCheckerFunction:

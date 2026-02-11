@@ -35,31 +35,31 @@ class OrderAssignmentService:
             rider_id if assigned, None if no riders available
         """
         try:
-            logger.info(f"Offering order {order_id} to rider near ({restaurant_lat}, {restaurant_lng})")
+            logger.info(f"[orderId={order_id}] Offering to rider near ({restaurant_lat}, {restaurant_lng})")
             
             # Find available riders within 5km
             available_riders = RiderService.find_available_riders_near(
                 restaurant_lat,
                 restaurant_lng,
-                radius_km=5
+                radius_km=10
             )
-            logger.info(f"Found {len(available_riders)} available riders before filtering")
+            logger.info(f"[orderId={order_id}] Found {len(available_riders)} available riders before filtering")
 
             # Load order to check rejected riders
             order = OrderService.get_order(order_id)
             rejected_by_riders = order.rejected_by_riders if order else []
             if rejected_by_riders:
-                logger.info(f"Order {order_id} rejectedByRiders count: {len(rejected_by_riders)}")
+                logger.info(f"[orderId={order_id}] rejectedByRiders count: {len(rejected_by_riders)}")
             filtered_riders = available_riders
             if rejected_by_riders:
                 filtered_riders = [
                     (r, d) for (r, d) in available_riders
                     if r.rider_id not in rejected_by_riders
                 ]
-            logger.info(f"{len(filtered_riders)} available riders after filtering rejected riders")
+            logger.info(f"[orderId={order_id}] {len(filtered_riders)} riders after filtering rejected riders")
             
             if not available_riders:
-                logger.warning(f"No available riders found for order {order_id}")
+                logger.warning(f"[orderId={order_id}] No available riders found")
                 
                 # Get current order to check assignment attempts
                 order = OrderService.get_order(order_id)
@@ -71,7 +71,7 @@ class OrderAssignmentService:
                     'riderAssignmentAttempts': attempts,
                     'lastAssignmentAttemptAt': datetime.utcnow().isoformat()
                 })
-                logger.info(f"Order {order_id} status updated to AWAITING_RIDER_ASSIGNMENT (attempt #{attempts})")
+                logger.info(f"[orderId={order_id}] Status updated to AWAITING_RIDER_ASSIGNMENT (attempt #{attempts})")
                 
                 # Push to SQS queue for retry
                 try:
@@ -88,19 +88,19 @@ class OrderAssignmentService:
                                 'attemptNumber': attempts
                             })
                         )
-                        logger.info(f"Order {order_id} queued for rider assignment retry")
+                        logger.info(f"[orderId={order_id}] Queued for rider assignment retry")
                     else:
-                        logger.error("ORDER_ASSIGNMENT_QUEUE_URL not configured")
+                        logger.error(f"[orderId={order_id}] ORDER_ASSIGNMENT_QUEUE_URL not configured")
                 except Exception as e:
-                    logger.error(f"Failed to queue order {order_id}: {str(e)}")
+                    logger.error(f"[orderId={order_id}] Failed to queue: {str(e)}")
                 
                 return None
             
             # If everyone has rejected, assign directly to nearest rider
             if not filtered_riders and available_riders:
                 nearest_rider, distance = available_riders[0]
-                logger.info(f"All riders rejected; assigning order {order_id} directly to rider {nearest_rider.rider_id} ({distance:.2f}km away)")
-                logger.info(f"Direct assignment rider details: id={nearest_rider.rider_id} phone={nearest_rider.phone} lat={nearest_rider.lat} lng={nearest_rider.lng}")
+                logger.info(f"[orderId={order_id}] All riders rejected; direct assign to {nearest_rider.rider_id} ({distance:.2f}km)")
+                logger.info(f"[orderId={order_id}] Direct assignment rider: id={nearest_rider.rider_id} phone={nearest_rider.phone} lat={nearest_rider.lat} lng={nearest_rider.lng}")
 
                 delivery_otp = OrderAssignmentService.generate_delivery_otp()
                 pickup_otp = OrderAssignmentService.generate_delivery_otp()
@@ -129,17 +129,17 @@ class OrderAssignmentService:
                             restaurant_name=order.restaurant_name or "Restaurant",
                             delivery_fee=order.delivery_fee
                         )
-                        logger.info(f"Direct assignment notification sent to rider {nearest_rider.phone}")
+                        logger.info(f"[orderId={order_id}] Direct assignment notification sent to rider {nearest_rider.phone}")
                 except Exception as e:
                     logger.error(f"Failed to send notification to rider: {str(e)}")
 
-                logger.info(f"Order {order_id} assigned directly to rider {nearest_rider.rider_id}")
+                logger.info(f"[orderId={order_id}] Assigned directly to rider {nearest_rider.rider_id}")
                 return nearest_rider.rider_id
 
             # Get nearest rider from filtered list (returns list of tuples: (Rider, distance))
             nearest_rider, distance = filtered_riders[0]
-            logger.info(f"Offering order {order_id} to rider {nearest_rider.rider_id} ({distance:.2f}km away)")
-            logger.info(f"Offer rider details: id={nearest_rider.rider_id} phone={nearest_rider.phone} lat={nearest_rider.lat} lng={nearest_rider.lng}")
+            logger.info(f"[orderId={order_id}] Offering to rider {nearest_rider.rider_id} ({distance:.2f}km)")
+            logger.info(f"[orderId={order_id}] Offer rider: id={nearest_rider.rider_id} phone={nearest_rider.phone} lat={nearest_rider.lat} lng={nearest_rider.lng}")
             
             # Update order with offered rider and status
             OrderService.update_order(order_id, {
@@ -147,7 +147,7 @@ class OrderAssignmentService:
                 'status': Order.OFFERED_TO_RIDER,
                 'offeredAt': datetime.utcnow().isoformat()
             })
-            logger.info(f"Order {order_id} updated to OFFERED_TO_RIDER for rider {nearest_rider.rider_id}")
+            logger.info(f"[orderId={order_id}] Updated to OFFERED_TO_RIDER for rider {nearest_rider.rider_id}")
             
             # Send notification to rider
             try:
@@ -160,7 +160,7 @@ class OrderAssignmentService:
                         restaurant_name=order.restaurant_name or "Restaurant",
                         delivery_fee=order.delivery_fee
                     )
-                    logger.info(f"Offer notification sent to rider {nearest_rider.phone}")
+                    logger.info(f"[orderId={order_id}] Offer notification sent to rider {nearest_rider.phone}")
             except Exception as e:
                 logger.error(f"Failed to send notification to rider: {str(e)}")
             
@@ -188,17 +188,17 @@ class OrderAssignmentService:
                         },
                         ActionAfterCompletion="DELETE"
                     )
-                    logger.info(f"Offer check scheduled at {run_at.isoformat()} with name {schedule_name} for order {order_id}")
+                    logger.info(f"[orderId={order_id}] Offer check scheduled at {run_at.isoformat()} name={schedule_name}")
                 else:
-                    logger.error("Order accept/reject checker ARNs not configured")
+                    logger.error(f"[orderId={order_id}] Order accept/reject checker ARNs not configured")
             except Exception as e:
-                logger.error(f"Failed to create EventBridge schedule: {str(e)}")
+                logger.error(f"[orderId={order_id}] Failed to create EventBridge schedule: {str(e)}")
             
-            logger.info(f"Order {order_id} offered to rider {nearest_rider.rider_id}")
+            logger.info(f"[orderId={order_id}] Offered to rider {nearest_rider.rider_id}")
             return nearest_rider.rider_id
             
         except Exception as e:
-            logger.error(f"Error assigning order: {str(e)}", exc_info=True)
+            logger.error(f"[orderId={order_id}] Error assigning order: {str(e)}", exc_info=True)
             return None
     
     @staticmethod
