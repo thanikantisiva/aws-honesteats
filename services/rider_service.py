@@ -31,6 +31,14 @@ def _update_order_with_rider_location(order_id: str, lat: float, lng: float, spe
 
 class RiderService:
     """Service for rider operational operations"""
+
+    @staticmethod
+    def _ensure_user_rider_exists(rider_id: str):
+        """Ensure rider exists in Users table via riderId-index"""
+        from services.user_service import UserService
+        user = UserService.get_rider_by_rider_id(rider_id)
+        if not user:
+            raise Exception(f"Rider user not found for riderId: {rider_id}")
     
     @staticmethod
     def create_rider(rider: Rider) -> Rider:
@@ -106,6 +114,7 @@ class RiderService:
     ) -> Rider:
         """Update rider location and movement data with geohash and GSI fields"""
         try:
+            RiderService._ensure_user_rider_exists(rider_id)
             timestamp = datetime.utcnow().isoformat()
             
             # Calculate geohash at all precision levels
@@ -161,6 +170,7 @@ class RiderService:
     def set_active_status(rider_id: str, is_active: bool, lat: Optional[float] = None, lng: Optional[float] = None) -> Rider:
         """Toggle rider online/offline status with optional location"""
         try:
+            RiderService._ensure_user_rider_exists(rider_id)
             timestamp = datetime.utcnow().isoformat()
             
             # If going online and location provided, update location and geohash
@@ -209,6 +219,7 @@ class RiderService:
     def set_working_on_order(rider_id: str, order_id: Optional[str]) -> Rider:
         """Set or clear the order rider is working on"""
         try:
+            RiderService._ensure_user_rider_exists(rider_id)
             if order_id:
                 dynamodb_client.update_item(
                     TableName=TABLES['RIDERS'],
