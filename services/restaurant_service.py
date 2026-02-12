@@ -403,11 +403,6 @@ class RestaurantService:
             expression_attribute_names = {}
             expression_attribute_values = {}
             
-            if 'name' in updates:
-                update_expressions.append('#name = :name')
-                expression_attribute_names['#name'] = 'name'
-                expression_attribute_values[':name'] = {'S': updates['name']}
-            
             if 'latitude' in updates:
                 update_expressions.append('#latitude = :latitude')
                 expression_attribute_names['#latitude'] = 'latitude'
@@ -417,39 +412,7 @@ class RestaurantService:
                 update_expressions.append('#longitude = :longitude')
                 expression_attribute_names['#longitude'] = 'longitude'
                 expression_attribute_values[':longitude'] = {'N': str(updates['longitude'])}
-            
-            if 'isOpen' in updates:
-                update_expressions.append('#isOpen = :isOpen')
-                expression_attribute_names['#isOpen'] = 'isOpen'
-                expression_attribute_values[':isOpen'] = {'BOOL': updates['isOpen']}
-            
-            if 'restaurantImage' in updates:
-                update_expressions.append('#restaurant_image = :restaurant_image')
-                expression_attribute_names['#restaurant_image'] = 'restaurant_image'
-                expression_attribute_values[':restaurant_image'] = {'S': updates['restaurantImage']}
-            
-            if 'cuisine' in updates:
-                update_expressions.append('#cuisine = :cuisine')
-                expression_attribute_names['#cuisine'] = 'cuisine'
-                cuisine_list = updates['cuisine']
-                if isinstance(cuisine_list, list):
-                    expression_attribute_values[':cuisine'] = {'L': [{'S': str(c)} for c in cuisine_list]}
-                else:
-                    expression_attribute_values[':cuisine'] = {'L': []}
-            
-            if 'rating' in updates:
-                update_expressions.append('#rating = :rating')
-                expression_attribute_names['#rating'] = 'rating'
-                expression_attribute_values[':rating'] = {'N': str(updates['rating'])}
-            
-            if 'ownerId' in updates:
-                update_expressions.append('#GSI1PK = :gsi1pk, #GSI1SK = :gsi1sk')
-                expression_attribute_names['#GSI1PK'] = 'GSI1PK'
-                expression_attribute_names['#GSI1SK'] = 'GSI1SK'
-                owner_id = updates['ownerId']
-                expression_attribute_values[':gsi1pk'] = {'S': f"OWNER#{owner_id}"}
-                expression_attribute_values[':gsi1sk'] = {'S': f"RESTAURANT#{restaurant_id}"}
-            
+                
             # Compare and build update expressions only for changed fields
             if 'name' in updates and updates['name'] != existing_restaurant.name:
                 update_expressions.append('#name = :name')
