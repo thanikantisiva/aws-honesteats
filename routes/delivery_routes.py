@@ -1,5 +1,6 @@
 """Delivery fee calculation routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
+from utils.dynamodb import dynamodb_client, TABLES
 
 logger = Logger()
 tracer = Tracer()
@@ -73,6 +74,7 @@ def register_delivery_routes(app):
             distance_km = body.get('distanceKm')
             item_count = body.get('itemCount')
             item_total = body.get('itemTotal')
+            coupon_code = body.get('couponCode')
             
             if distance_km is None or item_count is None or item_total is None:
                 return {
@@ -86,6 +88,55 @@ def register_delivery_routes(app):
                 int(item_count),
                 float(item_total)
             )
+
+            # Apply coupon discount on delivery fee if provided
+            coupon_applied = False
+            if coupon_code:
+                try:
+                    pk = f"COUPON#{coupon_code}"
+                    response = dynamodb_client.query(
+                        TableName=TABLES['CONFIG'],
+                        KeyConditionExpression='partitionkey = :pk',
+                        ExpressionAttributeValues={':pk': {'S': pk}},
+                        Limit=1
+                    )
+                    item = response.get('Items', [None])[0] if response.get('Items') else None
+                    if item:
+                        coupon_type = item.get('couponType', {}).get('S') or item.get('type', {}).get('S')
+                        coupon_value = item.get('couponValue', {}).get('N') or item.get('value', {}).get('N')
+                        start_date = item.get('startDate', {}).get('S')
+                        end_date = item.get('endDate', {}).get('S')
+
+                        # Validate coupon date range if present (YYYY-MM-DD)
+                        if start_date or end_date:
+                            from datetime import datetime
+                            today_str = datetime.utcnow().strftime('%Y-%m-%d')
+                            if start_date and today_str < start_date:
+                                coupon_type = None
+                            if end_date and today_str > end_date:
+                                coupon_type = None
+
+                        if coupon_type and coupon_value:
+                            coupon_value = float(coupon_value)
+                            delivery_fee = result['deliveryFee']
+                            coupon_discount = 0.0
+
+                            if coupon_type.lower() == 'percentage':
+                                coupon_discount = (delivery_fee * coupon_value) / 100.0
+                            elif coupon_type.lower() == 'fixed':
+                                coupon_discount = coupon_value
+
+                            coupon_discount = max(0.0, min(coupon_discount, delivery_fee))
+                            result['deliveryFee'] = round(delivery_fee - coupon_discount, 2)
+                            result['breakdown']['couponDiscount'] = round(coupon_discount, 2)
+                            result['breakdown']['discount'] = round(
+                                result['breakdown'].get('discount', 0) + coupon_discount, 2
+                            )
+                            coupon_applied = coupon_discount > 0
+                except Exception as e:
+                    logger.error(f"Error applying coupon {coupon_code}: {str(e)}")
+
+            result['couponApplied'] = coupon_applied
             
             logger.info(f"💰 Calculated delivery fee: ₹{result['deliveryFee']}")
             

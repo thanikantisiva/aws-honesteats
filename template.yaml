@@ -282,6 +282,18 @@ Resources:
             Path: /api/v1/delivery/calculate-fee
             Method: POST
             RestApiId: !Ref RorkHonestEatsApi
+        CreateCoupon:
+          Type: Api
+          Properties:
+            Path: /api/v1/coupons
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
+        DeleteCoupon:
+          Type: Api
+          Properties:
+            Path: /api/v1/coupons/{coupon_code}
+            Method: DELETE
+            RestApiId: !Ref RorkHonestEatsApi
         # Homescreen images
         ListHomescreenImages:
           Type: Api
@@ -361,6 +373,7 @@ Resources:
                 - !GetAtt RateLimitTable.Arn
                 - !GetAtt RiderEarningsTable.Arn
                 - !GetAtt RestaurantEarningsTable.Arn
+                - !GetAtt ConfigTable.Arn
                 - !Sub '${OrdersTable.Arn}/index/customer-phone-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/restaurantId-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/riderId-statusCreatedAt-index'
@@ -408,12 +421,18 @@ Resources:
           PAYMENTS_TABLE_NAME: !Ref PaymentsTable
           EARNINGS_TABLE_NAME: !Ref RiderEarningsTable
           RESTAURANT_EARNINGS_TABLE_NAME: !Ref RestaurantEarningsTable
+          CONFIG_TABLE_NAME: !Ref ConfigTable
           OTP_TABLE_NAME: !Ref OTPStorageTable
           RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
           RIDER_DOCUMENTS_BUCKET: !Ref RiderDocumentsBucket
           ENVIRONMENT: !Ref Environment
           MSG91_AUTH_KEY: 488382AxH6BrN7gVmV69692811P1
           MSG91_TEMPLATE_ID: 69692941ff1c8f04bb4698a5
+          MESSAGE_CENTRAL_CUSTOMER_ID: C-85C3118AA6A340A
+          MESSAGE_CENTRAL_KEY: U2l2YWt1bWFyQDE=
+          MESSAGE_CENTRAL_EMAIL: tvskumar.1995@gmail.com
+          MESSAGE_CENTRAL_COUNTRY_CODE: "91"
+          MESSAGE_CENTRAL_VERIFY_URL: https://cpaas.messagecentral.com/verification/v3/validateOtp
           GOOGLE_MAPS_API_KEY: AIzaSyCL5AHrcH6PHCA4Lh1poEOk2nUPpQLNTK0
           RAZORPAY_MODE: test
           RAZORPAY_TEST_KEY_ID: rzp_test_S29cM7srG3pwX6
@@ -1108,6 +1127,25 @@ Resources:
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  ConfigTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: food-delivery-config
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: partitionkey
+          AttributeType: S
+        - AttributeName: sortKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: partitionkey
+          KeyType: HASH
+        - AttributeName: sortKey
+          KeyType: RANGE
       Tags:
         - Key: Environment
           Value: !Ref Environment

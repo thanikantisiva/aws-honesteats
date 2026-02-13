@@ -1,0 +1,19 @@
+
+
+curl --location "https://cpaas.messagecentral.com/verification/v3/send?countryCode=91&flowType=SMS&mobileNumber=9561714569" \
+--header "accept: */*" \
+--header "authToken: eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJDLTg1QzMxMThBQTZBMzQwQSIsImlhdCI6MTc3MDk2MDM1MCwiZXhwIjoxOTI4NjQwMzUwfQ.20hdbMLGrKcE2Z08AzUUUhws33cRLJSqhg0KI01RQh3gQlkuU839UkFv6TgtsGxy_BxWUT9-g9ZGhRlVv83h4g"
+     
+
+curl --location --request POST "https://cpaas.messagecentral.com/verification/v3/send" \
+--header "Content-Type: application/json" \
+--header "accept: */*" \
+--header "authToken: eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJDLTg1QzMxMThBQTZBMzQwQSIsImlhdCI6MTc3MDk2MDM1MCwiZXhwIjoxOTI4NjQwMzUwfQ.20hdbMLGrKcE2Z08AzUUUhws33cRLJSqhg0KI01RQh3gQlkuU839UkFv6TgtsGxy_BxWUT9-g9ZGhRlVv83h4g" \
+--data-raw '{
+  "customerId": "C-85C3118AA6A340A",
+  "flowType": "SMS",
+  "mobileNumber": "919561714569",
+  "otpLength": 6,
+  "otpExpiry": 300
+}'
+

@@ -3,7 +3,9 @@ import os
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.user_service import UserService
 from middleware.api_key_auth import APIKeyAuth
-from services.msg91_service import MSG91Service
+from services.messagecentral_service import MessageCentralService
+from services.rate_limiter_service import RateLimiterService
+from utils.dynamodb import dynamodb_client
 
 logger = Logger()
 tracer = Tracer()
@@ -21,7 +23,7 @@ def register_auth_routes(app):
     @app.post("/api/v1/auth/send-otp")
     @tracer.capture_method
     def send_otp():
-        """Send OTP code via MSG91"""
+        """Send OTP code via Message Central"""
         try:
             # Validate API key
             is_valid, error_response = APIKeyAuth.require_api_key(app.current_event.raw_event)
@@ -36,11 +38,32 @@ def register_auth_routes(app):
 
             logger.info(f"📨 Sending OTP for phone: {str(phone)[:5]}***")
 
-            result = MSG91Service.send_otp(phone)
+            allowed, _attempts_remaining = RateLimiterService.check_rate_limit(phone)
+            if not allowed:
+                return {"success": False, "message": "Too many attempts. Please try again later."}, 200
+
+            result = MessageCentralService.send_otp(phone)
 
             if not result.get('success'):
                 metrics.add_metric(name="OTPSendFailed", unit="Count", value=1)
                 return {"error": result.get('error', 'Failed to send OTP')}, 400
+
+            verification_id = result.get('verificationId')
+            timeout_seconds = int(float(result.get('timeout', 60)))
+            if verification_id and OTP_TABLE_NAME:
+                import time
+                now = int(time.time())
+                dynamodb_client.put_item(
+                    TableName=OTP_TABLE_NAME,
+                    Item={
+                        'phone': {'S': phone},
+                        'verificationId': {'S': str(verification_id)},
+                        'expiresAt': {'N': str(now + timeout_seconds)},
+                        'ttl': {'N': str(now + timeout_seconds)}
+                    }
+                )
+
+            RateLimiterService.increment_attempt(phone)
 
             metrics.add_metric(name="OTPSent", unit="Count", value=1)
             return {"success": True, "message": "OTP sent successfully"}, 200
@@ -67,13 +90,25 @@ def register_auth_routes(app):
             if not phone or not code:
                 return {"error": "Phone number and code are required"}, 400
             
-            if len(code) != 6 or not code.isdigit():
-                return {"error": "Invalid OTP format. Must be 6 digits"}, 400
+            if not code.isdigit():
+                return {"error": "Invalid OTP format. Must be numeric"}, 400
             
             logger.info(f"🔐 OTP verification for phone: {phone[:5]}***")
             
-            # Verify OTP from DynamoDB (MSG91 OTP)
-            result = MSG91Service.verify_otp(phone, code, OTP_TABLE_NAME)
+            # Verify OTP via Message Central using stored verificationId
+            verification_id = None
+            if OTP_TABLE_NAME:
+                otp_item = dynamodb_client.get_item(
+                    TableName=OTP_TABLE_NAME,
+                    Key={'phone': {'S': phone}}
+                )
+                if 'Item' in otp_item:
+                    verification_id = otp_item['Item'].get('verificationId', {}).get('S')
+
+            if not verification_id:
+                return {"error": "OTP not found or expired"}, 400
+
+            result = MessageCentralService.verify_otp(verification_id, code)
             
             if not result['success']:
                 metrics.add_metric(name="OTPVerifyFailed", unit="Count", value=1)
