@@ -31,6 +31,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         if not order_id:
             return {"statusCode": 400, "body": json.dumps({"error": "orderId required"})}
 
+        logger.info(f"[orderId={order_id}] Checker triggered riderId={expected_rider_id}")
         order = OrderService.get_order(order_id)
         if not order:
             logger.warning(f"[orderId={order_id}] Order not found")
@@ -55,6 +56,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         if order.rider_id and order.rider_id not in rejected:
             rejected.append(order.rider_id)
 
+        logger.info(f"[orderId={order_id}] Marking rider rejected riderId={order.rider_id}")
         OrderService.update_order(order_id, {
             "rejectedByRiders": rejected,
             "riderId": None,
@@ -64,6 +66,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         # Clear rider's workingOnOrder if set
         if order.rider_id:
             from utils.dynamodb import dynamodb_client, TABLES
+            logger.info(f"[orderId={order_id}] Clearing workingOnOrder for riderId={order.rider_id}")
             dynamodb_client.update_item(
                 TableName=TABLES['RIDERS'],
                 Key={'riderId': {'S': order.rider_id}},
@@ -84,6 +87,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             logger.error(f"[orderId={order_id}] Missing restaurant location")
             return {"statusCode": 500, "body": json.dumps({"error": "Missing restaurant location"})}
 
+        logger.info(f"[orderId={order_id}] Reassigning order after timeout")
         OrderAssignmentService.assign_order_to_rider(order_id, restaurant_lat, restaurant_lng)
 
         return {"statusCode": 200, "body": json.dumps({"message": "Reassignment attempted"})}

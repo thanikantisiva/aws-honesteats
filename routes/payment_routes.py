@@ -38,6 +38,9 @@ def register_payment_routes(app):
             formatted_address = body.get('formattedAddress')
             address_id = body.get('addressId')
             restaurant_image = body.get('restaurantImage')
+            coupon_code = body.get('couponCode')
+            coupon_applied = bool(body.get('couponApplied'))
+            total_discount = float(body.get('totalDiscount', 0))
             
             if not all([customer_phone, restaurant_id, restaurant_name, amount]):
                 return {"error": "Missing required fields"}, 400
@@ -83,18 +86,48 @@ def register_payment_routes(app):
             
             # Calculate revenue
             food_commission = round(total_customer_amount - total_restaurant_amount, 2)
-            total_discount = float(body.get('totalDiscount', 0))
-            total_platform_revenue = round(food_commission + platform_fee - total_discount, 2)
-            
+            total_platform_revenue = round(food_commission + platform_fee, 2)
+
+            # Coupon handling based on issuedBy
+            issued_by = None
+            if coupon_applied and coupon_code:
+                try:
+                    pk = f"COUPON#{coupon_code}"
+                    response = dynamodb_client.query(
+                        TableName=TABLES['CONFIG'],
+                        KeyConditionExpression='partitionkey = :pk',
+                        ExpressionAttributeValues={':pk': {'S': pk}},
+                        Limit=1
+                    )
+                    item = response.get('Items', [None])[0] if response.get('Items') else None
+                    if item:
+                        issued_by = item.get('issuedBy', {}).get('S')
+                except Exception as e:
+                    logger.error(f"[orderId={order_id}] Failed to fetch coupon {coupon_code}: {str(e)}")
+
+            # Adjust revenue based on issuedBy
+            restaurant_settlement = round(total_restaurant_amount, 2)
+            coupon_discount = 0.0
+            if coupon_applied and total_discount > 0:
+                coupon_discount = total_discount
+                if issued_by == "YUMDUDE":
+                    total_platform_revenue = round(total_platform_revenue - total_discount, 2)
+                elif issued_by == "RESTAURANT":
+                    restaurant_settlement = round(restaurant_settlement - total_discount, 2)
+
             revenue = {
                 'totalCustomerPaid': round(amount, 2),
                 'totalDiscount': round(total_discount, 2),
-                'restaurantSettlement': round(total_restaurant_amount, 2),
+                'restaurantSettlement': restaurant_settlement,
+                'couponCode': coupon_code,
+                'couponApplied': coupon_applied,
+                'couponIssuedBy': issued_by,
                 'platformRevenue': {
                     'foodCommission': food_commission,
                     'deliveryFee': delivery_fee,
                     'platformFee': platform_fee,
-                    'totalCommission': total_platform_revenue
+                    'totalCommission': total_platform_revenue,
+                    'couponDiscount': round(coupon_discount, 2)
                 }
             }
             

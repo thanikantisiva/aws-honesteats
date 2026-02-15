@@ -21,6 +21,7 @@ def register_coupon_routes(app):
             coupon_value = body.get('couponValue')
             start_date = body.get('startDate')
             end_date = body.get('endDate')
+            issued_by = body.get('issuedBy')
 
             if not code or not coupon_type or coupon_value is None:
                 return {"error": "couponCode, couponType, couponValue are required"}, 400
@@ -38,6 +39,8 @@ def register_coupon_routes(app):
                 item['startDate'] = {'S': str(start_date)}
             if end_date:
                 item['endDate'] = {'S': str(end_date)}
+            if issued_by:
+                item['issuedBy'] = {'S': str(issued_by)}
 
             dynamodb_client.put_item(
                 TableName=TABLES['CONFIG'],

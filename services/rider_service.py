@@ -220,6 +220,7 @@ class RiderService:
         """Set or clear the order rider is working on"""
         try:
             RiderService._ensure_user_rider_exists(rider_id)
+            logger.info(f"[orderId={order_id}] Updating rider workingOnOrder for riderId={rider_id}")
             if order_id:
                 dynamodb_client.update_item(
                     TableName=TABLES['RIDERS'],
@@ -236,6 +237,7 @@ class RiderService:
                     UpdateExpression='REMOVE workingOnOrder'
                 )
             
+            logger.info(f"[orderId={order_id}] Rider workingOnOrder updated for riderId={rider_id}")
             return RiderService.get_rider(rider_id)
         except ClientError as e:
             raise Exception(f"Failed to set working on order: {str(e)}")

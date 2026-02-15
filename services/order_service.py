@@ -15,14 +15,17 @@ class OrderService:
     def get_order(order_id: str) -> Optional[Order]:
         """Get order by ID"""
         try:
+            logger.info(f"[orderId={order_id}] Fetching order")
             response = dynamodb_client.get_item(
                 TableName=TABLES['ORDERS'],
                 Key={'orderId': {'S': order_id}}
             )
             
             if 'Item' not in response:
+                logger.info(f"[orderId={order_id}] Order not found")
                 return None
             
+            logger.info(f"[orderId={order_id}] Order loaded")
             return Order.from_dynamodb_item(response['Item'])
         except ClientError as e:
             raise Exception(f"Failed to get order: {str(e)}")
@@ -31,10 +34,12 @@ class OrderService:
     def create_order(order: Order) -> Order:
         """Create a new order"""
         try:
+            logger.info(f"[orderId={order.order_id}] Creating order")
             dynamodb_client.put_item(
                 TableName=TABLES['ORDERS'],
                 Item=order.to_dynamodb_item()
             )
+            logger.info(f"[orderId={order.order_id}] Order created")
             return order
         except ClientError as e:
             raise Exception(f"Failed to create order: {str(e)}")
@@ -43,6 +48,7 @@ class OrderService:
     def list_orders_by_customer(customer_phone: str, status: str = None, limit: int = 20) -> List[Order]:
         """List orders by customer phone using GSI with optional status filter"""
         try:
+            logger.info(f"Listing orders for customer={customer_phone} status={status} limit={limit}")
             if status:
                 # Use composite key for efficient status filtering
                 response = dynamodb_client.query(
@@ -76,6 +82,7 @@ class OrderService:
                     continue
                 orders.append(Order.from_dynamodb_item(item))
             
+            logger.info(f"Listed {len(orders)} orders for customer={customer_phone}")
             return orders
         except ClientError as e:
             raise Exception(f"Failed to list customer orders: {str(e)}")
@@ -84,6 +91,7 @@ class OrderService:
     def list_orders_by_restaurant(restaurant_id: str, status: str = None, limit: int = 20) -> List[Order]:
         """List orders by restaurant ID using GSI with optional status filter"""
         try:
+            logger.info(f"Listing orders for restaurant={restaurant_id} status={status} limit={limit}")
             if status:
                 # Use composite key for efficient status filtering
                 response = dynamodb_client.query(
@@ -114,6 +122,7 @@ class OrderService:
             for item in response.get('Items', []):
                 orders.append(Order.from_dynamodb_item(item))
             
+            logger.info(f"Listed {len(orders)} orders for restaurant={restaurant_id}")
             return orders
         except ClientError as e:
             raise Exception(f"Failed to list restaurant orders: {str(e)}")
@@ -122,6 +131,7 @@ class OrderService:
     def list_orders_by_rider(rider_id: str, status: str = None, limit: int = 20) -> List[Order]:
         """List orders by rider ID using GSI with optional status filter"""
         try:
+            logger.info(f"Listing orders for rider={rider_id} status={status} limit={limit}")
             if status:
                 # Use composite key for efficient status filtering
                 response = dynamodb_client.query(
@@ -152,6 +162,7 @@ class OrderService:
             for item in response.get('Items', []):
                 orders.append(Order.from_dynamodb_item(item))
             
+            logger.info(f"Listed {len(orders)} orders for rider={rider_id}")
             return orders
         except ClientError as e:
             raise Exception(f"Failed to list rider orders: {str(e)}")
@@ -170,6 +181,8 @@ class OrderService:
             order = OrderService.get_order(order_id)
             if not order:
                 raise Exception("Order not found")
+            
+            logger.info(f"[orderId={order_id}] Updating order fields: {list(updates.keys())}")
             
             # Build update expression
             set_expr_parts = []
@@ -245,6 +258,7 @@ class OrderService:
                 ExpressionAttributeValues=expr_attr_values
             )
             
+            logger.info(f"[orderId={order_id}] Order update complete")
             return OrderService.get_order(order_id)
         except ClientError as e:
             raise Exception(f"Failed to update order: {str(e)}")
@@ -253,6 +267,7 @@ class OrderService:
     def update_order_status(order_id: str, status: str, rider_id: Optional[str] = None) -> Order:
         """Update order status and regenerate composite keys"""
         try:
+            logger.info(f"[orderId={order_id}] update_order_status called status={status} riderId={rider_id}")
             # First get the order to get createdAt and other details
             order = OrderService.get_order(order_id)
             if not order:
@@ -293,6 +308,7 @@ class OrderService:
                 ExpressionAttributeValues=expression_attribute_values
             )
             
+            logger.info(f"[orderId={order_id}] Status update complete")
             return OrderService.get_order(order_id)
         except ClientError as e:
             raise Exception(f"Failed to update order status: {str(e)}")

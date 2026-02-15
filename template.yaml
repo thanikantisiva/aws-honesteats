@@ -245,6 +245,12 @@ Resources:
             Path: /api/v1/location/geohash
             Method: POST
             RestApiId: !Ref RorkHonestEatsApi
+        CalculateDistance:
+          Type: Api
+          Properties:
+            Path: /api/v1/location/distance
+            Method: POST
+            RestApiId: !Ref RorkHonestEatsApi
         # Payment routes
         InitiatePayment:
           Type: Api
@@ -561,16 +567,7 @@ Resources:
                 - iam:PassRole
               Resource:
                 - !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
-            - Effect: Allow
-              Action:
-                - scheduler:CreateSchedule
-                - scheduler:GetSchedule
-              Resource: "*"
-            - Effect: Allow
-              Action:
-                - iam:PassRole
-              Resource:
-                - !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
+                - !GetAtt OrderAssignmentDelayInvokeRole.Arn
             
       Environment:
         Variables:
@@ -582,6 +579,9 @@ Resources:
           ORDER_ACCEPT_REJECT_CHECKER_ARN: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-accept-reject-${Environment}'
           ORDER_ACCEPT_REJECT_CHECKER_ROLE_ARN: !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
           OFFER_CHECK_DELAY_SECONDS: "90"
+          ORDER_ASSIGNMENT_DELAY_HANDLER_ARN: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-assignment-delay-${Environment}'
+          ORDER_ASSIGNMENT_DELAY_HANDLER_ROLE_ARN: !GetAtt OrderAssignmentDelayInvokeRole.Arn
+          ASSIGNMENT_DELAY_SECONDS: "300"
           ENVIRONMENT: !Ref Environment
           FIREBASE_PROJECT_ID: appnearbites-85b8c
           NOTIFICATION_SERVICE: FIREBASE
@@ -626,6 +626,71 @@ Resources:
       FunctionName: !Sub 'rork-honesteats-order-accept-reject-${Environment}'
       CodeUri: ./
       Handler: order_accept_reject_checker.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - x86_64
+      Timeout: 30
+      MemorySize: 256
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt OrdersTable.Arn
+                - !GetAtt RestaurantsTable.Arn
+                - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
+                - !GetAtt RidersTable.Arn
+                - !Sub '${RidersTable.Arn}/index/GSI1'
+                - !Sub '${RidersTable.Arn}/index/GSI2'
+                - !Sub '${RidersTable.Arn}/index/GSI3'
+                - !GetAtt UsersTableV2.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
+              Resource:
+                - !GetAtt OrdersTable.Arn
+                - !GetAtt RidersTable.Arn
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+                - sqs:GetQueueUrl
+              Resource:
+                - !GetAtt OrderAssignmentQueue.Arn
+            - Effect: Allow
+              Action:
+                - scheduler:CreateSchedule
+                - scheduler:GetSchedule
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource:
+                - !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
+      Environment:
+        Variables:
+          RESTAURANTS_TABLE_NAME: !Ref RestaurantsTable
+          RIDERS_TABLE_NAME: !Ref RidersTable
+          ORDERS_TABLE_NAME: !Ref OrdersTable
+          USERS_TABLE_NAME: !Ref UsersTableV2
+          ORDER_ASSIGNMENT_QUEUE_URL: !Ref OrderAssignmentQueue
+          ORDER_ACCEPT_REJECT_CHECKER_ARN: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-accept-reject-${Environment}'
+          ORDER_ACCEPT_REJECT_CHECKER_ROLE_ARN: !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
+          OFFER_CHECK_DELAY_SECONDS: "90"
+          ENVIRONMENT: !Ref Environment
+          FIREBASE_PROJECT_ID: appnearbites-85b8c
+          NOTIFICATION_SERVICE: FIREBASE
+
+  # ---------------- ORDER ASSIGNMENT DELAY HANDLER ----------------
+  OrderAssignmentDelayFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-order-assignment-delay-${Environment}'
+      CodeUri: ./
+      Handler: order_assignment_delay_handler.lambda_handler
       Runtime: python3.9
       Architectures:
         - x86_64
@@ -734,6 +799,27 @@ Resources:
       #     ENVIRONMENT: !Ref Environment
       #     FIREBASE_PROJECT_ID: appnearbites-85b8c
       #     NOTIFICATION_SERVICE: FIREBASE
+
+  OrderAssignmentDelayInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeOrderAssignmentDelay
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-assignment-delay-${Environment}'
 
   # ---------------- SQS QUEUE ----------------
   OrderAssignmentQueue:
@@ -1134,7 +1220,7 @@ Resources:
   ConfigTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: food-delivery-config
+      TableName: !Sub 'food-delivery-config-${Environment}'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: partitionkey

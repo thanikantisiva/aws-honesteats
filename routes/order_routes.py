@@ -230,12 +230,12 @@ def register_order_routes(app):
             if status not in valid_statuses:
                 return {"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}, 400
             
-            logger.info(f"Updating order status: {order_id}, new status: {status}")
+            logger.info(f"[orderId={order_id}] Updating order status to {status} riderId={rider_id}")
             
             updated_order = OrderService.update_order_status(order_id, status, rider_id)
             metrics.add_metric(name="OrderStatusUpdated", unit="Count", value=1)
             
             return updated_order.to_dict(), 200
         except Exception as e:
-            logger.error("Error updating order status", exc_info=True)
+            logger.error(f"[orderId={order_id}] Error updating order status", exc_info=True)
             return {"error": "Failed to update order status", "message": str(e)}, 500

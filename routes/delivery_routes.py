@@ -127,7 +127,7 @@ def register_delivery_routes(app):
                                 coupon_discount = coupon_value
 
                             coupon_discount = max(0.0, min(coupon_discount, delivery_fee))
-                            result['deliveryFee'] = round(delivery_fee - coupon_discount, 2)
+                            # Do not reduce deliveryFee; only report coupon discount
                             result['breakdown']['couponDiscount'] = round(coupon_discount, 2)
                             result['breakdown']['discount'] = round(
                                 result['breakdown'].get('discount', 0) + coupon_discount, 2

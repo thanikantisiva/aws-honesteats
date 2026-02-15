@@ -77,7 +77,7 @@ def register_rider_order_routes(app):
             }, 200
             
         except Exception as e:
-            logger.error("Error getting rider orders", exc_info=True)
+            logger.error(f"[riderId={rider_id}] Error getting rider orders", exc_info=True)
             return {"error": "Failed to get orders", "message": str(e)}, 500
     
     @app.post("/api/v1/riders/<rider_id>/orders/<order_id>/accept/<status>")
@@ -128,7 +128,7 @@ def register_rider_order_routes(app):
             return {"message": "Order accepted", "orderId": order_id, "status": new_status}, 200
             
         except Exception as e:
-            logger.error("Error accepting order", exc_info=True)
+            logger.error(f"[orderId={order_id}] Error accepting order for rider {rider_id}", exc_info=True)
             return {"error": "Failed to accept order", "message": str(e)}, 500
     
     @app.post("/api/v1/riders/<rider_id>/orders/<order_id>/reject")
@@ -179,7 +179,7 @@ def register_rider_order_routes(app):
             return {"message": "Order rejected", "orderId": order_id}, 200
             
         except Exception as e:
-            logger.error("Error rejecting order", exc_info=True)
+            logger.error(f"[orderId={order_id}] Error rejecting order for rider {rider_id}", exc_info=True)
             return {"error": "Failed to reject order", "message": str(e)}, 500
     
     @app.put("/api/v1/riders/<rider_id>/orders/<order_id>/status")
@@ -250,7 +250,7 @@ def register_rider_order_routes(app):
             return {"message": "Order status updated", "orderId": order_id, "status": new_status}, 200
             
         except Exception as e:
-            logger.error("Error updating order status", exc_info=True)
+            logger.error(f"[orderId={order_id}] Error updating order status for rider {rider_id}", exc_info=True)
             return {"error": "Failed to update order status", "message": str(e)}, 500
 
 
