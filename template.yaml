@@ -18,11 +18,12 @@ Globals:
   Function:
     Timeout: 30
     MemorySize: 256
-    Runtime: python3.9
+    Runtime: python3.11
     Environment:
       Variables:
         POWERTOOLS_SERVICE_NAME: rork-honesteats-api
         LOG_LEVEL: INFO
+        JWT_SECRET_KEY: 'dev-jwt-secret-change-in-production-use-parameter-store'
 
 Resources:
   # ---------------- API ----------------
@@ -504,7 +505,7 @@ Resources:
       FunctionName: !Sub 'rork-honesteats-order-assignment-${Environment}'
       CodeUri: ./
       Handler: order_assignment_handler.lambda_handler
-      Runtime: python3.9
+      Runtime: python3.11
       Architectures:
         - x86_64
       Timeout: 30
@@ -593,7 +594,7 @@ Resources:
       FunctionName: !Sub 'rork-honesteats-queue-consumer-${Environment}'
       CodeUri: ./
       Handler: queue_assignment_consumer.lambda_handler
-      Runtime: python3.9
+      Runtime: python3.11
       Timeout: 60
       MemorySize: 512
       Events:
@@ -626,7 +627,7 @@ Resources:
       FunctionName: !Sub 'rork-honesteats-order-accept-reject-${Environment}'
       CodeUri: ./
       Handler: order_accept_reject_checker.lambda_handler
-      Runtime: python3.9
+      Runtime: python3.11
       Architectures:
         - x86_64
       Timeout: 30
@@ -691,7 +692,7 @@ Resources:
       FunctionName: !Sub 'rork-honesteats-order-assignment-delay-${Environment}'
       CodeUri: ./
       Handler: order_assignment_delay_handler.lambda_handler
-      Runtime: python3.9
+      Runtime: python3.11
       Architectures:
         - x86_64
       Timeout: 30

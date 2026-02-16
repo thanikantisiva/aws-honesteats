@@ -3,6 +3,7 @@ import os
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.user_service import UserService
 from middleware.api_key_auth import APIKeyAuth
+from middleware.jwt_auth import generate_token
 from services.messagecentral_service import MessageCentralService
 from services.rate_limiter_service import RateLimiterService
 from utils.dynamodb import dynamodb_client
@@ -114,7 +115,7 @@ def register_auth_routes(app):
                 metrics.add_metric(name="OTPVerifyFailed", unit="Count", value=1)
                 return {"error": result.get('error', 'Invalid OTP')}, 400
             
-            # Check if CUSTOMER user exists
+            # Check if user exists (try CUSTOMER role first)
             user = UserService.get_user_by_role(phone, "CUSTOMER")
             is_new_user = user is None
             
@@ -122,13 +123,13 @@ def register_auth_routes(app):
             if is_new_user:
                 metrics.add_metric(name="NewUserOTPLogin", unit="Count", value=1)
             
-            # Generate auth token
-            import time
-            auth_token = f"token_{phone}_{int(time.time())}"
+            # Generate JWT token
+            jwt_token = generate_token(phone, {'isNewUser': is_new_user})
+            logger.info(f"✅ JWT token generated for: {phone[:5]}***")
             
             return {
                 "success": True,
-                "idToken": auth_token,
+                "token": jwt_token,
                 "userId": phone,
                 "isNewUser": is_new_user
             }, 200

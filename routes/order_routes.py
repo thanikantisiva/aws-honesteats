@@ -7,6 +7,7 @@ from services.restaurant_service import RestaurantService
 from services.address_service import AddressService
 from models.order import Order
 from utils.dynamodb import generate_id
+from middleware.jwt_auth import require_auth, get_current_user_phone
 
 logger = Logger()
 tracer = Tracer()
@@ -69,6 +70,7 @@ def register_order_routes(app):
     
     @app.get("/api/v1/orders")
     @tracer.capture_method
+    @require_auth(app)  # 🔐 Requires JWT authentication
     def list_orders():
         """List orders - supports filtering by customer, restaurant, or rider with enriched rider details"""
         try:
