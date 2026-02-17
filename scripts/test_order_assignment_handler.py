@@ -229,7 +229,7 @@ def verify_assignment():
             return False
         
         rider = rider_response['Item']
-        working_on_order = rider.get('workingOnOrder', {}).get('S')
+        working_on_order = [v.get('S') for v in rider.get('workingOnOrder', {}).get('L', [])]
         
         print(f"\n   Rider Details:")
         print(f"   ✅ workingOnOrder: {working_on_order}")

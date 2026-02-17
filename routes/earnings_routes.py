@@ -2,7 +2,6 @@
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.earnings_service import EarningsService
 from services.restaurant_earnings_service import RestaurantEarningsService
-from utils.dynamodb import generate_id
 
 logger = Logger()
 tracer = Tracer()
@@ -101,7 +100,8 @@ def register_earnings_routes(app):
         {
             "orderIds": ["ORD-1", "ORD-2"],
             "startDate": "YYYY-MM-DD",
-            "endDate": "YYYY-MM-DD"
+            "endDate": "YYYY-MM-DD",
+            "settlementId": "STL-123"
         }
         """
         try:
@@ -109,15 +109,16 @@ def register_earnings_routes(app):
             order_ids = body.get('orderIds', [])
             start_date = body.get('startDate')
             end_date = body.get('endDate')
+            settlement_id = body.get('settlementId')
 
             if not order_ids or not isinstance(order_ids, list):
                 return {"error": "orderIds (list) required"}, 400
             if not start_date or not end_date:
                 return {"error": "startDate and endDate required"}, 400
+            if not settlement_id:
+                return {"error": "settlementId required"}, 400
 
-            logger.info(f"Settling earnings for rider {rider_id}, orders={len(order_ids)}, range={start_date}..{end_date}")
-
-            settlement_id = generate_id('STL')
+            logger.info(f"Settling earnings for rider {rider_id}, orders={len(order_ids)}, range={start_date}..{end_date}, settlementId={settlement_id}")
 
             updated_order_ids = EarningsService.settle_earnings_for_orders(
                 rider_id=rider_id,
@@ -193,7 +194,8 @@ def register_earnings_routes(app):
         {
             "orderIds": ["ORD-1", "ORD-2"],
             "startDate": "YYYY-MM-DD",
-            "endDate": "YYYY-MM-DD"
+            "endDate": "YYYY-MM-DD",
+            "settlementId": "RST-123"
         }
         """
         try:
@@ -201,13 +203,16 @@ def register_earnings_routes(app):
             order_ids = body.get('orderIds', [])
             start_date = body.get('startDate')
             end_date = body.get('endDate')
+            settlement_id = body.get('settlementId')
 
             if not order_ids or not isinstance(order_ids, list):
                 return {"error": "orderIds (list) required"}, 400
             if not start_date or not end_date:
                 return {"error": "startDate and endDate required"}, 400
+            if not settlement_id:
+                return {"error": "settlementId required"}, 400
 
-            settlement_id = generate_id('RST')
+            logger.info(f"Settling restaurant earnings for {restaurant_id}, orders={len(order_ids)}, range={start_date}..{end_date}, settlementId={settlement_id}")
 
             updated_order_ids = RestaurantEarningsService.settle_earnings_for_orders(
                 restaurant_id=restaurant_id,

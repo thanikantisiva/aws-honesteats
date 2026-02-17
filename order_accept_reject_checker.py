@@ -8,6 +8,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from services.order_service import OrderService
 from services.order_assignment_service import OrderAssignmentService
 from services.restaurant_service import RestaurantService
+from services.rider_service import RiderService
 from models.order import Order
 
 logger = Logger(service="order-accept-reject-checker")
@@ -63,15 +64,34 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             "status": Order.STATUS_AWAITING_RIDER_ASSIGNMENT
         })
 
-        # Clear rider's workingOnOrder if set
+        # Remove order from rider's workingOnOrder if set
         if order.rider_id:
-            from utils.dynamodb import dynamodb_client, TABLES
-            logger.info(f"[orderId={order_id}] Clearing workingOnOrder for riderId={order.rider_id}")
-            dynamodb_client.update_item(
-                TableName=TABLES['RIDERS'],
-                Key={'riderId': {'S': order.rider_id}},
-                UpdateExpression="REMOVE workingOnOrder"
-            )
+            try:
+                rider = RiderService.get_rider(order.rider_id)
+                current_orders = rider.working_on_order if rider else []
+                if order_id in current_orders:
+                    current_orders.remove(order_id)
+                if current_orders:
+                    from utils.dynamodb import dynamodb_client, TABLES
+                    logger.info(f"[orderId={order_id}] Updating workingOnOrder list for riderId={order.rider_id}")
+                    dynamodb_client.update_item(
+                        TableName=TABLES['RIDERS'],
+                        Key={'riderId': {'S': order.rider_id}},
+                        UpdateExpression="SET workingOnOrder = :orderIds",
+                        ExpressionAttributeValues={
+                            ':orderIds': {'L': [{'S': str(v)} for v in current_orders]}
+                        }
+                    )
+                else:
+                    from utils.dynamodb import dynamodb_client, TABLES
+                    logger.info(f"[orderId={order_id}] Clearing workingOnOrder for riderId={order.rider_id}")
+                    dynamodb_client.update_item(
+                        TableName=TABLES['RIDERS'],
+                        Key={'riderId': {'S': order.rider_id}},
+                        UpdateExpression="REMOVE workingOnOrder"
+                    )
+            except Exception as e:
+                logger.error(f"[orderId={order_id}] Failed to update workingOnOrder for riderId={order.rider_id}: {str(e)}")
         
 
         # Reassign to next available rider

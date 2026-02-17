@@ -92,13 +92,12 @@ def register_rider_order_routes(app):
             if not order:
                 return {"error": "Order not found"}, 404
             
-            if order.rider_id != rider_id:
-                return {"error": "Order not assigned to this rider"}, 403
             
             # Update order status to requested status from path param
             new_status = status or Order.RIDER_ASSIGNED
             OrderService.update_order(order_id, {
-                'status': new_status
+                'status': new_status,
+                'riderId': rider_id
             })
             
             # Update rider working_on_order

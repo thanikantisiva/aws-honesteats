@@ -151,16 +151,17 @@ class RiderService:
             # Get updated rider to check if working on an order
             updated_rider = RiderService.get_rider(rider_id)
             
-            # If rider is working on an order, update the order with rider's current location
+            # If rider is working on orders, update each order with rider's current location
             if updated_rider and updated_rider.working_on_order:
-                logger.info(f"Rider {rider_id} is working on order {updated_rider.working_on_order}")
-                _update_order_with_rider_location(
-                    updated_rider.working_on_order,
-                    lat,
-                    lng,
-                    speed,
-                    heading
-                )
+                logger.info(f"Rider {rider_id} is working on orders {updated_rider.working_on_order}")
+                for order_id in updated_rider.working_on_order:
+                    _update_order_with_rider_location(
+                        order_id,
+                        lat,
+                        lng,
+                        speed,
+                        heading
+                    )
             
             return updated_rider
         except ClientError as e:
@@ -217,17 +218,26 @@ class RiderService:
     
     @staticmethod
     def set_working_on_order(rider_id: str, order_id: Optional[str]) -> Rider:
-        """Set or clear the order rider is working on"""
+        """Add or clear the order(s) rider is working on"""
         try:
             RiderService._ensure_user_rider_exists(rider_id)
             logger.info(f"[orderId={order_id}] Updating rider workingOnOrder for riderId={rider_id}")
+            rider = RiderService.get_rider(rider_id)
+            current_orders = rider.working_on_order if rider else []
+
             if order_id:
+                if order_id not in current_orders:
+                    current_orders.append(order_id)
+            else:
+                current_orders = []
+
+            if current_orders:
                 dynamodb_client.update_item(
                     TableName=TABLES['RIDERS'],
                     Key={'riderId': {'S': rider_id}},
-                    UpdateExpression='SET workingOnOrder = :orderId',
+                    UpdateExpression='SET workingOnOrder = :orderIds',
                     ExpressionAttributeValues={
-                        ':orderId': {'S': order_id}
+                        ':orderIds': {'L': [{'S': str(v)} for v in current_orders]}
                     }
                 )
             else:
@@ -359,9 +369,10 @@ class RiderService:
             
             response = dynamodb_client.scan(
                 TableName=TABLES['RIDERS'],
-                FilterExpression='isActive = :active AND attribute_not_exists(workingOnOrder)',
+                FilterExpression='isActive = :active AND (attribute_not_exists(workingOnOrder) OR size(workingOnOrder) = :zero)',
                 ExpressionAttributeValues={
-                    ':active': {'BOOL': True}
+                    ':active': {'BOOL': True},
+                    ':zero': {'N': '0'}
                 }
             )
             

@@ -1,5 +1,5 @@
 """Rider operational model for real-time tracking"""
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from utils.geohash import encode as geohash_encode
 
@@ -17,7 +17,7 @@ class Rider:
         heading: Optional[float] = 0.0,
         timestamp: Optional[str] = None,
         is_active: bool = False,
-        working_on_order: Optional[str] = None,
+        working_on_order: Optional[List[str]] = None,
         last_seen: Optional[str] = None,
         geohash: Optional[str] = None
     ):
@@ -29,7 +29,7 @@ class Rider:
         self.heading = heading  # degrees (0-360)
         self.timestamp = timestamp or datetime.utcnow().isoformat()
         self.is_active = is_active
-        self.working_on_order = working_on_order
+        self.working_on_order = working_on_order or []
         self.last_seen = last_seen or datetime.utcnow().isoformat()
         
         # Auto-generate geohash if lat/lng provided
@@ -108,7 +108,11 @@ class Rider:
             heading=float(item.get("heading", {}).get("N", "0")) if "heading" in item else 0.0,
             timestamp=item.get("timestamp", {}).get("S", ""),
             is_active=item.get("isActive", {}).get("BOOL", False),
-            working_on_order=item.get("workingOnOrder", {}).get("S") if "workingOnOrder" in item else None,
+            working_on_order=(
+                [v.get("S", "") for v in item.get("workingOnOrder", {}).get("L", [])]
+                if "workingOnOrder" in item
+                else []
+            ),
             last_seen=item.get("lastSeen", {}).get("S", ""),
             geohash=item.get("geohash", {}).get("S") if "geohash" in item else None
         )
@@ -132,7 +136,7 @@ class Rider:
         if self.heading is not None:
             item["heading"] = {"N": str(self.heading)}
         if self.working_on_order:
-            item["workingOnOrder"] = {"S": self.working_on_order}
+            item["workingOnOrder"] = {"L": [{"S": str(v)} for v in self.working_on_order]}
         
         # Add geohash fields for spatial indexing
         if self.geohash:
