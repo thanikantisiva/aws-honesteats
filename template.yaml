@@ -13,6 +13,28 @@ Parameters:
       - dev
       - prod
     Description: Environment name (dev or prod)
+  ApiCertificateArnDev:
+    Type: String
+    Default: arn:aws:acm:ap-south-1:191491198352:certificate/daaa4665-550f-4bbe-a20e-e5e0cb740f55
+    Description: ACM certificate ARN for api.dev.yumdude.com (ap-south-1)
+  ApiCertificateArnProd:
+    Type: String
+    Default: arn:aws:acm:ap-south-1:191491198352:certificate/0c68d9c7-916f-40c9-89c4-7c1984a0b7be
+    Description: ACM certificate ARN for api.yumdude.com (ap-south-1)
+  ApiHostedZoneId:
+    Type: String
+    Default: Z06343073NNIU2UCIW6XC
+    Description: Route53 hosted zone ID for api.yumdude.com
+
+Mappings:
+  ApiDomainByEnv:
+    dev:
+      DomainName: api.dev.yumdude.com
+    prod:
+      DomainName: api.yumdude.com
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
 
 Globals:
   Function:
@@ -23,7 +45,8 @@ Globals:
       Variables:
         POWERTOOLS_SERVICE_NAME: rork-honesteats-api
         LOG_LEVEL: INFO
-        JWT_SECRET_KEY: 'dev-jwt-secret-change-in-production-use-parameter-store'
+        JWT_SECRET_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/JWT_SECRET_KEY}}"
+        FIREBASE_SERVICE_ACCOUNT_JSON: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/FIREBASE_SERVICE_ACCOUNT_JSON}}"
 
 Resources:
   # ---------------- API ----------------
@@ -31,10 +54,48 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: default
+      DisableExecuteApiEndpoint: true
       Cors:
         AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
         AllowOrigin: "'*'"
+
+  # ---------------- API CUSTOM DOMAIN ----------------
+  RorkHonestEatsApiDomain:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      DomainName: !FindInMap [ApiDomainByEnv, !Ref Environment, DomainName]
+      RegionalCertificateArn: !If [IsProd, !Ref ApiCertificateArnProd, !Ref ApiCertificateArnDev]
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  RorkHonestEatsApiBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Properties:
+      DomainName: !Ref RorkHonestEatsApiDomain
+      RestApiId: !Ref RorkHonestEatsApi
+      Stage: default
+
+  RorkHonestEatsApiDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref ApiHostedZoneId
+      Name: !FindInMap [ApiDomainByEnv, !Ref Environment, DomainName]
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt RorkHonestEatsApiDomain.RegionalDomainName
+        HostedZoneId: !GetAtt RorkHonestEatsApiDomain.RegionalHostedZoneId
+
+  RorkHonestEatsApiDnsRecordAAAA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref ApiHostedZoneId
+      Name: !FindInMap [ApiDomainByEnv, !Ref Environment, DomainName]
+      Type: AAAA
+      AliasTarget:
+        DNSName: !GetAtt RorkHonestEatsApiDomain.RegionalDomainName
+        HostedZoneId: !GetAtt RorkHonestEatsApiDomain.RegionalHostedZoneId
 
   # ---------------- LAMBDA FUNCTION ----------------
   RorkHonestEatsApiFunction:
@@ -433,25 +494,25 @@ Resources:
           RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
           RIDER_DOCUMENTS_BUCKET: !Ref RiderDocumentsBucket
           ENVIRONMENT: !Ref Environment
-          MSG91_AUTH_KEY: 488382AxH6BrN7gVmV69692811P1
-          MSG91_TEMPLATE_ID: 69692941ff1c8f04bb4698a5
-          MESSAGE_CENTRAL_CUSTOMER_ID: C-85C3118AA6A340A
-          MESSAGE_CENTRAL_KEY: U2l2YWt1bWFyQDE=
-          MESSAGE_CENTRAL_EMAIL: tvskumar.1995@gmail.com
-          MESSAGE_CENTRAL_COUNTRY_CODE: "91"
+          MSG91_AUTH_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MSG91_AUTH_KEY}}"
+          MSG91_TEMPLATE_ID: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MSG91_TEMPLATE_ID}}"
+          MESSAGE_CENTRAL_CUSTOMER_ID: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MESSAGE_CENTRAL_CUSTOMER_ID}}"
+          MESSAGE_CENTRAL_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MESSAGE_CENTRAL_KEY}}"
+          MESSAGE_CENTRAL_EMAIL: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MESSAGE_CENTRAL_EMAIL}}"
+          MESSAGE_CENTRAL_COUNTRY_CODE: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MESSAGE_CENTRAL_COUNTRY_CODE}}"
           MESSAGE_CENTRAL_VERIFY_URL: https://cpaas.messagecentral.com/verification/v3/validateOtp
-          GOOGLE_MAPS_API_KEY: AIzaSyCL5AHrcH6PHCA4Lh1poEOk2nUPpQLNTK0
+          GOOGLE_MAPS_API_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/GOOGLE_MAPS_API_KEY}}"
           RAZORPAY_MODE: test
-          RAZORPAY_TEST_KEY_ID: rzp_test_S29cM7srG3pwX6
-          RAZORPAY_TEST_KEY_SECRET: hkcURSnzUksXZVWPbNaTaXXK
-          RAZORPAY_LIVE_KEY_ID: rzp_live_PLACEHOLDER_REPLACE_WHEN_READY
-          RAZORPAY_LIVE_KEY_SECRET: PLACEHOLDER_REPLACE_WHEN_READY
-          RAZORPAY_WEBHOOK_SECRET: 7c3e9b8a-4d2f-4f6e-9a1b-2e8f6c0a5d41
+          RAZORPAY_TEST_KEY_ID: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/RAZORPAY_TEST_KEY_ID}}"
+          RAZORPAY_TEST_KEY_SECRET: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/RAZORPAY_TEST_KEY_SECRET}}"
+          RAZORPAY_LIVE_KEY_ID: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/RAZORPAY_LIVE_KEY_ID}}"
+          RAZORPAY_LIVE_KEY_SECRET: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/RAZORPAY_LIVE_KEY_SECRET}}"
+          RAZORPAY_WEBHOOK_SECRET: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/RAZORPAY_WEBHOOK_SECRET}}"
           # OTP handled by Firebase SDK directly in mobile app (no backend OTP service needed)
           # API Keys for authentication (dev keys - change for production)
-          MOBILE_API_KEY: dev-mobile-key-12345
-          WEB_API_KEY: dev-web-key-12345
-          ADMIN_API_KEY: dev-admin-key-12345
+          MOBILE_API_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MOBILE_API_KEY}}"
+          WEB_API_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/WEB_API_KEY}}"
+          ADMIN_API_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/ADMIN_API_KEY}}"
           # OTP Rate Limiting
           OTP_RATE_LIMIT: "3"
           OTP_RATE_WINDOW_HOURS: "1"

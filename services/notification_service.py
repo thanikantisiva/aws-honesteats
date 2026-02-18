@@ -31,18 +31,28 @@ def initialize_firebase():
         return
     
     try:
-        # Load service account from file in Lambda deployment package
+        # Prefer service account JSON from environment (SSM)
+        service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+        if service_account_json:
+            service_account_info = json.loads(service_account_json)
+            cred = credentials.Certificate(service_account_info)
+            firebase_admin.initialize_app(cred)
+            _firebase_initialized = True
+            logger.info("✅ Firebase Admin SDK initialized from environment")
+            return
+
+        # Fallback to file for local/dev
         import os.path
         service_account_path = os.path.join(os.path.dirname(__file__), '..', 'firebase-service-account.json')
-        
         if os.path.exists(service_account_path):
             logger.info(f"📄 Loading Firebase service account from: {service_account_path}")
             cred = credentials.Certificate(service_account_path)
             firebase_admin.initialize_app(cred)
+            _firebase_initialized = True
+            logger.info("✅ Firebase Admin SDK initialized from file")
+            return
         
-        _firebase_initialized = True
-        logger.info("✅ Firebase Admin SDK initialized successfully")
-        
+        logger.warning("⚠️ Firebase service account not configured")
     except Exception as e:
         logger.warning(f"⚠️ Firebase initialization failed (push notifications disabled): {str(e)}")
 
@@ -253,4 +263,3 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Error sending rider notification: {str(e)}", exc_info=True)
             return False
-

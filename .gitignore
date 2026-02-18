@@ -47,6 +47,7 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+firebase-service-account.json
 
 # Testing
 .pytest_cache/
@@ -55,4 +56,3 @@ htmlcov/
 
 # Deployment
 packaged.yaml
-
