@@ -685,6 +685,25 @@ Resources:
           FIREBASE_PROJECT_ID: appnearbites-85b8c
           NOTIFICATION_SERVICE: FIREBASE
 
+  # ---------------- CUSTOM NOTIFICATION HANDLER ----------------
+  CustomNotificationHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-custom-notification-${Environment}'
+      CodeUri: ./
+      Handler: custom_notification_handler.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - x86_64
+      Timeout: 60
+      MemorySize: 256
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Environment:
+        Variables:
+          FIREBASE_PROJECT_ID: appnearbites-85b8c
+          NOTIFICATION_SERVICE: FIREBASE
+
   # ---------------- ORDER ASSIGNMENT DELAY HANDLER ----------------
   OrderAssignmentDelayFunction:
     Type: AWS::Serverless::Function
@@ -851,6 +870,8 @@ Resources:
           AttributeType: S
         - AttributeName: panNumber
           AttributeType: S
+        - AttributeName: geohash
+          AttributeType: S
       KeySchema:
         - AttributeName: phone
           KeyType: HASH
@@ -872,6 +893,12 @@ Resources:
         - IndexName: panNumber-index
           KeySchema:
             - AttributeName: panNumber
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: geohash-index
+          KeySchema:
+            - AttributeName: geohash
               KeyType: HASH
           Projection:
             ProjectionType: ALL

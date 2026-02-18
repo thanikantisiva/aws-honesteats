@@ -22,6 +22,9 @@ class User:
         date_of_birth: Optional[str] = None,
         fcm_token: Optional[str] = None,
         fcm_token_updated_at: Optional[str] = None,
+        lat: Optional[float] = None,
+        lng: Optional[float] = None,
+        geohash: Optional[str] = None,
         # Rider-specific fields (only when role="RIDER")
         rider_id: Optional[str] = None,
         first_name: Optional[str] = None,
@@ -46,6 +49,9 @@ class User:
         self.date_of_birth = date_of_birth
         self.fcm_token = fcm_token
         self.fcm_token_updated_at = fcm_token_updated_at
+        self.lat = lat
+        self.lng = lng
+        self.geohash = geohash
         
         # Rider-specific fields
         self.rider_id = rider_id
@@ -82,6 +88,12 @@ class User:
             result["fcmToken"] = self.fcm_token
         if self.fcm_token_updated_at:
             result["fcmTokenUpdatedAt"] = self.fcm_token_updated_at
+        if self.lat is not None:
+            result["lat"] = self.lat
+        if self.lng is not None:
+            result["lng"] = self.lng
+        if self.geohash:
+            result["geohash"] = self.geohash
         
         # Rider fields
         if self.rider_id:
@@ -126,6 +138,9 @@ class User:
             date_of_birth=item.get("dateOfBirth", {}).get("S") if "dateOfBirth" in item else None,
             fcm_token=item.get("fcmToken", {}).get("S") if "fcmToken" in item else None,
             fcm_token_updated_at=item.get("fcmTokenUpdatedAt", {}).get("S") if "fcmTokenUpdatedAt" in item else None,
+            lat=float(item.get("lat", {}).get("N")) if "lat" in item else None,
+            lng=float(item.get("lng", {}).get("N")) if "lng" in item else None,
+            geohash=item.get("geohash", {}).get("S") if "geohash" in item else None,
             # Rider fields
             rider_id=item.get("riderId", {}).get("S") if "riderId" in item else None,
             first_name=item.get("firstName", {}).get("S") if "firstName" in item else None,
@@ -162,6 +177,12 @@ class User:
             item["fcmToken"] = {"S": self.fcm_token}
         if self.fcm_token_updated_at:
             item["fcmTokenUpdatedAt"] = {"S": self.fcm_token_updated_at}
+        if self.lat is not None:
+            item["lat"] = {"N": str(self.lat)}
+        if self.lng is not None:
+            item["lng"] = {"N": str(self.lng)}
+        if self.geohash:
+            item["geohash"] = {"S": self.geohash}
         
         # Rider fields
         if self.rider_id:
@@ -192,4 +213,3 @@ class User:
             item["approvedAt"] = {"S": self.approved_at}
             
         return item
-

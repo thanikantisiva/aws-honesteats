@@ -1,6 +1,7 @@
 """User routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.user_service import UserService
+from utils.geohash import encode as geohash_encode
 from models.user import User
 
 logger = Logger()
@@ -163,3 +164,43 @@ def register_user_routes(app):
         except Exception as e:
             logger.error("Error logging out user", exc_info=True)
             return {"error": "Failed to logout user", "message": str(e)}, 500
+
+    @app.post("/api/v1/users/location")
+    @tracer.capture_method
+    def update_user_location():
+        """
+        Update customer location and geohash
+
+        Request body:
+        {
+            "phone": "+919999999999",
+            "lat": 12.9716,
+            "lng": 77.5946
+        }
+        """
+        try:
+            body = app.current_event.json_body or {}
+            phone = body.get('phone')
+            lat = body.get('lat')
+            lng = body.get('lng')
+
+            if not phone:
+                return {"error": "Phone number is required"}, 400
+            if lat is None or lng is None:
+                return {"error": "lat and lng are required"}, 400
+
+            geohash = geohash_encode(float(lat), float(lng), 2)
+
+            logger.info(f"Updating customer location: {phone}, lat={lat}, lng={lng}, geohash={geohash}")
+
+            updated_user = UserService.update_user(phone, "CUSTOMER", {
+                'lat': float(lat),
+                'lng': float(lng),
+                'geohash': geohash
+            })
+
+            metrics.add_metric(name="UserLocationUpdated", unit="Count", value=1)
+            return updated_user.to_dict(), 200
+        except Exception as e:
+            logger.error("Error updating user location", exc_info=True)
+            return {"error": "Failed to update user location", "message": str(e)}, 500

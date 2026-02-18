@@ -122,6 +122,21 @@ class UserService:
                 expression_attribute_names['#fcmTokenUpdatedAt'] = 'fcmTokenUpdatedAt'
                 expression_attribute_values[':fcmTokenUpdatedAt'] = {'S': updates['fcmTokenUpdatedAt']}
             
+            if 'lat' in updates:
+                update_expressions.append('#lat = :lat')
+                expression_attribute_names['#lat'] = 'lat'
+                expression_attribute_values[':lat'] = {'N': str(updates['lat'])}
+            
+            if 'lng' in updates:
+                update_expressions.append('#lng = :lng')
+                expression_attribute_names['#lng'] = 'lng'
+                expression_attribute_values[':lng'] = {'N': str(updates['lng'])}
+            
+            if 'geohash' in updates:
+                update_expressions.append('#geohash = :geohash')
+                expression_attribute_names['#geohash'] = 'geohash'
+                expression_attribute_values[':geohash'] = {'S': updates['geohash']}
+            
             # Rider-specific fields
             if 'riderStatus' in updates:
                 update_expressions.append('#riderStatus = :riderStatus')
