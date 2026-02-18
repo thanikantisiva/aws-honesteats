@@ -1,8 +1,8 @@
 """Message Central OTP service integration"""
-import os
 import time
 import requests
 from aws_lambda_powertools import Logger
+from utils.ssm import get_secret
 
 logger = Logger()
 
@@ -18,10 +18,10 @@ class MessageCentralService:
     @staticmethod
     def _config():
         return {
-            "customer_id": os.environ.get("MESSAGE_CENTRAL_CUSTOMER_ID", ""),
-            "key": os.environ.get("MESSAGE_CENTRAL_KEY", ""),
-            "email": os.environ.get("MESSAGE_CENTRAL_EMAIL", ""),
-            "country": os.environ.get("MESSAGE_CENTRAL_COUNTRY_CODE", "91")
+            "customer_id": get_secret("MESSAGE_CENTRAL_CUSTOMER_ID", ""),
+            "key": get_secret("MESSAGE_CENTRAL_KEY", ""),
+            "email": get_secret("MESSAGE_CENTRAL_EMAIL", ""),
+            "country": get_secret("MESSAGE_CENTRAL_COUNTRY_CODE", "91")
         }
 
     @staticmethod
@@ -85,7 +85,7 @@ class MessageCentralService:
     @staticmethod
     def verify_otp(verification_id: str, code: str) -> dict:
         """Verify OTP via Message Central"""
-        verify_url = os.environ.get("MESSAGE_CENTRAL_VERIFY_URL", "").strip()
+        verify_url = get_secret("MESSAGE_CENTRAL_VERIFY_URL", "").strip()
         if not verify_url:
             return {"success": False, "error": "Message Central verify URL not configured"}
 

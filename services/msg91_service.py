@@ -1,7 +1,7 @@
 """MSG91 OTP service integration"""
-import os
 import requests
 from aws_lambda_powertools import Logger
+from utils.ssm import get_secret
 
 logger = Logger()
 
@@ -11,11 +11,11 @@ class MSG91Service:
 
     @staticmethod
     def _auth_key() -> str:
-        return os.environ.get('MSG91_AUTH_KEY', '').strip()
+        return get_secret('MSG91_AUTH_KEY', '').strip()
 
     @staticmethod
     def _template_id() -> str:
-        return os.environ.get('MSG91_TEMPLATE_ID', '').strip()
+        return get_secret('MSG91_TEMPLATE_ID', '').strip()
 
     @staticmethod
     def send_otp(phone: str) -> dict:

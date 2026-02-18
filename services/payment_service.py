@@ -1,25 +1,25 @@
 """Payment service for Razorpay integration"""
-import os
 import razorpay
 from typing import Optional, Dict, Any
 from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 from models.payment import Payment
 from utils.dynamodb import dynamodb_client, TABLES
+from utils.ssm import get_secret
 
 logger = Logger()
 
 # Razorpay mode (test or live)
-RAZORPAY_MODE = os.environ.get('RAZORPAY_MODE', 'test')
+RAZORPAY_MODE = get_secret('RAZORPAY_MODE', 'test')
 
 # Get appropriate credentials based on mode
 if RAZORPAY_MODE == 'test':
-    RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_TEST_KEY_ID', '')
-    RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_TEST_KEY_SECRET', '')
+    RAZORPAY_KEY_ID = get_secret('RAZORPAY_TEST_KEY_ID', '')
+    RAZORPAY_KEY_SECRET = get_secret('RAZORPAY_TEST_KEY_SECRET', '')
     logger.info("🧪 Using Razorpay TEST mode")
 else:
-    RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_LIVE_KEY_ID', '')
-    RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_LIVE_KEY_SECRET', '')
+    RAZORPAY_KEY_ID = get_secret('RAZORPAY_LIVE_KEY_ID', '')
+    RAZORPAY_KEY_SECRET = get_secret('RAZORPAY_LIVE_KEY_SECRET', '')
     logger.info("💰 Using Razorpay LIVE mode")
 
 # Initialize Razorpay client
@@ -211,4 +211,3 @@ class PaymentService:
         except ClientError as e:
             logger.error(f"Failed to list payments: {str(e)}")
             raise
-

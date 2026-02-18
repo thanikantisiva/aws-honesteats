@@ -1,5 +1,4 @@
 """Location service for reverse geocoding"""
-import os
 import json
 import urllib.request
 import urllib.parse
@@ -8,6 +7,7 @@ from datetime import datetime, timedelta
 from botocore.exceptions import ClientError
 from aws_lambda_powertools import Logger
 from utils.dynamodb import dynamodb_client, TABLES
+from utils.ssm import get_secret
 
 logger = Logger()
 
@@ -15,7 +15,6 @@ logger = Logger()
 class LocationService:
     """Service for location operations using Google Maps Geocoding API with DynamoDB caching"""
     
-    GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
     GOOGLE_MAPS_BASE_URL = 'https://maps.googleapis.com/maps/api/geocode/json'
     CACHE_TTL_DAYS = 30  # Cache for 30 days
     
@@ -116,7 +115,7 @@ class LocationService:
         try:
             # Build Google Maps API URL
             params = {
-                'key': LocationService.GOOGLE_MAPS_API_KEY,
+                'key': get_secret('GOOGLE_MAPS_API_KEY', ''),
                 'latlng': f"{latitude},{longitude}",
                 'result_type': 'street_address|route|sublocality|locality|administrative_area_level_2|administrative_area_level_1|country'
             }
@@ -215,4 +214,3 @@ class LocationService:
         except Exception as e:
             logger.error(f"Reverse geocoding error: {str(e)}")
             raise Exception(f"Failed to reverse geocode: {str(e)}")
-

@@ -1,16 +1,16 @@
 """API Key Authentication Middleware"""
-import os
 from typing import Optional
 from aws_lambda_powertools import Logger
+from utils.ssm import get_secret
 
 logger = Logger(child=True)
 
-# Load API keys from environment variables
-API_KEYS = {
-    'mobile': os.environ.get('MOBILE_API_KEY', 'dev-mobile-key-12345'),
-    'web': os.environ.get('WEB_API_KEY', 'dev-web-key-12345'),
-    'admin': os.environ.get('ADMIN_API_KEY', 'dev-admin-key-12345')
-}
+def _api_keys() -> dict:
+    return {
+        'mobile': get_secret('MOBILE_API_KEY', 'dev-mobile-key-12345'),
+        'web': get_secret('WEB_API_KEY', 'dev-web-key-12345'),
+        'admin': get_secret('ADMIN_API_KEY', 'dev-admin-key-12345')
+    }
 
 
 class APIKeyAuth:
@@ -32,7 +32,7 @@ class APIKeyAuth:
             return False
         
         # Check if key matches any of the configured keys
-        for key_type, valid_key in API_KEYS.items():
+        for key_type, valid_key in _api_keys().items():
             if api_key == valid_key:
                 logger.info(f"Valid API key: {key_type}")
                 return True
@@ -51,7 +51,7 @@ class APIKeyAuth:
         Returns:
             str: Key type or None
         """
-        for key_type, valid_key in API_KEYS.items():
+        for key_type, valid_key in _api_keys().items():
             if api_key == valid_key:
                 return key_type
         return None
@@ -86,4 +86,3 @@ class APIKeyAuth:
             }
         
         return True, None
-

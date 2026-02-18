@@ -45,8 +45,8 @@ Globals:
       Variables:
         POWERTOOLS_SERVICE_NAME: rork-honesteats-api
         LOG_LEVEL: INFO
-        JWT_SECRET_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/JWT_SECRET_KEY}}"
-        FIREBASE_SERVICE_ACCOUNT_JSON: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/FIREBASE_SERVICE_ACCOUNT_JSON}}"
+        JWT_SECRET_KEY: !Sub "/rork-honesteats/${Environment}/JWT_SECRET_KEY"
+        FIREBASE_SERVICE_ACCOUNT_JSON: !Sub "/rork-honesteats/${Environment}/FIREBASE_SERVICE_ACCOUNT_JSON"
 
 Resources:
   # ---------------- API ----------------
@@ -478,6 +478,13 @@ Resources:
                 - s3:ListBucket
               Resource:
                 - arn:aws:s3:::customerapp-offers
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rork-honesteats/${Environment}/*'
       Environment:
         Variables:
           USERS_TABLE_NAME: !Ref UsersTableV2
@@ -494,25 +501,25 @@ Resources:
           RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
           RIDER_DOCUMENTS_BUCKET: !Ref RiderDocumentsBucket
           ENVIRONMENT: !Ref Environment
-          MSG91_AUTH_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MSG91_AUTH_KEY}}"
-          MSG91_TEMPLATE_ID: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MSG91_TEMPLATE_ID}}"
-          MESSAGE_CENTRAL_CUSTOMER_ID: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MESSAGE_CENTRAL_CUSTOMER_ID}}"
-          MESSAGE_CENTRAL_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MESSAGE_CENTRAL_KEY}}"
-          MESSAGE_CENTRAL_EMAIL: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MESSAGE_CENTRAL_EMAIL}}"
-          MESSAGE_CENTRAL_COUNTRY_CODE: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MESSAGE_CENTRAL_COUNTRY_CODE}}"
+          MSG91_AUTH_KEY: !Sub "/rork-honesteats/${Environment}/MSG91_AUTH_KEY"
+          MSG91_TEMPLATE_ID: !Sub "/rork-honesteats/${Environment}/MSG91_TEMPLATE_ID"
+          MESSAGE_CENTRAL_CUSTOMER_ID: !Sub "/rork-honesteats/${Environment}/MESSAGE_CENTRAL_CUSTOMER_ID"
+          MESSAGE_CENTRAL_KEY: !Sub "/rork-honesteats/${Environment}/MESSAGE_CENTRAL_KEY"
+          MESSAGE_CENTRAL_EMAIL: !Sub "/rork-honesteats/${Environment}/MESSAGE_CENTRAL_EMAIL"
+          MESSAGE_CENTRAL_COUNTRY_CODE: !Sub "/rork-honesteats/${Environment}/MESSAGE_CENTRAL_COUNTRY_CODE"
           MESSAGE_CENTRAL_VERIFY_URL: https://cpaas.messagecentral.com/verification/v3/validateOtp
-          GOOGLE_MAPS_API_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/GOOGLE_MAPS_API_KEY}}"
+          GOOGLE_MAPS_API_KEY: !Sub "/rork-honesteats/${Environment}/GOOGLE_MAPS_API_KEY"
           RAZORPAY_MODE: test
-          RAZORPAY_TEST_KEY_ID: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/RAZORPAY_TEST_KEY_ID}}"
-          RAZORPAY_TEST_KEY_SECRET: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/RAZORPAY_TEST_KEY_SECRET}}"
-          RAZORPAY_LIVE_KEY_ID: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/RAZORPAY_LIVE_KEY_ID}}"
-          RAZORPAY_LIVE_KEY_SECRET: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/RAZORPAY_LIVE_KEY_SECRET}}"
-          RAZORPAY_WEBHOOK_SECRET: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/RAZORPAY_WEBHOOK_SECRET}}"
+          RAZORPAY_TEST_KEY_ID: !Sub "/rork-honesteats/${Environment}/RAZORPAY_TEST_KEY_ID"
+          RAZORPAY_TEST_KEY_SECRET: !Sub "/rork-honesteats/${Environment}/RAZORPAY_TEST_KEY_SECRET"
+          RAZORPAY_LIVE_KEY_ID: !Sub "/rork-honesteats/${Environment}/RAZORPAY_LIVE_KEY_ID"
+          RAZORPAY_LIVE_KEY_SECRET: !Sub "/rork-honesteats/${Environment}/RAZORPAY_LIVE_KEY_SECRET"
+          RAZORPAY_WEBHOOK_SECRET: !Sub "/rork-honesteats/${Environment}/RAZORPAY_WEBHOOK_SECRET"
           # OTP handled by Firebase SDK directly in mobile app (no backend OTP service needed)
           # API Keys for authentication (dev keys - change for production)
-          MOBILE_API_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/MOBILE_API_KEY}}"
-          WEB_API_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/WEB_API_KEY}}"
-          ADMIN_API_KEY: !Sub "{{resolve:ssm-secure:/rork-honesteats/${Environment}/ADMIN_API_KEY}}"
+          MOBILE_API_KEY: !Sub "/rork-honesteats/${Environment}/MOBILE_API_KEY"
+          WEB_API_KEY: !Sub "/rork-honesteats/${Environment}/WEB_API_KEY"
+          ADMIN_API_KEY: !Sub "/rork-honesteats/${Environment}/ADMIN_API_KEY"
           # OTP Rate Limiting
           OTP_RATE_LIMIT: "3"
           OTP_RATE_WINDOW_HOURS: "1"
@@ -553,6 +560,13 @@ Resources:
                 - dynamodb:ListStreams
               Resource:
                 - !GetAtt OrdersTable.StreamArn
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rork-honesteats/${Environment}/*'
       Environment:
         Variables:
           USERS_TABLE_NAME: !Ref UsersTableV2
@@ -760,6 +774,14 @@ Resources:
       MemorySize: 256
       Policies:
         - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rork-honesteats/${Environment}/*'
       Environment:
         Variables:
           FIREBASE_PROJECT_ID: appnearbites-85b8c

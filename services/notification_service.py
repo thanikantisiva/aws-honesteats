@@ -32,7 +32,8 @@ def initialize_firebase():
     
     try:
         # Prefer service account JSON from environment (SSM)
-        service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+        from utils.ssm import get_secret
+        service_account_json = get_secret("FIREBASE_SERVICE_ACCOUNT_JSON", "")
         if service_account_json:
             service_account_info = json.loads(service_account_json)
             cred = credentials.Certificate(service_account_info)

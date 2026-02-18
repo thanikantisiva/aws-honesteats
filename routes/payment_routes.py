@@ -456,7 +456,8 @@ def register_payment_routes(app):
             signature = app.current_event.get_header_value('X-Razorpay-Signature') or ''
             
             # Verify webhook signature
-            webhook_secret = os.environ.get('RAZORPAY_WEBHOOK_SECRET', '')
+            from utils.ssm import get_secret
+            webhook_secret = get_secret('RAZORPAY_WEBHOOK_SECRET', '')
             if webhook_secret:
                 expected_signature = hmac.new(
                     webhook_secret.encode('utf-8'),

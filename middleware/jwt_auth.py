@@ -1,15 +1,15 @@
 """JWT Authentication Middleware"""
-import os
 import jwt
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Callable
 from functools import wraps
 from aws_lambda_powertools import Logger
+from utils.ssm import get_secret
 
 logger = Logger(child=True)
 
 # JWT Configuration
-JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'dev-secret-key-change-in-production')
+JWT_SECRET_KEY = get_secret('JWT_SECRET_KEY', 'dev-secret-key-change-in-production')
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRY_DAYS = 90  # Long-lived tokens for better UX
 
