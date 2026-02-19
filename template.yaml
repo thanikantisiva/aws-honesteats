@@ -56,10 +56,21 @@ Resources:
       StageName: default
       DisableExecuteApiEndpoint: true
       Cors:
-        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowMethods: "'GET,POST,PUT,OPTIONS,DELETE'"
         AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
         AllowOrigin: "'*'"
-
+      Domain:
+        DomainName: !FindInMap [ApiDomainByEnv, !Ref Environment, DomainName]
+        CertificateArn: !If [IsProd, !Ref ApiCertificateArnProd, !Ref ApiCertificateArnDev]
+        EndpointConfiguration: REGIONAL
+        Route53:
+          HostedZoneId: !Ref ApiHostedZoneId
+      Domain:
+        DomainName: !FindInMap [ApiDomainByEnv, !Ref Environment, DomainName]
+        CertificateArn: !If [IsProd, !Ref ApiCertificateArnProd, !Ref ApiCertificateArnDev]
+        EndpointConfiguration: REGIONAL
+        Route53:
+          HostedZoneId: !Ref ApiHostedZoneId
   # ---------------- API CUSTOM DOMAIN (managed by SAM Domain) ----------------
 
   # ---------------- LAMBDA FUNCTION ----------------
