@@ -745,7 +745,7 @@ Resources:
       FunctionName: !Sub 'rork-honesteats-custom-notification-${Environment}'
       CodeUri: ./
       Handler: custom_notification_handler.lambda_handler
-      Runtime: python3.9
+      Runtime: python3.11
       Architectures:
         - x86_64
       Timeout: 60

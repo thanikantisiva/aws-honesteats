@@ -1,4 +1,5 @@
 """Message Central OTP service integration"""
+import os
 import time
 import requests
 from aws_lambda_powertools import Logger
@@ -11,9 +12,24 @@ _token_cache = {
     "expires_at": 0
 }
 
+# Test/Mock phone numbers that use fixed OTP: 1234
+TEST_PHONE_NUMBERS = {
+    '1999999999', '2999999999', '3999999999', '4999999999',
+    '5999999999', '6999999999', '7999999999', '8999999999'
+}
+
+TEST_OTP = '1234'
+
 
 class MessageCentralService:
     """Service for sending and verifying OTP via Message Central"""
+    
+    @staticmethod
+    def _is_test_phone(phone: str) -> bool:
+        """Check if phone is a test number"""
+        digits = phone.replace('+', '').replace('-', '').replace(' ', '')
+        last10 = digits[-10:] if len(digits) >= 10 else digits
+        return last10 in TEST_PHONE_NUMBERS
 
     @staticmethod
     def _config():
@@ -57,6 +73,16 @@ class MessageCentralService:
     @staticmethod
     def send_otp(phone: str) -> dict:
         """Send OTP to phone via Message Central"""
+        # Check if test phone - bypass Message Central
+        if MessageCentralService._is_test_phone(phone):
+            logger.info(f"🧪 Test phone detected: {phone} - Using test OTP: {TEST_OTP}")
+            return {
+                "success": True,
+                "verificationId": f"test_{phone}_{int(time.time())}",
+                "timeout": "300",
+                "referenceId": "test_reference"
+            }
+        
         cfg = MessageCentralService._config()
         token = MessageCentralService._get_token()
 
@@ -85,7 +111,17 @@ class MessageCentralService:
     @staticmethod
     def verify_otp(verification_id: str, code: str) -> dict:
         """Verify OTP via Message Central"""
-        verify_url = get_secret("MESSAGE_CENTRAL_VERIFY_URL", "").strip()
+        # Check if test verification ID - bypass Message Central
+        if verification_id.startswith("test_"):
+            logger.info(f"🧪 Test verification ID detected: {verification_id}")
+            if code == TEST_OTP:
+                logger.info(f"✅ Test OTP verified: {code}")
+                return {"success": True, "message": "Test OTP verified"}
+            else:
+                logger.warning(f"❌ Invalid test OTP: {code} (expected: {TEST_OTP})")
+                return {"success": False, "error": "Invalid OTP"}
+        
+        verify_url = os.environ.get("MESSAGE_CENTRAL_VERIFY_URL", "").strip()
         if not verify_url:
             return {"success": False, "error": "Message Central verify URL not configured"}
 

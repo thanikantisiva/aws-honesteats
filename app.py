@@ -7,6 +7,7 @@ from aws_lambda_powertools import Logger, Tracer, Metrics
 from aws_lambda_powertools.event_handler import APIGatewayRestResolver, CORSConfig
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.middleware_factory import lambda_handler_decorator
+from middleware.jwt_auth import verify_token
 
 # Import route handlers
 from routes.auth_routes import register_auth_routes
@@ -29,6 +30,17 @@ from routes.coupon_routes import register_coupon_routes
 logger = Logger(service="rork-honesteats-api")
 tracer = Tracer(service="rork-honesteats-api")
 metrics = Metrics(namespace="RorkHonestEats", service="api")
+
+# Define public routes that don't require JWT authentication
+PUBLIC_ROUTES = [
+    "/api/v1/auth/send-otp",
+    "/api/v1/auth/verify-otp",
+    "/api/v1/riders/login/check",
+    "/api/v1/riders/signup",
+    "/api/v1/riders/documents/upload",
+    "/health",
+    "/api/v1/status",
+]
 
 # Create API Gateway resolver with CORS enabled
 app = APIGatewayRestResolver(
@@ -94,6 +106,70 @@ def middleware_handler(handler, event, context):
         raise
 
 
+@lambda_handler_decorator
+def auth_middleware(handler, event, context):
+    """Global authentication middleware - checks JWT for all routes except public ones"""
+    
+    # Get the path from the event
+    path = event.get('path', '')
+    method = event.get('httpMethod', '')
+    
+    # Check if this is a public route
+    is_public = path in PUBLIC_ROUTES
+    
+    if not is_public:
+        # Get Authorization header
+        headers = event.get('headers', {})
+        auth_header = headers.get('authorization') or headers.get('Authorization')
+        
+        if not auth_header:
+            logger.warning(f"Missing Authorization header for {method} {path}")
+            return {
+                'statusCode': 401,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Api-Key',
+                },
+                'body': '{"error": "Unauthorized", "message": "Missing authentication token"}'
+            }
+        
+        # Check Bearer token format
+        if not auth_header.startswith('Bearer '):
+            logger.warning(f"Invalid Authorization header format for {method} {path}")
+            return {
+                'statusCode': 401,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Api-Key',
+                },
+                'body': '{"error": "Unauthorized", "message": "Invalid token format"}'
+            }
+        
+        # Extract and verify token
+        token = auth_header.replace('Bearer ', '').strip()
+        payload = verify_token(token)
+        
+        if not payload:
+            logger.warning(f"Token verification failed for {method} {path}")
+            return {
+                'statusCode': 401,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Api-Key',
+                },
+                'body': '{"error": "Unauthorized", "message": "Invalid or expired token"}'
+            }
+        
+        logger.info(f"✅ Authenticated request from: {payload.get('phone', '')[:5]}*** for {method} {path}")
+    
+    # Continue to the actual handler
+    return handler(event, context)
+
+
+@auth_middleware
 @middleware_handler
 @logger.inject_lambda_context(log_event=True)
 @tracer.capture_lambda_handler
