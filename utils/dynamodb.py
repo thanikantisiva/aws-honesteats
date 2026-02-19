@@ -18,6 +18,7 @@ TABLES = {
     'PAYMENTS': os.environ.get('PAYMENTS_TABLE_NAME', 'food-delivery-payments'),
     'EARNINGS': os.environ.get('EARNINGS_TABLE_NAME', 'food-delivery-rider-earnings'),
     'RESTAURANT_EARNINGS': os.environ.get('RESTAURANT_EARNINGS_TABLE_NAME', 'food-delivery-restaurant-earnings'),
+    'RESTAURANT_LOGIN': os.environ.get('RESTAURANT_LOGIN_TABLE_NAME', 'food-delivery-login'),
     'CONFIG': os.environ.get('CONFIG_TABLE_NAME', 'food-delivery-config'),
 }
 

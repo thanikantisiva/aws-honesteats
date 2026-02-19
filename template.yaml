@@ -59,43 +59,14 @@ Resources:
         AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
         AllowOrigin: "'*'"
+      Domain:
+        DomainName: !FindInMap [ApiDomainByEnv, !Ref Environment, DomainName]
+        CertificateArn: !If [IsProd, !Ref ApiCertificateArnProd, !Ref ApiCertificateArnDev]
+        EndpointConfiguration: REGIONAL
+        Route53:
+          HostedZoneId: !Ref ApiHostedZoneId
 
-  # ---------------- API CUSTOM DOMAIN ----------------
-  RorkHonestEatsApiDomain:
-    Type: AWS::ApiGateway::DomainName
-    Properties:
-      DomainName: !FindInMap [ApiDomainByEnv, !Ref Environment, DomainName]
-      RegionalCertificateArn: !If [IsProd, !Ref ApiCertificateArnProd, !Ref ApiCertificateArnDev]
-      EndpointConfiguration:
-        Types:
-          - REGIONAL
-
-  RorkHonestEatsApiBasePathMapping:
-    Type: AWS::ApiGateway::BasePathMapping
-    Properties:
-      DomainName: !Ref RorkHonestEatsApiDomain
-      RestApiId: !Ref RorkHonestEatsApi
-      Stage: default
-
-  RorkHonestEatsApiDnsRecord:
-    Type: AWS::Route53::RecordSet
-    Properties:
-      HostedZoneId: !Ref ApiHostedZoneId
-      Name: !FindInMap [ApiDomainByEnv, !Ref Environment, DomainName]
-      Type: A
-      AliasTarget:
-        DNSName: !GetAtt RorkHonestEatsApiDomain.RegionalDomainName
-        HostedZoneId: !GetAtt RorkHonestEatsApiDomain.RegionalHostedZoneId
-
-  RorkHonestEatsApiDnsRecordAAAA:
-    Type: AWS::Route53::RecordSet
-    Properties:
-      HostedZoneId: !Ref ApiHostedZoneId
-      Name: !FindInMap [ApiDomainByEnv, !Ref Environment, DomainName]
-      Type: AAAA
-      AliasTarget:
-        DNSName: !GetAtt RorkHonestEatsApiDomain.RegionalDomainName
-        HostedZoneId: !GetAtt RorkHonestEatsApiDomain.RegionalHostedZoneId
+  # ---------------- API CUSTOM DOMAIN (managed by SAM Domain) ----------------
 
   # ---------------- LAMBDA FUNCTION ----------------
   RorkHonestEatsApiFunction:
@@ -432,6 +403,7 @@ Resources:
                 - !Sub '${UsersTableV2.Arn}/index/aadharNumber-index'
                 - !Sub '${UsersTableV2.Arn}/index/panNumber-index'
                 - !GetAtt RestaurantsTable.Arn
+                - !GetAtt RestaurantLoginTable.Arn
                 - !GetAtt MenuItemsTable.Arn
                 - !GetAtt OrdersTable.Arn
                 - !GetAtt RidersTable.Arn
@@ -496,6 +468,7 @@ Resources:
           PAYMENTS_TABLE_NAME: !Ref PaymentsTable
           EARNINGS_TABLE_NAME: !Ref RiderEarningsTable
           RESTAURANT_EARNINGS_TABLE_NAME: !Ref RestaurantEarningsTable
+          RESTAURANT_LOGIN_TABLE_NAME: !Ref RestaurantLoginTable
           CONFIG_TABLE_NAME: !Ref ConfigTable
           OTP_TABLE_NAME: !Ref OTPStorageTable
           RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
@@ -1324,6 +1297,21 @@ Resources:
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  RestaurantLoginTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'food-delivery-login-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userIdentity
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userIdentity
+          KeyType: HASH
       Tags:
         - Key: Environment
           Value: !Ref Environment

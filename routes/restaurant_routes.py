@@ -2,8 +2,14 @@
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.restaurant_service import RestaurantService
 from models.restaurant import Restaurant
-from utils.dynamodb import generate_id
+from utils.dynamodb import generate_id, dynamodb_client, TABLES
 from utils.geohash import encode as geohash_encode
+from middleware.jwt_auth import generate_token
+from utils.ssm import get_secret
+import jwt
+import re
+import secrets
+from datetime import datetime, timedelta
 
 
 logger = Logger()
@@ -128,6 +134,34 @@ def register_restaurant_routes(app):
             
             created_restaurant = RestaurantService.create_restaurant(restaurant)
             metrics.add_metric(name="RestaurantCreated", unit="Count", value=1)
+
+            # Create restaurant login entry
+            try:
+                # Build username from restaurant name
+                cleaned = re.sub(r'[^a-zA-Z0-9]', '', name or '')
+                username = f"{cleaned.lower()}@yumdude.com"
+                # Generate 8-char password
+                alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                password = ''.join(secrets.choice(alphabet) for _ in range(8))
+
+                jwt_secret = get_secret('JWT_SECRET_KEY', 'dev-secret-key-change-in-production')
+                encrypted_password = jwt.encode({"password": password}, jwt_secret, algorithm="HS256")
+                encrypted_username = jwt.encode({"username": username}, jwt_secret, algorithm="HS256")
+                token = generate_token(username, user_data={"restaurantId": restaurant_id})
+                valid_through = (datetime.utcnow() + timedelta(days=90)).isoformat()
+
+                dynamodb_client.put_item(
+                    TableName=TABLES['RESTAURANT_LOGIN'],
+                    Item={
+                        'userIdentity': {'S': f"{encrypted_username}.{encrypted_password}"},
+                        'restaurantId': {'S': restaurant_id},
+                        'token': {'S': token},
+                        'validThrough': {'S': valid_through}
+                    }
+                )
+                logger.info(f"Created restaurant login for {restaurant_id} username={username}")
+            except Exception as e:
+                logger.error(f"Failed to create restaurant login: {str(e)}", exc_info=True)
             
             return created_restaurant.to_dict(), 201
         except Exception as e:
@@ -173,4 +207,3 @@ def register_restaurant_routes(app):
         except Exception as e:
             logger.error("Error updating restaurant", exc_info=True)
             return {"error": "Failed to update restaurant", "message": str(e)}, 500
-
