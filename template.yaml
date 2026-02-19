@@ -59,12 +59,6 @@ Resources:
         AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
         AllowOrigin: "'*'"
-      Domain:
-        DomainName: !FindInMap [ApiDomainByEnv, !Ref Environment, DomainName]
-        CertificateArn: !If [IsProd, !Ref ApiCertificateArnProd, !Ref ApiCertificateArnDev]
-        EndpointConfiguration: REGIONAL
-        Route53:
-          HostedZoneId: !Ref ApiHostedZoneId
 
   # ---------------- API CUSTOM DOMAIN (managed by SAM Domain) ----------------
 
