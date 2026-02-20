@@ -38,6 +38,7 @@ PUBLIC_ROUTES = [
     "/api/v1/riders/login/check",
     "/api/v1/riders/signup",
     "/api/v1/riders/documents/upload",
+    "/api/v1/login/images",
     "/health",
     "/api/v1/status",
 ]

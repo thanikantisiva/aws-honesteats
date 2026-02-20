@@ -10,6 +10,7 @@ metrics = Metrics()
 
 S3_BUCKET = "customerapp-offers"
 S3_PREFIX = "homescreen/"
+LOGIN_PREFIX = "login/"
 
 
 def _list_s3_objects(s3_client, bucket: str, prefix: str):
@@ -67,4 +68,38 @@ def register_image_routes(app):
             }, 200
         except Exception as e:
             logger.error("Error fetching homescreen images", exc_info=True)
+            return {"error": "Failed to fetch images", "message": str(e)}, 500
+
+    @app.get("/api/v1/login/images")
+    @tracer.capture_method
+    def list_login_images():
+        """Fetch all login images from S3 and return as base64."""
+        try:
+            logger.info("Listing login images from S3")
+
+            images = []
+            for obj in _list_s3_objects(s3_client, S3_BUCKET, LOGIN_PREFIX):
+                key = obj.get("Key")
+                if not key or key.endswith("/"):
+                    continue
+
+                s3_object = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+                image_bytes = s3_object["Body"].read()
+                encoded = base64.b64encode(image_bytes).decode("utf-8")
+
+                images.append({
+                    "key": key,
+                    "base64": encoded
+                })
+
+            metrics.add_metric(name="LoginImagesListed", unit="Count", value=1)
+
+            return {
+                "bucket": S3_BUCKET,
+                "prefix": LOGIN_PREFIX,
+                "total": len(images),
+                "images": images
+            }, 200
+        except Exception as e:
+            logger.error("Error fetching login images", exc_info=True)
             return {"error": "Failed to fetch images", "message": str(e)}, 500

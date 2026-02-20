@@ -450,6 +450,7 @@ Resources:
                 - s3:GetObject
               Resource:
                 - arn:aws:s3:::customerapp-offers/homescreen/*
+                - arn:aws:s3:::customerapp-offers/login/*
             - Effect: Allow
               Action:
                 - s3:ListBucket
