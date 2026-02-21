@@ -9,7 +9,6 @@ from utils.ssm import get_secret
 import jwt
 import re
 import secrets
-from datetime import datetime, timedelta
 
 
 logger = Logger()
@@ -137,26 +136,27 @@ def register_restaurant_routes(app):
 
             # Create restaurant login entry
             try:
-                # Build username from restaurant name
+                # Build default username from restaurant name
                 cleaned = re.sub(r'[^a-zA-Z0-9]', '', name or '')
-                username = f"{cleaned.lower()}@yumdude.com"
-                # Generate 8-char password
+                default_username = f"{cleaned.lower()}@yumdude.com"
+
+                # Accept optional credentials from request body; fallback to defaults
+                username = (body.get('username') or body.get('userName') or default_username).strip()
+
+                # Generate default 8-char password
                 alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-                password = ''.join(secrets.choice(alphabet) for _ in range(8))
+                default_password = ''.join(secrets.choice(alphabet) for _ in range(8))
+                password = body.get('password') or default_password
 
                 jwt_secret = get_secret('JWT_SECRET_KEY', 'dev-secret-key-change-in-production')
                 encrypted_password = jwt.encode({"password": password}, jwt_secret, algorithm="HS256")
                 encrypted_username = jwt.encode({"username": username}, jwt_secret, algorithm="HS256")
-                token = generate_token(username, user_data={"restaurantId": restaurant_id})
-                valid_through = (datetime.utcnow() + timedelta(days=90)).isoformat()
 
                 dynamodb_client.put_item(
                     TableName=TABLES['RESTAURANT_LOGIN'],
                     Item={
                         'userIdentity': {'S': f"{encrypted_username}.{encrypted_password}"},
-                        'restaurantId': {'S': restaurant_id},
-                        'token': {'S': token},
-                        'validThrough': {'S': valid_through}
+                        'restaurantId': {'S': restaurant_id}
                     }
                 )
                 logger.info(f"Created restaurant login for {restaurant_id} username={username}")
@@ -167,6 +167,49 @@ def register_restaurant_routes(app):
         except Exception as e:
             logger.error("Error creating restaurant", exc_info=True)
             return {"error": "Failed to create restaurant", "message": str(e)}, 500
+
+    @app.post("/api/v1/restaurants/login")
+    @tracer.capture_method
+    def login_restaurant():
+        """Authenticate restaurant using stored userIdentity and return a fresh JWT"""
+        try:
+            body = app.current_event.json_body or {}
+            username = (body.get('username') or body.get('userName') or '').strip()
+            password = body.get('password')
+
+            if not username or not password:
+                return {"error": "username and password are required"}, 400
+
+            jwt_secret = get_secret('JWT_SECRET_KEY', 'dev-secret-key-change-in-production')
+            encrypted_username = jwt.encode({"username": username}, jwt_secret, algorithm="HS256")
+            encrypted_password = jwt.encode({"password": password}, jwt_secret, algorithm="HS256")
+            user_identity = f"{encrypted_username}.{encrypted_password}"
+
+            response = dynamodb_client.get_item(
+                TableName=TABLES['RESTAURANT_LOGIN'],
+                Key={
+                    'userIdentity': {'S': user_identity}
+                },
+                ProjectionExpression='restaurantId'
+            )
+
+            item = response.get('Item')
+            matched_restaurant_id = item.get('restaurantId', {}).get('S') if item else None
+
+            if not matched_restaurant_id:
+                return {"error": "Invalid username or password"}, 401
+
+            token = generate_token(username, user_data={"restaurantId": matched_restaurant_id})
+
+            metrics.add_metric(name="RestaurantLoginSuccess", unit="Count", value=1)
+            return {
+                "token": token,
+                "restaurantId": matched_restaurant_id
+            }, 200
+
+        except Exception as e:
+            logger.error("Error logging in restaurant", exc_info=True)
+            return {"error": "Failed to login", "message": str(e)}, 500
     
     @app.put("/api/v1/restaurants/<restaurant_id>")
     @tracer.capture_method

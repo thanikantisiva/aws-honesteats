@@ -35,6 +35,7 @@ metrics = Metrics(namespace="RorkHonestEats", service="api")
 PUBLIC_ROUTES = [
     "/api/v1/auth/send-otp",
     "/api/v1/auth/verify-otp",
+    "/api/v1/restaurants/login",
     "/api/v1/riders/login/check",
     "/api/v1/riders/signup",
     "/api/v1/riders/documents/upload",
