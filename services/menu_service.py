@@ -7,6 +7,16 @@ from utils.dynamodb import dynamodb_client, TABLES
 
 class MenuService:
     """Service for menu item operations"""
+
+    @staticmethod
+    def _normalize_image_list(value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(v) for v in value if v is not None and str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value]
+        return []
     
     @staticmethod
     def get_menu_item(restaurant_id: str, item_id: str) -> Optional[MenuItem]:
@@ -106,9 +116,12 @@ class MenuService:
                 expression_attribute_values[':description'] = {'S': updates['description']}
             
             if 'image' in updates:
+                normalized_images = MenuService._normalize_image_list(updates['image'])
                 update_expressions.append('#image = :image')
                 expression_attribute_names['#image'] = 'image'
-                expression_attribute_values[':image'] = {'S': updates['image']}
+                expression_attribute_values[':image'] = {
+                    'L': [{'S': img} for img in normalized_images]
+                }
             
             if not update_expressions:
                 return MenuService.get_menu_item(restaurant_id, item_id)

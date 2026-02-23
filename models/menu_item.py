@@ -1,9 +1,20 @@
 """Menu item model"""
-from typing import Optional
+from typing import Optional, List, Union
 
 
 class MenuItem:
     """Restaurant menu item model"""
+
+    @staticmethod
+    def _normalize_image_list(value: Optional[Union[str, List[str]]]) -> List[str]:
+        """Normalize image field to a list for backward compatibility."""
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(v) for v in value if v is not None and str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value]
+        return []
     
     def __init__(
         self,
@@ -16,7 +27,7 @@ class MenuItem:
         is_available: bool = True,
         is_veg: Optional[bool] = None,
         description: Optional[str] = None,
-        image: Optional[str] = None
+        image: Optional[Union[str, List[str]]] = None
     ):
         self.restaurant_id = restaurant_id
         self.item_id = item_id
@@ -27,7 +38,7 @@ class MenuItem:
         self.is_available = is_available
         self.is_veg = is_veg
         self.description = description
-        self.image = image
+        self.image = self._normalize_image_list(image)
     
     @property
     def pk(self) -> str:
@@ -73,6 +84,14 @@ class MenuItem:
         # restaurantPrice might not exist in old items, default to price
         restaurant_price = float(item.get("restaurantPrice", {}).get("N")) if "restaurantPrice" in item else price
         
+        image = None
+        if "image" in item:
+            image_attr = item.get("image", {})
+            if "L" in image_attr:
+                image = [img.get("S", "") for img in image_attr["L"] if img.get("S")]
+            elif "S" in image_attr:
+                image = image_attr.get("S")
+
         return cls(
             restaurant_id=restaurant_id,
             item_id=item_id,
@@ -83,7 +102,7 @@ class MenuItem:
             is_available=item.get("isAvailable", {}).get("BOOL", True) if "isAvailable" in item else True,
             is_veg=item.get("isVeg", {}).get("BOOL") if "isVeg" in item else None,
             description=item.get("description", {}).get("S") if "description" in item else None,
-            image=item.get("image", {}).get("S") if "image" in item else None
+            image=image
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -104,5 +123,5 @@ class MenuItem:
         if self.description:
             item["description"] = {"S": self.description}
         if self.image:
-            item["image"] = {"S": self.image}
+            item["image"] = {"L": [{"S": img} for img in self.image]}
         return item

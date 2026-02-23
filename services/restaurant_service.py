@@ -15,6 +15,16 @@ logger = Logger()
 
 class RestaurantService:
     """Service for restaurant operations"""
+
+    @staticmethod
+    def _normalize_image_list(value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(v) for v in value if v is not None and str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value]
+        return []
     
     @staticmethod
     def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -424,10 +434,19 @@ class RestaurantService:
                 expression_attribute_names['#isOpen'] = 'isOpen'
                 expression_attribute_values[':isOpen'] = {'BOOL': updates['isOpen']}
             
-            if 'restaurantImage' in updates and updates['restaurantImage'] != existing_restaurant.restaurant_image:
+            if 'restaurantImage' in updates:
+                normalized_new_images = RestaurantService._normalize_image_list(updates['restaurantImage'])
+                normalized_existing_images = RestaurantService._normalize_image_list(existing_restaurant.restaurant_image)
+            else:
+                normalized_new_images = None
+                normalized_existing_images = None
+
+            if normalized_new_images is not None and normalized_new_images != normalized_existing_images:
                 update_expressions.append('#restaurant_image = :restaurant_image')
                 expression_attribute_names['#restaurant_image'] = 'restaurant_image'
-                expression_attribute_values[':restaurant_image'] = {'S': updates['restaurantImage']}
+                expression_attribute_values[':restaurant_image'] = {
+                    'L': [{'S': img} for img in normalized_new_images]
+                }
             
             if 'cuisine' in updates:
                 cuisine_list = updates['cuisine']

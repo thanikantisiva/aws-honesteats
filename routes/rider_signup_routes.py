@@ -3,6 +3,7 @@ import re
 import os
 import boto3
 import base64
+from urllib.parse import urlparse, parse_qs, quote
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.user_service import UserService
 from services.rider_service import RiderService
@@ -18,10 +19,64 @@ metrics = Metrics()
 # S3 client for presigned URLs
 s3_client = boto3.client('s3')
 RIDER_DOCUMENTS_BUCKET = os.environ.get('RIDER_DOCUMENTS_BUCKET', 'rider-documents-dev')
+IMAGE_CDN_BASE_URL = os.environ.get("IMAGE_CDN_BASE_URL", "").rstrip("/")
 
 
 def register_rider_signup_routes(app):
     """Register rider signup routes"""
+
+    def _extract_bucket_key(document_value: str):
+        """Extract (bucket, key) from multiple supported document URL/path formats."""
+        if not document_value:
+            return None, None
+        value = document_value.strip()
+
+        # /api/v1/images/by-path?path=/bucket/key
+        if "/api/v1/images/by-path?path=" in value:
+            parsed = urlparse(value)
+            path_param = parse_qs(parsed.query).get("path", [""])[0].lstrip("/")
+            if "/" in path_param:
+                bucket, key = path_param.split("/", 1)
+                return bucket, key
+
+        # https://bucket.s3.amazonaws.com/key
+        if value.startswith("https://") and ".s3.amazonaws.com/" in value:
+            without_scheme = value.replace("https://", "", 1)
+            host, key = without_scheme.split("/", 1)
+            bucket = host.split(".s3.amazonaws.com")[0]
+            return bucket, key
+
+        # Generic https URL (e.g., CDN URL): use only path as key.
+        if value.startswith("https://"):
+            parsed = urlparse(value)
+            key = parsed.path.lstrip("/")
+            if key:
+                return "cdn", key
+
+        # bucket/key
+        raw = value.lstrip("/")
+        if "/" in raw:
+            bucket, key = raw.split("/", 1)
+            return bucket, key
+
+        return None, None
+
+    def _to_image_access_url(document_value: str) -> str:
+        """
+        Convert stored document to CDN URL only.
+        """
+        if not document_value:
+            return document_value
+
+        bucket, key = _extract_bucket_key(document_value)
+        if not bucket or not key:
+            return document_value
+
+        if not IMAGE_CDN_BASE_URL:
+            raise Exception("IMAGE_CDN_BASE_URL not configured")
+        # Keep already-encoded path segments intact to avoid % -> %25 double-encoding.
+        encoded_key = quote(key, safe="/%")
+        return f"{IMAGE_CDN_BASE_URL}/{encoded_key}"
 
     # @app.post(f"/api/v1/riders/documents/download/{}/{}")
     # @tracer.capture_method
@@ -41,10 +96,13 @@ def register_rider_signup_routes(app):
         
         Response:
         {
-            "fileUrl": "https://bucket.s3.amazonaws.com/riders/9876543210/aadhar-timestamp.jpg"
+            "filePath": "bucket/riders/9876543210/aadhar-timestamp.jpg",
+            "fileUrl": "https://<cdn-domain>/riders/9876543210/aadhar-timestamp.jpg"
         }
         """
         try:
+            if not IMAGE_CDN_BASE_URL:
+                return {"error": "CDN base URL not configured"}, 500
             body = app.current_event.json_body
             
             phone = body.get('phone')
@@ -86,13 +144,15 @@ def register_rider_signup_routes(app):
                 ContentDisposition='inline'
             )
             
-            # Generate public URL
-            file_url = f"https://{RIDER_DOCUMENTS_BUCKET}.s3.amazonaws.com/{file_key}"
+            # Return bucket/key path
+            file_path = f"{RIDER_DOCUMENTS_BUCKET}/{file_key}"
+            file_url = f"{IMAGE_CDN_BASE_URL}/{quote(file_key, safe='/%')}"
             
             logger.info(f"Uploaded {document_type} document for {phone} to S3: {file_key}")
             metrics.add_metric(name="DocumentUploaded", unit="Count", value=1)
             
             return {
+                "filePath": file_path,
                 "fileUrl": file_url
             }, 200
             
@@ -127,7 +187,7 @@ def register_rider_signup_routes(app):
         try:
             body = app.current_event.json_body
             
-            # Validation - Updated to accept S3 URLs instead of base64
+            # Validation - accepts document path/url and stores CDN URL (or API URL fallback)
             required_fields = ['phone', 'firstName', 'lastName', 'address', 
                               'aadharNumber', 'aadharImageUrl', 
                               'panNumber', 'panImageUrl']
@@ -174,6 +234,9 @@ def register_rider_signup_routes(app):
             rider_id = generate_id('RDR')
             
             # 1. Create entry in Users table (authentication & KYC)
+            aadhar_image_api_url = _to_image_access_url(body['aadharImageUrl'])
+            pan_image_api_url = _to_image_access_url(body['panImageUrl'])
+
             user = User(
                 phone=phone,
                 role="RIDER",
@@ -182,9 +245,9 @@ def register_rider_signup_routes(app):
                 last_name=body['lastName'],
                 address=body['address'],
                 aadhar_number=aadhar_number,
-                aadhar_image_url=body['aadharImageUrl'],  # S3 URL instead of base64
+                aadhar_image_url=aadhar_image_api_url,
                 pan_number=pan_number,
-                pan_image_url=body['panImageUrl'],  # S3 URL instead of base64
+                pan_image_url=pan_image_api_url,
                 rider_status=User.RIDER_STATUS_SIGNUP_DONE,
                 is_active=False
             )
@@ -236,12 +299,13 @@ def register_rider_signup_routes(app):
                 return {"error": "Rider not found"}, 404
 
             def _extract_key_parts(url: str):
-                if not url:
+                bucket, key = _extract_bucket_key(url)
+                if not bucket or not key:
                     return None, None
-                parts = url.split('/')
-                if len(parts) < 2:
+                key_parts = key.split('/')
+                if len(key_parts) < 3:
                     return None, None
-                return parts[-2], parts[-1]
+                return key_parts[-2], key_parts[-1]
 
             def _get_base64_for_url(url: str):
                 mobile, filename = _extract_key_parts(url)

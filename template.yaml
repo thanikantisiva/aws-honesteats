@@ -47,6 +47,7 @@ Globals:
         LOG_LEVEL: INFO
         JWT_SECRET_KEY: !Sub "/rork-honesteats/${Environment}/JWT_SECRET_KEY"
         FIREBASE_SERVICE_ACCOUNT_JSON: !Sub "/rork-honesteats/${Environment}/FIREBASE_SERVICE_ACCOUNT_JSON"
+        RETOOL_BYPASS_VALUE: !Sub "/rork-honesteats/${Environment}/RETOOL_BYPASS_VALUE"
 
 Resources:
   # ---------------- API ----------------
@@ -440,6 +441,7 @@ Resources:
                 - s3:DeleteObject
               Resource:
                 - !Sub '${RiderDocumentsBucket.Arn}/*'
+                - !Sub '${RestaurantImagesBucket.Arn}/*'
             - Effect: Allow
               Action:
                 - s3:ListBucket
@@ -479,6 +481,8 @@ Resources:
           OTP_TABLE_NAME: !Ref OTPStorageTable
           RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
           RIDER_DOCUMENTS_BUCKET: !Ref RiderDocumentsBucket
+          RESTAURANT_IMAGES_BUCKET: !Ref RestaurantImagesBucket
+          IMAGE_CDN_BASE_URL: !Sub "https://${ImageCdnDistribution.DomainName}"
           ENVIRONMENT: !Ref Environment
           MSG91_AUTH_KEY: !Sub "/rork-honesteats/${Environment}/MSG91_AUTH_KEY"
           MSG91_TEMPLATE_ID: !Sub "/rork-honesteats/${Environment}/MSG91_TEMPLATE_ID"
@@ -1373,6 +1377,129 @@ Resources:
         - Key: Purpose
           Value: RiderDocuments
 
+  RestaurantImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'yumdude-restaurant-images-${Environment}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: RestaurantImages
+
+  ImageCdnOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'rork-honesteats-image-cdn-oac-${Environment}'
+        Description: Access control for rider documents origin
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ImageCdnDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        Origins:
+          - Id: OffersOrigin
+            DomainName: customerapp-offers.s3.amazonaws.com
+            S3OriginConfig: {}
+          - Id: RiderDocsOrigin
+            DomainName: !GetAtt RiderDocumentsBucket.RegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !Ref ImageCdnOriginAccessControl
+          - Id: RestaurantImagesOrigin
+            DomainName: !GetAtt RestaurantImagesBucket.RegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !Ref ImageCdnOriginAccessControl
+        DefaultCacheBehavior:
+          TargetOriginId: OffersOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CacheBehaviors:
+          - PathPattern: 'riders/*'
+            TargetOriginId: RiderDocsOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachedMethods:
+              - GET
+              - HEAD
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          - PathPattern: 'restaurant-images/*'
+            TargetOriginId: RestaurantImagesOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachedMethods:
+              - GET
+              - HEAD
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+
+  RiderDocumentsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RiderDocumentsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontReadRiderDocs
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action:
+              - s3:GetObject
+            Resource:
+              - !Sub '${RiderDocumentsBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${ImageCdnDistribution}'
+
+  RestaurantImagesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RestaurantImagesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontReadRestaurantImages
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action:
+              - s3:GetObject
+            Resource:
+              - !Sub '${RestaurantImagesBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${ImageCdnDistribution}'
+
 # ---------------- OUTPUTS ----------------
 Outputs:
   RorkHonestEatsApiUrl:
@@ -1392,3 +1519,7 @@ Outputs:
     Value: !Ref RiderDocumentsBucket
     Export:
       Name: !Sub '${AWS::StackName}-RiderDocumentsBucket'
+
+  ImageCdnDomain:
+    Description: CloudFront domain for image delivery
+    Value: !GetAtt ImageCdnDistribution.DomainName

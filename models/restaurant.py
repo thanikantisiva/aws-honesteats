@@ -1,11 +1,22 @@
 """Restaurant model"""
-from typing import Optional, List
+from typing import Optional, List, Union
 from datetime import datetime
 from utils.geohash import encode as geohash_encode
 
 
 class Restaurant:
     """Restaurant model"""
+
+    @staticmethod
+    def _normalize_image_list(value: Optional[Union[str, List[str]]]) -> List[str]:
+        """Normalize image field to a list for backward compatibility."""
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(v) for v in value if v is not None and str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value]
+        return []
     
     def __init__(
         self,
@@ -18,7 +29,7 @@ class Restaurant:
         cuisine: Optional[List[str]] = None,
         rating: Optional[float] = None,
         owner_id: Optional[str] = None,
-        restaurant_image: Optional[str] = None,
+        restaurant_image: Optional[Union[str, List[str]]] = None,
         geohash: Optional[str] = None,
         created_at: Optional[str] = None
     ):
@@ -31,7 +42,7 @@ class Restaurant:
         self.cuisine = cuisine or []
         self.rating = rating
         self.owner_id = owner_id
-        self.restaurant_image = restaurant_image
+        self.restaurant_image = self._normalize_image_list(restaurant_image)
         self.geohash = geohash or geohash_encode(latitude, longitude, 7)  # Auto-generate if not provided
         self.geohash_6 = self.geohash[:6]
         self.geohash_5 = self.geohash[:5]
@@ -133,6 +144,14 @@ class Restaurant:
             if "N" in rating_attr:
                 rating = float(rating_attr["N"])
         
+        restaurant_image = None
+        if "restaurant_image" in item:
+            restaurant_image_attr = item.get("restaurant_image", {})
+            if "L" in restaurant_image_attr:
+                restaurant_image = [img.get("S", "") for img in restaurant_image_attr["L"] if img.get("S")]
+            elif "S" in restaurant_image_attr:
+                restaurant_image = restaurant_image_attr.get("S")
+
         return cls(
             location_id=location_id,
             restaurant_id=restaurant_id,
@@ -143,7 +162,7 @@ class Restaurant:
             cuisine=cuisine_list,
             rating=rating,
             owner_id=owner_id,
-            restaurant_image=item.get("restaurant_image", {}).get("S") if "restaurant_image" in item else None,
+            restaurant_image=restaurant_image,
             geohash=geohash,
             created_at=item.get("createdAt", {}).get("S") if "createdAt" in item else None
         )
@@ -173,7 +192,7 @@ class Restaurant:
             item["rating"] = {"N": str(self.rating)}
         
         if self.restaurant_image:
-            item["restaurant_image"] = {"S": self.restaurant_image}
+            item["restaurant_image"] = {"L": [{"S": img} for img in self.restaurant_image]}
         
         if self.created_at:
             item["createdAt"] = {"S": self.created_at}

@@ -3,11 +3,13 @@ AWS Lambda handler for rork-honesteats API
 Uses AWS Lambda Power Tools for API Gateway integration
 """
 
+import os
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from aws_lambda_powertools.event_handler import APIGatewayRestResolver, CORSConfig
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.middleware_factory import lambda_handler_decorator
 from middleware.jwt_auth import verify_token
+from utils.ssm import get_secret
 
 # Import route handlers
 from routes.auth_routes import register_auth_routes
@@ -42,7 +44,14 @@ PUBLIC_ROUTES = [
     "/api/v1/login/images",
     "/health",
     "/api/v1/status",
+    "/api/v1/images/by-path",
+    "/api/v1/images/upload"
 ]
+
+# Retool bypass header and secret value.
+# Rotate by setting RETOOL_BYPASS_VALUE in Lambda environment.
+AUTH_BYPASS_HEADER = "x-retool-header"
+AUTH_BYPASS_VALUE = get_secret("RETOOL_BYPASS_VALUE", "9f2b7c4a6d1e8f30b5a9c2e7d4f1a6bc")
 
 # Create API Gateway resolver with CORS enabled
 app = APIGatewayRestResolver(
@@ -118,10 +127,20 @@ def auth_middleware(handler, event, context):
     
     # Check if this is a public route
     is_public = path in PUBLIC_ROUTES
+    headers = event.get('headers', {}) or {}
+
+    # Optional bypass for trusted callers that attach the retool header with the correct value.
+    bypass_value = None
+    for key, value in headers.items():
+        if key.lower() == AUTH_BYPASS_HEADER:
+            bypass_value = value
+            break
+    if bypass_value and bypass_value == AUTH_BYPASS_VALUE:
+        logger.info(f"Auth bypassed via retool header for {method} {path}")
+        return handler(event, context)
     
     if not is_public:
         # Get Authorization header
-        headers = event.get('headers', {})
         auth_header = headers.get('authorization') or headers.get('Authorization')
         
         if not auth_header:
