@@ -2,6 +2,8 @@
 import os
 import json
 from typing import Optional
+from datetime import datetime, timezone
+from datetime import timedelta
 from aws_lambda_powertools import Logger
 
 logger = Logger()
@@ -87,6 +89,7 @@ class NotificationService:
             
             # Detect token type
             is_apns_token = len(fcm_token) == 64 and all(c in '0123456789abcdef' for c in fcm_token.lower())
+            is_order_status_update = string_data.get("type") == "order_status"
             
             if is_apns_token:
                 logger.info("📱 Detected APNs token (iOS)")
@@ -107,18 +110,29 @@ class NotificationService:
                 )
             else:
                 logger.info("📱 Detected FCM token (Android)")
-                message = messaging.Message(
-                    token=fcm_token,
-                    notification=messaging.Notification(title=title, body=body),
-                    data=string_data,
-                    android=messaging.AndroidConfig(
-                        priority="high",
-                        notification=messaging.AndroidNotification(
-                            sound="default",
-                            color="#EF4444"
+                if is_order_status_update:
+                    # Data-only message for Android order updates
+                    message = messaging.Message(
+                        token=fcm_token,
+                        data=string_data,
+                        android=messaging.AndroidConfig(
+                            priority="high",
+                            collapse_key=string_data.get("orderId"),
+                            ttl=timedelta(seconds=2419200)
                         )
                     )
-                )
+                else:
+                    message = messaging.Message(
+                        token=fcm_token,
+                        data=string_data,
+                        android=messaging.AndroidConfig(
+                            priority="high",
+                            notification=messaging.AndroidNotification(
+                                sound="default",
+                                color="#EF4444"
+                            )
+                        )
+                    )
             
             logger.info(f"📤 Sending Firebase message to token: {fcm_token[:20]}...")
             response = messaging.send(message)
@@ -134,7 +148,12 @@ class NotificationService:
         fcm_token: str,
         order_id: str,
         status: str,
-        restaurant_name: str
+        restaurant_name: str,
+        item_name: Optional[str] = None,
+        item_image_url: Optional[str] = None,
+        updated_at: Optional[str] = None,
+        rider_id: Optional[str] = None,
+        rider_name: Optional[str] = None
     ) -> bool:
         """
         Send order status update notification via FCM
@@ -144,20 +163,23 @@ class NotificationService:
             order_id: Order ID
             status: New order status
             restaurant_name: Restaurant name
+            rider_id: Rider ID if assigned (optional)
+            rider_name: Rider display name if available (optional)
             
         Returns:
             True if sent successfully, False otherwise
         """
         try:
-            # Map status to user-friendly messages
+            # Map status to user-friendly messages (include rider name when available)
+            rider_text = f" ({rider_name})" if rider_name else ""
             status_messages = {
                 'CONFIRMED': ('Order Confirmed! 🎉', f'Your order from {restaurant_name} has been confirmed'),
                 'PREPARING': ('Food is Being Prepared', f'{restaurant_name} is preparing your order'),
                 'READY_FOR_PICKUP': ('Order Ready!', f'Your order from {restaurant_name} is ready'),
-                'OUT_FOR_DELIVERY': ('On the Way! 🛵', f'Your order from {restaurant_name} is out for delivery'),
+                'OUT_FOR_DELIVERY': ('On the Way! 🛵', f'Your order from {restaurant_name} is out for delivery{rider_text}'),
                 'DELIVERED': ('Order Delivered ✅', f'Your order from {restaurant_name} has been delivered'),
                 'AWAITING_RIDER_ASSIGNMENT': ('Order Awaiting Rider Assignment', f'Your order from {restaurant_name} is awaiting a rider assignment'),
-                'RIDER_ASSIGNED': ('Order Assigned to Rider', f'Your order from {restaurant_name} has been assigned to a rider')
+                'RIDER_ASSIGNED': ('Order Assigned to Rider', f'Your order from {restaurant_name} has been assigned to a rider{rider_text}')
             }
             
             title, body = status_messages.get(status, ('Order Update', f'Your order status: {status}'))
@@ -171,7 +193,12 @@ class NotificationService:
                 "type": "order_status",
                 "orderId": order_id,
                 "status": status,
-                "restaurantName": restaurant_name
+                "restaurantName": restaurant_name,
+                "itemName": item_name or "",
+                "itemImageUrl": item_image_url or "",
+                "updatedAt": updated_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "riderId": rider_id or "",
+                "riderName": rider_name or ""
             }
             
             # Send via Firebase FCM

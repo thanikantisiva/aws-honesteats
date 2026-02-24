@@ -533,8 +533,11 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:GetItem
+                - dynamodb:Query
               Resource:
                 - !GetAtt UsersTableV2.Arn
+                - !Sub '${UsersTableV2.Arn}/index/riderId-index'
+                - !GetAtt MenuItemsTable.Arn
             - Effect: Allow
               Action:
                 - dynamodb:DescribeStream
@@ -553,6 +556,7 @@ Resources:
       Environment:
         Variables:
           USERS_TABLE_NAME: !Ref UsersTableV2
+          MENU_ITEMS_TABLE_NAME: !Ref MenuItemsTable
           ENVIRONMENT: !Ref Environment
           FIREBASE_PROJECT_ID: appnearbites-85b8c
           NOTIFICATION_SERVICE: FIREBASE
