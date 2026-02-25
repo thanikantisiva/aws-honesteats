@@ -30,6 +30,10 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
 
         logger.info(f"Sending custom notification to {len(fcm_tokens)} tokens")
 
+        # Ensure custom payload is distinct from order-status (uses type != "order_status")
+        payload = dict(data)
+        payload.setdefault("type", "custom")
+
         sent = 0
         failed = 0
         for token in fcm_tokens:
@@ -39,8 +43,8 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             ok = NotificationService.send_via_firebase(
                 fcm_token=token,
                 title=title,
+                data=payload,
                 body=custom_message,
-                data=data
             )
             if ok:
                 sent += 1

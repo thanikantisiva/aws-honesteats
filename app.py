@@ -27,6 +27,7 @@ from routes.payment_routes import register_payment_routes
 from routes.delivery_routes import register_delivery_routes
 from routes.image_routes import register_image_routes
 from routes.coupon_routes import register_coupon_routes
+from routes.rating_routes import register_rating_routes
 
 # Initialize AWS Lambda Power Tools
 logger = Logger(service="rork-honesteats-api")
@@ -45,7 +46,8 @@ PUBLIC_ROUTES = [
     "/health",
     "/api/v1/status",
     "/api/v1/images/by-path",
-    "/api/v1/images/upload"
+    "/api/v1/images/upload",
+    "/api/v1/ratings"
 ]
 
 # Retool bypass header and secret value.
@@ -80,6 +82,7 @@ register_payment_routes(app)
 register_delivery_routes(app)
 register_image_routes(app)
 register_coupon_routes(app)
+register_rating_routes(app)
 
 
 @app.get("/health")

@@ -64,6 +64,7 @@ class Order:
         address_id: Optional[str] = None,
         payment_id: Optional[str] = None,
         payment_method: Optional[str] = None,
+        rating: Optional[float] = None,
         revenue: Optional[Dict[str, Any]] = None,
         # Rider-specific fields
         pickup_address: Optional[str] = None,
@@ -107,6 +108,7 @@ class Order:
         self.address_id = address_id
         self.payment_id = payment_id
         self.payment_method = payment_method
+        self.rating = rating
         self.revenue = revenue
         # Rider fields
         self.pickup_address = pickup_address
@@ -146,6 +148,7 @@ class Order:
             "grandTotal": self.grand_total,
             "status": self.status,
             "riderId": self.rider_id,
+            "rating": self.rating,
             "createdAt": datetime.fromtimestamp(self.created_at / 1000).isoformat() if isinstance(self.created_at, int) else self.created_at
         }
         if self.restaurant_name:
@@ -253,6 +256,7 @@ class Order:
             address_id=item.get("addressId", {}).get("S") if "addressId" in item else None,
             payment_id=item.get("paymentId", {}).get("S") if "paymentId" in item else None,
             payment_method=item.get("paymentMethod", {}).get("S") if "paymentMethod" in item else None,
+            rating=float(item.get("rating", {}).get("N")) if "rating" in item else None,
             revenue=dynamodb_to_python(item["revenue"]) if "revenue" in item and "M" in item["revenue"] else (json.loads(item.get("revenue", {}).get("S")) if "revenue" in item else None),
             # Rider fields
             pickup_address=item.get("pickupAddress", {}).get("S") if "pickupAddress" in item else None,
@@ -327,6 +331,8 @@ class Order:
             item["paymentId"] = {"S": self.payment_id}
         if self.payment_method:
             item["paymentMethod"] = {"S": self.payment_method}
+        if self.rating is not None:
+            item["rating"] = {"N": str(self.rating)}
         if self.revenue:
             item["revenue"] = python_to_dynamodb(self.revenue)  # Store as Map
         # Rider fields

@@ -251,6 +251,33 @@ class RiderService:
             return RiderService.get_rider(rider_id)
         except ClientError as e:
             raise Exception(f"Failed to set working on order: {str(e)}")
+
+    @staticmethod
+    def add_rating(rider_id: str, new_rating: float) -> Rider:
+        """Add a new rating to rider and recompute average + ratedCount."""
+        try:
+            rider = RiderService.get_rider(rider_id)
+            if not rider:
+                raise Exception("Rider not found")
+
+            current_count = rider.rated_count or 0
+            current_avg = rider.rating or 0.0
+            updated_count = current_count + 1
+            updated_avg = round(((current_avg * current_count) + float(new_rating)) / updated_count, 2)
+
+            dynamodb_client.update_item(
+                TableName=TABLES['RIDERS'],
+                Key={'riderId': {'S': rider_id}},
+                UpdateExpression='SET rating = :rating, ratedCount = :ratedCount',
+                ExpressionAttributeValues={
+                    ':rating': {'N': str(updated_avg)},
+                    ':ratedCount': {'N': str(updated_count)}
+                }
+            )
+
+            return RiderService.get_rider(rider_id)
+        except ClientError as e:
+            raise Exception(f"Failed to add rider rating: {str(e)}")
     
     @staticmethod
     def _query_riders_by_geohash(geohash: str, precision: int = 7) -> List[Rider]:

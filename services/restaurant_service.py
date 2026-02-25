@@ -390,6 +390,7 @@ class RestaurantService:
                     is_open=updates.get('isOpen', existing_restaurant.is_open),
                     cuisine=updates.get('cuisine', existing_restaurant.cuisine),
                     rating=updates.get('rating', existing_restaurant.rating),
+                    rated_count=existing_restaurant.rated_count,
                     owner_id=updates.get('ownerId', existing_restaurant.owner_id),
                     restaurant_image=updates.get('restaurantImage', existing_restaurant.restaurant_image)
                 )
@@ -488,3 +489,33 @@ class RestaurantService:
             return RestaurantService.get_restaurant_by_id(restaurant_id)
         except ClientError as e:
             raise Exception(f"Failed to update restaurant: {str(e)}")
+
+    @staticmethod
+    def add_rating(restaurant_id: str, new_rating: float) -> Restaurant:
+        """Add a new rating to restaurant and recompute average + ratedCount."""
+        try:
+            restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+            if not restaurant:
+                raise Exception("Restaurant not found")
+
+            current_count = restaurant.rated_count or 0
+            current_avg = restaurant.rating or 0.0
+            updated_count = current_count + 1
+            updated_avg = round(((current_avg * current_count) + float(new_rating)) / updated_count, 2)
+
+            dynamodb_client.update_item(
+                TableName=TABLES['RESTAURANTS'],
+                Key={
+                    'PK': {'S': restaurant.geohash},
+                    'SK': {'S': f"RESTAURANT#{restaurant_id}"}
+                },
+                UpdateExpression='SET rating = :rating, ratedCount = :ratedCount',
+                ExpressionAttributeValues={
+                    ':rating': {'N': str(updated_avg)},
+                    ':ratedCount': {'N': str(updated_count)}
+                }
+            )
+
+            return RestaurantService.get_restaurant_by_id(restaurant_id)
+        except ClientError as e:
+            raise Exception(f"Failed to add restaurant rating: {str(e)}")

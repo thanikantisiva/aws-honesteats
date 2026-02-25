@@ -242,7 +242,8 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                 item_image_url=item_image_url,
                 updated_at=updated_at,
                 rider_id=rider_id or None,
-                rider_name=rider_name or None
+                rider_name=rider_name or None,
+                customer_phone=customer_phone or None,
             )
             
             if success:

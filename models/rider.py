@@ -17,6 +17,8 @@ class Rider:
         heading: Optional[float] = 0.0,
         timestamp: Optional[str] = None,
         is_active: bool = False,
+        rating: Optional[float] = None,
+        rated_count: int = 0,
         working_on_order: Optional[List[str]] = None,
         last_seen: Optional[str] = None,
         geohash: Optional[str] = None
@@ -29,6 +31,8 @@ class Rider:
         self.heading = heading  # degrees (0-360)
         self.timestamp = timestamp or datetime.utcnow().isoformat()
         self.is_active = is_active
+        self.rating = rating
+        self.rated_count = rated_count or 0
         self.working_on_order = working_on_order or []
         self.last_seen = last_seen or datetime.utcnow().isoformat()
         
@@ -82,7 +86,7 @@ class Rider:
     
     def to_dict(self) -> dict:
         """Convert to dictionary"""
-        return {
+        result = {
             "riderId": self.rider_id,
             "phone": self.phone,
             "lat": self.lat,
@@ -93,8 +97,12 @@ class Rider:
             "isActive": self.is_active,
             "workingOnOrder": self.working_on_order,
             "lastSeen": self.last_seen,
-            "geohash": self.geohash
+            "geohash": self.geohash,
+            "ratedCount": self.rated_count
         }
+        if self.rating is not None:
+            result["rating"] = self.rating
+        return result
     
     @classmethod
     def from_dynamodb_item(cls, item: dict) -> "Rider":
@@ -108,6 +116,8 @@ class Rider:
             heading=float(item.get("heading", {}).get("N", "0")) if "heading" in item else 0.0,
             timestamp=item.get("timestamp", {}).get("S", ""),
             is_active=item.get("isActive", {}).get("BOOL", False),
+            rating=float(item.get("rating", {}).get("N")) if "rating" in item else None,
+            rated_count=int(float(item.get("ratedCount", {}).get("N", "0"))) if "ratedCount" in item else 0,
             working_on_order=(
                 [v.get("S", "") for v in item.get("workingOnOrder", {}).get("L", [])]
                 if "workingOnOrder" in item
@@ -124,7 +134,8 @@ class Rider:
             "phone": {"S": self.phone},
             "timestamp": {"S": self.timestamp},
             "isActive": {"BOOL": self.is_active},
-            "lastSeen": {"S": self.last_seen}
+            "lastSeen": {"S": self.last_seen},
+            "ratedCount": {"N": str(self.rated_count)}
         }
         
         if self.lat is not None:
@@ -135,6 +146,8 @@ class Rider:
             item["speed"] = {"N": str(self.speed)}
         if self.heading is not None:
             item["heading"] = {"N": str(self.heading)}
+        if self.rating is not None:
+            item["rating"] = {"N": str(self.rating)}
         if self.working_on_order:
             item["workingOnOrder"] = {"L": [{"S": str(v)} for v in self.working_on_order]}
         

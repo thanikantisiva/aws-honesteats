@@ -67,10 +67,10 @@ class NotificationService:
     def send_via_firebase(
         fcm_token: str,
         title: str,
-        body: str,
-        data: dict
+        data: dict,
+        body: Optional[str] = None
     ) -> bool:
-        """Send notification via Firebase Admin SDK"""
+        """Send notification via Firebase Admin SDK (generic; use send_order_status_notification for order updates)."""
         if not FIREBASE_AVAILABLE:
             logger.warning("⚠️ Firebase Admin SDK not available - notification skipped")
             return False
@@ -86,22 +86,23 @@ class NotificationService:
             
             # Convert data dict values to strings (FCM requirement)
             string_data = {k: str(v) for k, v in data.items()}
-            
+            body_text = (body or "").strip()
+
             # Detect token type
             is_apns_token = len(fcm_token) == 64 and all(c in '0123456789abcdef' for c in fcm_token.lower())
             is_order_status_update = string_data.get("type") == "order_status"
-            
+
             if is_apns_token:
                 logger.info("📱 Detected APNs token (iOS)")
                 message = messaging.Message(
                     token=fcm_token,
-                    notification=messaging.Notification(title=title, body=body),
+                    notification=messaging.Notification(title=title, body=body_text),
                     data=string_data,
                     apns=messaging.APNSConfig(
                         headers={'apns-priority': '10'},
                         payload=messaging.APNSPayload(
                             aps=messaging.Aps(
-                                alert=messaging.ApsAlert(title=title, body=body),
+                                alert=messaging.ApsAlert(title=title, body=body_text),
                                 sound='default',
                                 badge=1
                             )
@@ -128,6 +129,8 @@ class NotificationService:
                         android=messaging.AndroidConfig(
                             priority="high",
                             notification=messaging.AndroidNotification(
+                                title=title,
+                                body=body_text,
                                 sound="default",
                                 color="#EF4444"
                             )
@@ -153,7 +156,8 @@ class NotificationService:
         item_image_url: Optional[str] = None,
         updated_at: Optional[str] = None,
         rider_id: Optional[str] = None,
-        rider_name: Optional[str] = None
+        rider_name: Optional[str] = None,
+        customer_phone: Optional[str] = None
     ) -> bool:
         """
         Send order status update notification via FCM
@@ -165,30 +169,33 @@ class NotificationService:
             restaurant_name: Restaurant name
             rider_id: Rider ID if assigned (optional)
             rider_name: Rider display name if available (optional)
+            customer_phone: Customer phone for rating payload (optional)
             
         Returns:
             True if sent successfully, False otherwise
         """
         try:
             # Map status to user-friendly messages (include rider name when available)
-            rider_text = f" ({rider_name})" if rider_name else ""
+            rider_text = f" {rider_name}" if rider_name else ""
             status_messages = {
-                'CONFIRMED': ('Order Confirmed! 🎉', f'Your order from {restaurant_name} has been confirmed'),
-                'PREPARING': ('Food is Being Prepared', f'{restaurant_name} is preparing your order'),
-                'READY_FOR_PICKUP': ('Order Ready!', f'Your order from {restaurant_name} is ready'),
-                'OUT_FOR_DELIVERY': ('On the Way! 🛵', f'Your order from {restaurant_name} is out for delivery{rider_text}'),
-                'DELIVERED': ('Order Delivered ✅', f'Your order from {restaurant_name} has been delivered'),
-                'AWAITING_RIDER_ASSIGNMENT': ('Order Awaiting Rider Assignment', f'Your order from {restaurant_name} is awaiting a rider assignment'),
-                'RIDER_ASSIGNED': ('Order Assigned to Rider', f'Your order from {restaurant_name} has been assigned to a rider{rider_text}')
+                'CONFIRMED': f'Order Confirmed : {restaurant_name} confirmed  your order🎉',
+                'PREPARING': f'Preparing : {restaurant_name} is preparing your order',
+                'READY_FOR_PICKUP': f'READY: Your order from {restaurant_name} is ready for pickup',
+                'OUT_FOR_DELIVERY': f'Out For Delivery: {rider_text} is your delivery partner',
+                'DELIVERED': f'Delivered: Your order from {restaurant_name} is delivered',
+                'AWAITING_RIDER_ASSIGNMENT': f'Please wait: We are searching near by delivery partners',
+                'RIDER_ASSIGNED': f'Order Assigned: Your order from {restaurant_name} has been assigned to a rider {rider_text}'
             }
             
-            title, body = status_messages.get(status, ('Order Update', f'Your order status: {status}'))
+            title = status_messages.get(status)
             
             logger.info(f"📱 Sending Firebase FCM notification")
             logger.info(f"   Token: {fcm_token[:30]}...")
             logger.info(f"   Title: {title}")
-            logger.info(f"   Body: {body}")
-            
+
+            api_base_url = os.environ.get("API_BASE_URL", "https://api.yumdude.com").rstrip("/")
+            rating_endpoint = "/api/v1/ratings"
+
             notification_data = {
                 "type": "order_status",
                 "orderId": order_id,
@@ -198,14 +205,17 @@ class NotificationService:
                 "itemImageUrl": item_image_url or "",
                 "updatedAt": updated_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "riderId": rider_id or "",
-                "riderName": rider_name or ""
+                "riderName": rider_name or "",
+                "title": title,
+                "apiBaseUrl": api_base_url,
+                "ratingEndpoint": rating_endpoint,
+                "customerPhone": customer_phone or "",
             }
             
             # Send via Firebase FCM
             return NotificationService.send_via_firebase(
                 fcm_token=fcm_token,
                 title=title,
-                body=body,
                 data=notification_data
             )
             

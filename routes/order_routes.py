@@ -53,6 +53,9 @@ def register_order_routes(app):
                                 order_dict.update(update_data)
                                 logger.info(f"[orderId={order_id}] Updated rider location: ({rider.lat}, {rider.lng})")
                         
+                        # Include rider rating from Riders table (always send when rider exists so UI can show it)
+                        order_dict['riderRating'] = float(rider.rating) if rider.rating is not None else 0.0
+                        order_dict['riderRatedCount'] = int(rider.rated_count) if rider.rated_count is not None else 0
                         # Then get user details from Users table using phone and RIDER role
                         rider_user = UserService.get_user_by_role(rider.phone, "RIDER")
                         if rider_user:
@@ -111,7 +114,8 @@ def register_order_routes(app):
                         from services.rider_service import RiderService
                         rider = RiderService.get_rider(order.rider_id)
                         if rider:
-                            # Then get user details from Users table using phone and RIDER role
+                            order_dict['riderRating'] = float(rider.rating) if rider.rating is not None else 0.0
+                            order_dict['riderRatedCount'] = int(rider.rated_count) if rider.rated_count is not None else 0
                             rider_user = UserService.get_user_by_role(rider.phone, "RIDER")
                             if rider_user:
                                 order_dict['riderName'] = f"{rider_user.first_name} {rider_user.last_name}"

@@ -28,6 +28,7 @@ class Restaurant:
         is_open: bool = True,
         cuisine: Optional[List[str]] = None,
         rating: Optional[float] = None,
+        rated_count: int = 0,
         owner_id: Optional[str] = None,
         restaurant_image: Optional[Union[str, List[str]]] = None,
         geohash: Optional[str] = None,
@@ -41,6 +42,7 @@ class Restaurant:
         self.is_open = is_open
         self.cuisine = cuisine or []
         self.rating = rating
+        self.rated_count = rated_count or 0
         self.owner_id = owner_id
         self.restaurant_image = self._normalize_image_list(restaurant_image)
         self.geohash = geohash or geohash_encode(latitude, longitude, 7)  # Auto-generate if not provided
@@ -103,6 +105,7 @@ class Restaurant:
         }
         if self.rating is not None:
             result["rating"] = self.rating
+        result["ratedCount"] = self.rated_count
         if self.owner_id:
             result["ownerId"] = self.owner_id
         if self.restaurant_image:
@@ -143,6 +146,10 @@ class Restaurant:
             rating_attr = item["rating"]
             if "N" in rating_attr:
                 rating = float(rating_attr["N"])
+
+        rated_count = 0
+        if "ratedCount" in item and "N" in item["ratedCount"]:
+            rated_count = int(float(item["ratedCount"]["N"]))
         
         restaurant_image = None
         if "restaurant_image" in item:
@@ -161,6 +168,7 @@ class Restaurant:
             is_open=item.get("isOpen", {}).get("BOOL", True) if "isOpen" in item else True,
             cuisine=cuisine_list,
             rating=rating,
+            rated_count=rated_count,
             owner_id=owner_id,
             restaurant_image=restaurant_image,
             geohash=geohash,
@@ -190,6 +198,8 @@ class Restaurant:
         
         if self.rating is not None:
             item["rating"] = {"N": str(self.rating)}
+
+        item["ratedCount"] = {"N": str(self.rated_count)}
         
         if self.restaurant_image:
             item["restaurant_image"] = {"L": [{"S": img} for img in self.restaurant_image]}
