@@ -2,6 +2,7 @@
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.user_service import UserService
 from utils.geohash import encode as geohash_encode
+from utils.datetime_ist import now_ist_iso
 from models.user import User
 
 logger = Logger()
@@ -109,8 +110,6 @@ def register_user_routes(app):
             logger.info(f"📱 Registering FCM token for: {phone[:5]}***")
             logger.info(f"🔑 Token: {fcm_token[:30]}...")
             
-            from datetime import datetime
-            
             # Get all roles for this phone and update FCM token for all
             all_roles = UserService.get_all_user_roles(phone)
             
@@ -120,7 +119,7 @@ def register_user_routes(app):
                 for user_role in all_roles:
                     UserService.update_user(phone, user_role.role, {
                         'fcmToken': fcm_token,
-                        'fcmTokenUpdatedAt': datetime.utcnow().isoformat()
+                        'fcmTokenUpdatedAt': now_ist_iso()
                     })
             else:
                 # User doesn't exist - create CUSTOMER with FCM token
@@ -133,7 +132,7 @@ def register_user_routes(app):
                     role='CUSTOMER',
                     is_active=True,
                     fcm_token=fcm_token,
-                    fcm_token_updated_at=datetime.utcnow().isoformat()
+                    fcm_token_updated_at=now_ist_iso()
                 )
                 UserService.create_user(new_user)
                 logger.info(f"✅ User created with FCM token")

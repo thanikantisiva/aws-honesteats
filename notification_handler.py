@@ -4,8 +4,9 @@ Sends push notifications when order status changes
 """
 import json
 import boto3
-from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from aws_lambda_powertools import Logger
+from utils.datetime_ist import now_ist_iso, epoch_ms_to_ist_iso
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from services.notification_service import NotificationService
 from utils.dynamodb_helpers import dynamodb_to_python
@@ -139,25 +140,26 @@ def _fetch_menu_item_image_url(restaurant_id: str, item_id: str) -> str:
 
 
 def _extract_updated_at(record: dict, new_image: dict) -> str:
-    """Resolve updatedAt in ISO-8601 UTC."""
+    """Resolve updatedAt in ISO-8601 IST."""
+    from datetime import datetime
     raw_updated = new_image.get("updatedAt", {})
     if "S" in raw_updated and raw_updated["S"]:
         return raw_updated["S"]
     if "N" in raw_updated:
         try:
             millis = int(float(raw_updated["N"]))
-            return datetime.fromtimestamp(millis / 1000.0, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            return epoch_ms_to_ist_iso(millis)
         except Exception:
             pass
 
     approx = record.get("dynamodb", {}).get("ApproximateCreationDateTime")
     if approx:
         try:
-            return datetime.fromtimestamp(float(approx), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            return datetime.fromtimestamp(float(approx), tz=ZoneInfo("Asia/Kolkata")).isoformat()
         except Exception:
             pass
 
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return now_ist_iso()
 
 
 def lambda_handler(event: dict, context: LambdaContext) -> dict:

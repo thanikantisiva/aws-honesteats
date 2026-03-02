@@ -4,15 +4,15 @@ Test script to verify automatic order assignment when status changes to READY_FO
 """
 import os
 import sys
-import boto3
 import time
-from datetime import datetime
+import boto3
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.geohash import encode as geohash_encode
 from utils.dynamodb import dynamodb_client
+from utils.datetime_ist import now_ist_iso
 
 # Configuration
 ENVIRONMENT = 'dev'
@@ -87,8 +87,8 @@ def create_test_rider():
         'GSI2SK': {'S': f'RIDER#{TEST_RIDER_ID}'},
         'GSI3PK': {'S': geohash_p4},
         'GSI3SK': {'S': f'RIDER#{TEST_RIDER_ID}'},
-        'timestamp': {'S': datetime.utcnow().isoformat()},
-        'lastSeen': {'S': datetime.utcnow().isoformat()}
+        'timestamp': {'S': now_ist_iso()},
+        'lastSeen': {'S': now_ist_iso()}
     }
     
     try:
@@ -106,7 +106,7 @@ def create_test_rider():
 def create_test_order():
     """Create a test order in PREPARING status"""
     print(f"\n2️⃣ Creating test order: {TEST_ORDER_ID}")
-    
+    created_at = now_ist_iso()
     item = {
         'orderId': {'S': TEST_ORDER_ID},
         'customerPhone': {'S': '+919999999999'},
@@ -120,7 +120,9 @@ def create_test_order():
         'restaurantName': {'S': 'Test Restaurant'},
         'pickupLat': {'N': str(RESTAURANT_LAT)},
         'pickupLng': {'N': str(RESTAURANT_LNG)},
-        'createdAt': {'N': str(int(time.time() * 1000))}
+        'createdAt': {'S': created_at},
+        'customerStatusCreatedAt': {'S': f'PREPARING#{created_at}'},
+        'restaurantStatusCreatedAt': {'S': f'PREPARING#{created_at}'}
     }
     
     try:

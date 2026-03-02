@@ -1,7 +1,7 @@
 """Rider operational model for real-time tracking"""
 from typing import Optional, List
-from datetime import datetime
 from utils.geohash import encode as geohash_encode
+from utils.datetime_ist import now_ist_iso
 
 
 class Rider:
@@ -29,12 +29,12 @@ class Rider:
         self.lng = lng
         self.speed = speed  # km/h
         self.heading = heading  # degrees (0-360)
-        self.timestamp = timestamp or datetime.utcnow().isoformat()
+        self.timestamp = timestamp or now_ist_iso()
         self.is_active = is_active
         self.rating = rating
         self.rated_count = rated_count or 0
         self.working_on_order = working_on_order or []
-        self.last_seen = last_seen or datetime.utcnow().isoformat()
+        self.last_seen = last_seen or now_ist_iso()
         
         # Auto-generate geohash if lat/lng provided
         if geohash:

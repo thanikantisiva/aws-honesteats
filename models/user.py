@@ -1,6 +1,6 @@
 """User model"""
 from typing import Optional
-from datetime import datetime
+from utils.datetime_ist import now_ist_iso
 
 
 class User:
@@ -45,7 +45,7 @@ class User:
         self.email = email
         self.role = role
         self.is_active = is_active
-        self.created_at = created_at or datetime.utcnow().isoformat()
+        self.created_at = created_at or now_ist_iso()
         self.date_of_birth = date_of_birth
         self.fcm_token = fcm_token
         self.fcm_token_updated_at = fcm_token_updated_at

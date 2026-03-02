@@ -112,10 +112,7 @@ def create_menu_items(restaurant_id, menu_items):
 
 
 # Restaurant templates with different cuisines and menu items
-# NOTE: Menu items use 'restaurantPrice' (what restaurant charges)
-# Backend auto-calculates customer price based on category markup:
-#   Starters: +15% | Main Course: +20% | Rice & Biryani: +25%
-#   Breads: +10% | Desserts: +30% | Beverages: +40%
+# NOTE: Menu items use 'restaurantPrice' and 'hikePercentage'; customer price = restaurantPrice * (1 + hikePercentage/100), rounded to nearest 0.5.
 RESTAURANT_TEMPLATES = [
     {
         "name": "Spice Garden",
@@ -230,11 +227,12 @@ def main():
         )
         
         if restaurant_id:
-            # Add menu items
+            # Add menu items (restaurantPrice + hikePercentage; do not send price)
             menu_items = []
             for menu_item in template['menu']:
                 menu_items.append({
                     **menu_item,
+                    "hikePercentage": menu_item.get("hikePercentage", 10),
                     "isAvailable": True,
                     "image": template['image']
                 })

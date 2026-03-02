@@ -1,7 +1,7 @@
 """Restaurant model"""
 from typing import Optional, List, Union
-from datetime import datetime
 from utils.geohash import encode as geohash_encode
+from utils.datetime_ist import now_ist_iso
 
 
 class Restaurant:
@@ -49,7 +49,7 @@ class Restaurant:
         self.geohash_6 = self.geohash[:6]
         self.geohash_5 = self.geohash[:5]
         self.geohash_4 = self.geohash[:4]
-        self.created_at = created_at or datetime.utcnow().isoformat()
+        self.created_at = created_at or now_ist_iso()
     
     @property
     def pk(self) -> str:

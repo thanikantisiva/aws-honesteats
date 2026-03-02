@@ -1,6 +1,6 @@
 """Order routes"""
-from datetime import datetime
 from aws_lambda_powertools import Logger, Tracer, Metrics
+from utils.datetime_ist import now_ist_iso
 from services.order_service import OrderService
 from services.user_service import UserService
 from services.restaurant_service import RestaurantService
@@ -46,7 +46,7 @@ def register_order_routes(app):
                                     'riderCurrentLng': rider.lng,
                                     'riderSpeed': rider.speed or 0.0,
                                     'riderHeading': rider.heading or 0.0,
-                                    'riderLocationUpdatedAt': datetime.utcnow().isoformat()
+                                    'riderLocationUpdatedAt': now_ist_iso()
                                 }
                                 OrderService.update_order(order_id, update_data)
                                 # Update the dict we're returning

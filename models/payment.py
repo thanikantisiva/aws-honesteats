@@ -1,6 +1,6 @@
 """Payment model for Razorpay transactions"""
-import time
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
+from utils.datetime_ist import now_ist_iso, epoch_ms_to_ist_iso
 
 
 class Payment:
@@ -35,8 +35,8 @@ class Payment:
         error_code: Optional[str] = None,
         error_description: Optional[str] = None,
         revenue: Optional[dict] = None,
-        created_at: Optional[int] = None,
-        updated_at: Optional[int] = None
+        created_at: Optional[Union[int, str]] = None,
+        updated_at: Optional[Union[int, str]] = None
     ):
         self.payment_id = payment_id
         self.customer_phone = customer_phone
@@ -53,8 +53,9 @@ class Payment:
         self.error_code = error_code
         self.error_description = error_description
         self.revenue = revenue  # Revenue breakdown for analytics
-        self.created_at = created_at or int(time.time() * 1000)
-        self.updated_at = updated_at or self.created_at
+        _now = now_ist_iso()
+        self.created_at = created_at if created_at is not None else _now
+        self.updated_at = updated_at if updated_at is not None else self.created_at
     
     def to_dict(self) -> dict:
         """Convert to dictionary"""
@@ -73,12 +74,18 @@ class Payment:
             'errorCode': self.error_code,
             'errorDescription': self.error_description,
             'revenue': self.revenue,
-            'createdAt': self.created_at,
-            'updatedAt': self.updated_at
+            'createdAt': epoch_ms_to_ist_iso(self.created_at) if isinstance(self.created_at, int) else self.created_at,
+            'updatedAt': epoch_ms_to_ist_iso(self.updated_at) if isinstance(self.updated_at, int) else self.updated_at
         }
     
     def to_dynamodb_item(self) -> dict:
-        """Convert to DynamoDB item format"""
+        """Convert to DynamoDB item format (createdAt/updatedAt as IST ISO string)."""
+        created_at = self.created_at
+        updated_at = self.updated_at
+        if isinstance(created_at, int):
+            created_at = epoch_ms_to_ist_iso(created_at)
+        if isinstance(updated_at, int):
+            updated_at = epoch_ms_to_ist_iso(updated_at)
         item = {
             'paymentId': {'S': self.payment_id},
             'customerPhone': {'S': self.customer_phone},
@@ -86,8 +93,8 @@ class Payment:
             'restaurantName': {'S': self.restaurant_name},
             'amount': {'N': str(self.amount)},
             'paymentStatus': {'S': self.payment_status},
-            'createdAt': {'N': str(self.created_at)},
-            'updatedAt': {'N': str(self.updated_at)}
+            'createdAt': {'S': created_at},
+            'updatedAt': {'S': updated_at}
         }
         
         if self.razorpay_order_id:
@@ -114,7 +121,11 @@ class Payment:
     
     @staticmethod
     def from_dynamodb_item(item: dict) -> 'Payment':
-        """Create Payment from DynamoDB item"""
+        """Create Payment from DynamoDB item (accepts createdAt/updatedAt as S or legacy N)."""
+        raw_ca = item.get('createdAt', {})
+        raw_ua = item.get('updatedAt', {})
+        created_at = raw_ca.get('S') if 'S' in raw_ca else (int(float(raw_ca['N'])) if 'N' in raw_ca else now_ist_iso())
+        updated_at = raw_ua.get('S') if 'S' in raw_ua else (int(float(raw_ua['N'])) if 'N' in raw_ua else created_at)
         return Payment(
             payment_id=item['paymentId']['S'],
             customer_phone=item['customerPhone']['S'],
@@ -130,7 +141,7 @@ class Payment:
             order_id=item.get('orderId', {}).get('S'),
             error_code=item.get('errorCode', {}).get('S'),
             error_description=item.get('errorDescription', {}).get('S'),
-            created_at=int(item['createdAt']['N']),
-            updated_at=int(item['updatedAt']['N'])
+            created_at=created_at,
+            updated_at=updated_at
         )
 

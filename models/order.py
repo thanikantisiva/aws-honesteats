@@ -1,7 +1,7 @@
 """Order model"""
 import time
-from typing import List, Optional, Dict, Any
-from datetime import datetime
+from typing import List, Optional, Dict, Any, Union
+from utils.datetime_ist import now_ist_iso, epoch_ms_to_ist_iso
 
 
 class Order:
@@ -89,7 +89,7 @@ class Order:
         # Rider offer tracking
         offered_at: Optional[str] = None,
         rejected_by_riders: Optional[List[str]] = None,
-        created_at: Optional[int] = None
+        created_at: Optional[Union[int, str]] = None
     ):
         self.order_id = order_id
         self.customer_phone = customer_phone
@@ -132,8 +132,8 @@ class Order:
         self.last_assignment_attempt_at = last_assignment_attempt_at
         self.offered_at = offered_at
         self.rejected_by_riders = rejected_by_riders or []
-        # Use timestamp in milliseconds for sorting
-        self.created_at = created_at or int(time.time() * 1000)
+        # Store as IST ISO string; support int (legacy) for backward compatibility
+        self.created_at = created_at if created_at is not None else now_ist_iso()
     
     def to_dict(self) -> dict:
         """Convert to dictionary"""
@@ -149,7 +149,7 @@ class Order:
             "status": self.status,
             "riderId": self.rider_id,
             "rating": self.rating,
-            "createdAt": datetime.fromtimestamp(self.created_at / 1000).isoformat() if isinstance(self.created_at, int) else self.created_at
+            "createdAt": epoch_ms_to_ist_iso(self.created_at) if isinstance(self.created_at, int) else self.created_at
         }
         if self.restaurant_name:
             result["restaurantName"] = self.restaurant_name
@@ -225,18 +225,13 @@ class Order:
         else:
             items = []
         
-        # Handle createdAt as number (timestamp in milliseconds)
+        # Handle createdAt: S (IST ISO string) or N (legacy epoch ms)
         created_at = None
         if "createdAt" in item:
-            if "N" in item["createdAt"]:
+            if "S" in item["createdAt"]:
+                created_at = item["createdAt"]["S"]
+            elif "N" in item["createdAt"]:
                 created_at = int(item["createdAt"]["N"])
-            elif "S" in item["createdAt"]:
-                # Fallback: try to parse ISO string
-                try:
-                    dt = datetime.fromisoformat(item["createdAt"]["S"].replace("Z", "+00:00"))
-                    created_at = int(dt.timestamp() * 1000)
-                except:
-                    created_at = int(time.time() * 1000)
         
         return cls(
             order_id=item.get("orderId", {}).get("S", ""),
@@ -289,14 +284,12 @@ class Order:
         import json
         from utils.dynamodb_helpers import python_to_dynamodb
         
-        # Ensure createdAt is an integer (timestamp in milliseconds)
+        # Normalize createdAt to IST ISO string for storage
         created_at = self.created_at
-        if isinstance(created_at, str):
-            try:
-                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                created_at = int(dt.timestamp() * 1000)
-            except:
-                created_at = int(time.time() * 1000)
+        if isinstance(created_at, int):
+            created_at = epoch_ms_to_ist_iso(created_at)
+        elif not isinstance(created_at, str):
+            created_at = now_ist_iso()
         
         item = {
             "orderId": {"S": self.order_id},
@@ -308,14 +301,13 @@ class Order:
             "platformFee": {"N": str(self.platform_fee)},
             "grandTotal": {"N": str(self.grand_total)},
             "status": {"S": self.status},
-            "createdAt": {"N": str(created_at)},  # Store as number for GSI sorting
-            # Composite sort keys for efficient status filtering
+            "createdAt": {"S": created_at},  # IST ISO string
+            # Composite sort keys for efficient status filtering (ISO sorts correctly)
             "customerStatusCreatedAt": {"S": f"{self.status}#{created_at}"},
             "restaurantStatusCreatedAt": {"S": f"{self.status}#{created_at}"}
         }
         if self.rider_id:
             item["riderId"] = {"S": self.rider_id}
-            # Add rider composite key for efficient status filtering
             item["riderStatusCreatedAt"] = {"S": f"{self.status}#{created_at}"}
         if self.restaurant_name:
             item["restaurantName"] = {"S": self.restaurant_name}

@@ -51,7 +51,7 @@ def register_payment_routes(app):
             
             logger.info(f"[orderId={order_id}] 💳 Initiating payment: {payment_id}, amount: ₹{amount}")
             
-            # ENRICH items with restaurantPrice from DB
+            # ENRICH items with authoritative price from menu (restaurantPrice + hikePercentage -> price)
             from services.menu_service import MenuService
             
             enriched_items = []
@@ -61,13 +61,17 @@ def register_payment_routes(app):
             for item in items:
                 item_id = item.get('itemId')
                 quantity = item.get('quantity', 1)
-                customer_price = float(item.get('price', 0))
-                
                 try:
                     menu_item = MenuService.get_menu_item(restaurant_id, item_id)
-                    restaurant_price = menu_item.restaurant_price if menu_item else customer_price
+                    if menu_item:
+                        customer_price = menu_item.price
+                        restaurant_price = menu_item.restaurant_price
+                    else:
+                        customer_price = 0.0
+                        restaurant_price = 0.0
                 except Exception:
-                    restaurant_price = customer_price
+                    customer_price = 0.0
+                    restaurant_price = 0.0
                 
                 item_customer_total = customer_price * quantity
                 item_restaurant_total = restaurant_price * quantity

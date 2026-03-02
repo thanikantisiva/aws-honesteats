@@ -4,7 +4,7 @@ from botocore.exceptions import ClientError
 from models.rider import Rider
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.geohash import encode as geohash_encode, get_neighbors, get_precision_for_radius
-from datetime import datetime
+from utils.datetime_ist import now_ist_iso
 from aws_lambda_powertools import Logger
 
 logger = Logger()
@@ -21,7 +21,7 @@ def _update_order_with_rider_location(order_id: str, lat: float, lng: float, spe
             'riderCurrentLng': lng,
             'riderSpeed': speed,
             'riderHeading': heading,
-            'riderLocationUpdatedAt': datetime.utcnow().isoformat()
+            'riderLocationUpdatedAt': now_ist_iso()
         })
         logger.info(f"✅ Order {order_id} updated with rider location")
     except Exception as e:
@@ -115,7 +115,7 @@ class RiderService:
         """Update rider location and movement data with geohash and GSI fields"""
         try:
             RiderService._ensure_user_rider_exists(rider_id)
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = now_ist_iso()
             
             # Calculate geohash at all precision levels
             geohash_p7 = geohash_encode(lat, lng, precision=7)
@@ -172,7 +172,7 @@ class RiderService:
         """Toggle rider online/offline status with optional location"""
         try:
             RiderService._ensure_user_rider_exists(rider_id)
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = now_ist_iso()
             
             # If going online and location provided, update location and geohash
             if is_active and lat is not None and lng is not None:

@@ -90,10 +90,12 @@ class MenuService:
                 name_value = updates.get('name') or updates.get('itemName')
                 expression_attribute_values[':itemName'] = {'S': name_value}
             
-            if 'price' in updates:
-                update_expressions.append('#price = :price')
-                expression_attribute_names['#price'] = 'price'
-                expression_attribute_values[':price'] = {'N': str(updates['price'])}
+            if 'restaurantPrice' in updates:
+                update_expressions.append('restaurantPrice = :restaurantPrice')
+                expression_attribute_values[':restaurantPrice'] = {'N': str(updates['restaurantPrice'])}
+            if 'hikePercentage' in updates:
+                update_expressions.append('hikePercentage = :hikePercentage')
+                expression_attribute_values[':hikePercentage'] = {'N': str(updates['hikePercentage'])}
             
             if 'category' in updates:
                 update_expressions.append('#category = :category')

@@ -1,6 +1,6 @@
 """Rider earnings model"""
 from typing import Optional
-from datetime import datetime
+from utils.datetime_ist import now_ist_iso
 
 
 class RiderEarnings:
@@ -34,7 +34,7 @@ class RiderEarnings:
         self.settlement_id = settlement_id
         self.settled = settled
         self.settled_at = settled_at
-        self.created_at = created_at or datetime.utcnow().isoformat()
+        self.created_at = created_at or now_ist_iso()
     
     def to_dict(self) -> dict:
         """Convert to dictionary"""

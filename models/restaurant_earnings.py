@@ -1,6 +1,6 @@
 """Restaurant earnings model"""
 from typing import Optional
-from datetime import datetime
+from utils.datetime_ist import now_ist_iso
 
 
 class RestaurantEarnings:
@@ -26,7 +26,7 @@ class RestaurantEarnings:
         self.settled_at = settled_at
         self.settlement_id = settlement_id
         self.order_id = order_id
-        self.created_at = created_at or datetime.utcnow().isoformat()
+        self.created_at = created_at or now_ist_iso()
 
     def to_dict(self) -> dict:
         return {

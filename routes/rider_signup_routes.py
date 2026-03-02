@@ -10,7 +10,7 @@ from services.rider_service import RiderService
 from models.user import User
 from models.rider import Rider
 from utils.dynamodb import generate_id
-from datetime import datetime
+from utils.datetime_ist import now_ist_iso, now_ist_strftime
 
 logger = Logger()
 tracer = Tracer()
@@ -132,7 +132,7 @@ def register_rider_signup_routes(app):
                 return {"error": f"File size exceeds {max_size_mb}MB limit"}, 400
             
             # Create unique file path
-            timestamp = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+            timestamp = now_ist_strftime('%Y%m%d-%H%M%S')
             file_key = f"riders/{phone}/{document_type}-{timestamp}.jpg"
             
             # Upload to S3
@@ -479,7 +479,7 @@ def register_rider_signup_routes(app):
             UserService.update_user(phone, "RIDER", {
                 'riderStatus': User.RIDER_STATUS_APPROVED,
                 'isActive': True,
-                'approvedAt': datetime.utcnow().isoformat()
+                'approvedAt': now_ist_iso()
             })
             
             # 2. Enable in Riders table (ready for order assignment, but offline by default)

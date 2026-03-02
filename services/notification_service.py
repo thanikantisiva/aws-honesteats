@@ -2,8 +2,8 @@
 import os
 import json
 from typing import Optional
-from datetime import datetime, timezone
 from datetime import timedelta
+from utils.datetime_ist import now_ist_iso
 from aws_lambda_powertools import Logger
 
 logger = Logger()
@@ -203,7 +203,7 @@ class NotificationService:
                 "restaurantName": restaurant_name,
                 "itemName": item_name or "",
                 "itemImageUrl": item_image_url or "",
-                "updatedAt": updated_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "updatedAt": updated_at or now_ist_iso(),
                 "riderId": rider_id or "",
                 "riderName": rider_name or "",
                 "title": title,

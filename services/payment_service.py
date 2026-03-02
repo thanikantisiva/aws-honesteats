@@ -2,6 +2,7 @@
 import razorpay
 from typing import Optional, Dict, Any
 from aws_lambda_powertools import Logger
+from utils.datetime_ist import now_ist_iso
 from botocore.exceptions import ClientError
 from models.payment import Payment
 from utils.dynamodb import dynamodb_client, TABLES
@@ -149,8 +150,7 @@ class PaymentService:
     ) -> Payment:
         """Update payment record"""
         try:
-            import time
-            updates['updatedAt'] = int(time.time() * 1000)
+            updates['updatedAt'] = now_ist_iso()
             
             # Build update expression
             update_expr = "SET "
