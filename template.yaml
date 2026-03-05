@@ -431,7 +431,7 @@ Resources:
                 - !Sub '${RestaurantsTable.Arn}/index/GSI1'
                 - !Sub '${RestaurantsTable.Arn}/index/GSI2'
                 - !Sub '${RestaurantsTable.Arn}/index/GSI3'
-                - !Sub '${PaymentsTable.Arn}/index/customer-phone-createdAt-index'
+                - !Sub '${PaymentsTable.Arn}/index/customer-phone-createdAtIso-index'
                 - !Sub '${RiderEarningsTable.Arn}/index/riderId-date-index'
                 - !Sub '${RestaurantEarningsTable.Arn}/index/restaurantId-date-index'
             - Effect: Allow
@@ -1205,17 +1205,17 @@ Resources:
           AttributeType: S
         - AttributeName: customerPhone
           AttributeType: S
-        - AttributeName: createdAt
-          AttributeType: N
+        - AttributeName: createdAtIso
+          AttributeType: S
       KeySchema:
         - AttributeName: paymentId
           KeyType: HASH
       GlobalSecondaryIndexes:
-        - IndexName: customer-phone-createdAt-index
+        - IndexName: customer-phone-createdAtIso-index
           KeySchema:
             - AttributeName: customerPhone
               KeyType: HASH
-            - AttributeName: createdAt
+            - AttributeName: createdAtIso
               KeyType: RANGE
           Projection:
             ProjectionType: ALL

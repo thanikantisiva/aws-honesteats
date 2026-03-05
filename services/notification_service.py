@@ -88,55 +88,48 @@ class NotificationService:
             string_data = {k: str(v) for k, v in data.items()}
             body_text = (body or "").strip()
 
-            # Detect token type
-            is_apns_token = len(fcm_token) == 64 and all(c in '0123456789abcdef' for c in fcm_token.lower())
             is_order_status_update = string_data.get("type") == "order_status"
 
-            if is_apns_token:
-                logger.info("📱 Detected APNs token (iOS)")
-                message = messaging.Message(
-                    token=fcm_token,
-                    notification=messaging.Notification(title=title, body=body_text),
-                    data=string_data,
-                    apns=messaging.APNSConfig(
-                        headers={'apns-priority': '10'},
-                        payload=messaging.APNSPayload(
-                            aps=messaging.Aps(
-                                alert=messaging.ApsAlert(title=title, body=body_text),
-                                sound='default',
-                                badge=1
-                            )
-                        )
+            # Send both Android and APNS config so FCM delivers correctly to iOS or Android
+            logger.info("📱 Sending FCM message (Android + APNS config)")
+            apns_config = messaging.APNSConfig(
+                headers={'apns-priority': '10'},
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        alert=messaging.ApsAlert(title=title, body=body_text),
+                        sound='default',
+                        badge=1
                     )
                 )
+            )
+            if is_order_status_update:
+                message = messaging.Message(
+                    token=fcm_token,
+                    data=string_data,
+                    android=messaging.AndroidConfig(
+                        priority="high",
+                        collapse_key=string_data.get("orderId"),
+                        ttl=timedelta(seconds=2419200)
+                    ),
+                    apns=apns_config
+                )
             else:
-                logger.info("📱 Detected FCM token (Android)")
-                if is_order_status_update:
-                    # Data-only message for Android order updates
-                    message = messaging.Message(
-                        token=fcm_token,
-                        data=string_data,
-                        android=messaging.AndroidConfig(
-                            priority="high",
-                            collapse_key=string_data.get("orderId"),
-                            ttl=timedelta(seconds=2419200)
+                message = messaging.Message(
+                    token=fcm_token,
+                    data=string_data,
+                    notification=messaging.Notification(title=title, body=body_text),
+                    android=messaging.AndroidConfig(
+                        priority="high",
+                        notification=messaging.AndroidNotification(
+                            title=title,
+                            body=body_text,
+                            sound="default",
+                            color="#EF4444"
                         )
-                    )
-                else:
-                    message = messaging.Message(
-                        token=fcm_token,
-                        data=string_data,
-                        android=messaging.AndroidConfig(
-                            priority="high",
-                            notification=messaging.AndroidNotification(
-                                title=title,
-                                body=body_text,
-                                sound="default",
-                                color="#EF4444"
-                            )
-                        )
-                    )
-            
+                    ),
+                    apns=apns_config
+                )
+
             logger.info(f"📤 Sending Firebase message to token: {fcm_token[:20]}...")
             response = messaging.send(message)
             logger.info(f"✅ Firebase notification sent successfully: {response}")

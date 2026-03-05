@@ -17,7 +17,7 @@ class Payment:
     METHOD_CARD = "CARD"
     METHOD_WALLET = "WALLET"
     METHOD_NETBANKING = "NETBANKING"
-    
+
     def __init__(
         self,
         payment_id: str,
@@ -79,13 +79,25 @@ class Payment:
         }
     
     def to_dynamodb_item(self) -> dict:
-        """Convert to DynamoDB item format (createdAt/updatedAt as IST ISO string)."""
+        """Convert to DynamoDB item format.
+
+        Current representation:
+        - createdAt (S): IST ISO string
+        - createdAtIso (S): new index key
+        - updatedAt (S): IST ISO string
+        """
         created_at = self.created_at
         updated_at = self.updated_at
         if isinstance(created_at, int):
-            created_at = epoch_ms_to_ist_iso(created_at)
+            created_at_iso = epoch_ms_to_ist_iso(created_at)
+        else:
+            created_at_iso = str(created_at)
+
         if isinstance(updated_at, int):
-            updated_at = epoch_ms_to_ist_iso(updated_at)
+            updated_at_iso = epoch_ms_to_ist_iso(updated_at)
+        else:
+            updated_at_iso = str(updated_at)
+
         item = {
             'paymentId': {'S': self.payment_id},
             'customerPhone': {'S': self.customer_phone},
@@ -93,8 +105,9 @@ class Payment:
             'restaurantName': {'S': self.restaurant_name},
             'amount': {'N': str(self.amount)},
             'paymentStatus': {'S': self.payment_status},
-            'createdAt': {'S': created_at},
-            'updatedAt': {'S': updated_at}
+            'createdAt': {'S': created_at_iso},
+            'createdAtIso': {'S': created_at_iso},
+            'updatedAt': {'S': updated_at_iso}
         }
         
         if self.razorpay_order_id:
@@ -123,8 +136,18 @@ class Payment:
     def from_dynamodb_item(item: dict) -> 'Payment':
         """Create Payment from DynamoDB item (accepts createdAt/updatedAt as S or legacy N)."""
         raw_ca = item.get('createdAt', {})
+        raw_ca_iso = item.get('createdAtIso', {})
         raw_ua = item.get('updatedAt', {})
-        created_at = raw_ca.get('S') if 'S' in raw_ca else (int(float(raw_ca['N'])) if 'N' in raw_ca else now_ist_iso())
+
+        if 'S' in raw_ca_iso:
+            created_at = raw_ca_iso.get('S')
+        elif 'S' in raw_ca:
+            created_at = raw_ca.get('S')
+        elif 'N' in raw_ca:
+            created_at = int(float(raw_ca['N']))
+        else:
+            created_at = now_ist_iso()
+
         updated_at = raw_ua.get('S') if 'S' in raw_ua else (int(float(raw_ua['N'])) if 'N' in raw_ua else created_at)
         return Payment(
             payment_id=item['paymentId']['S'],
@@ -144,4 +167,3 @@ class Payment:
             created_at=created_at,
             updated_at=updated_at
         )
-

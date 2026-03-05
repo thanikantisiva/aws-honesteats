@@ -190,23 +190,23 @@ class PaymentService:
     
     @staticmethod
     def list_payments_by_customer(customer_phone: str, limit: int = 20):
-        """List payments for a customer"""
+        """List payments for a customer."""
         try:
             response = dynamodb_client.query(
                 TableName=TABLES['PAYMENTS'],
-                IndexName='customer-phone-createdAt-index',
+                IndexName='customer-phone-createdAtIso-index',
                 KeyConditionExpression='customerPhone = :phone',
                 ExpressionAttributeValues={
                     ':phone': {'S': customer_phone}
                 },
                 Limit=limit,
-                ScanIndexForward=False  # Latest first
+                ScanIndexForward=False
             )
-            
+
             payments = []
             for item in response.get('Items', []):
                 payments.append(Payment.from_dynamodb_item(item))
-            
+
             return payments
         except ClientError as e:
             logger.error(f"Failed to list payments: {str(e)}")

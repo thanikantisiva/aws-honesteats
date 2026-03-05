@@ -48,7 +48,8 @@ PUBLIC_ROUTES = [
     "/api/v1/status",
     "/api/v1/images/by-path",
     "/api/v1/images/upload",
-    "/api/v1/ratings"
+    "/api/v1/ratings",
+    "/api/v1/globalconfig"
 ]
 
 # Retool bypass header and secret value.
