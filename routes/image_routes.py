@@ -293,7 +293,8 @@ def register_image_routes(app):
             elif entity == "ITEM":
                 base_prefix = f"restaurant-images/{restaurant_id}/{item_id}"
             else:
-                base_prefix = "subcategory"
+                # Keep under restaurant-images/* so CloudFront behavior routes to RestaurantImagesOrigin.
+                base_prefix = "restaurant-images/subcategory"
 
             uploaded = []
             now = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
