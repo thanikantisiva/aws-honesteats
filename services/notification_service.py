@@ -90,13 +90,27 @@ class NotificationService:
 
             is_order_status_update = string_data.get("type") == "order_status"
 
+            # iOS: ensure distinct title and body so notification shows two lines (title bold, body below)
+            if body_text:
+                ios_alert_title = title
+                ios_alert_body = body_text
+            else:
+                # No body passed (e.g. order status): split title on " : " or use full as body
+                if " : " in title:
+                    ios_alert_title, _, ios_alert_body = title.partition(" : ")
+                elif ": " in title:
+                    ios_alert_title, _, ios_alert_body = title.partition(": ")
+                else:
+                    ios_alert_title = "Order Update"
+                    ios_alert_body = title
+
             # Send both Android and APNS config so FCM delivers correctly to iOS or Android
             logger.info("📱 Sending FCM message (Android + APNS config)")
             apns_config = messaging.APNSConfig(
                 headers={'apns-priority': '10'},
                 payload=messaging.APNSPayload(
                     aps=messaging.Aps(
-                        alert=messaging.ApsAlert(title=title, body=body_text),
+                        alert=messaging.ApsAlert(title=ios_alert_title, body=ios_alert_body),
                         sound='default',
                         badge=1
                     )

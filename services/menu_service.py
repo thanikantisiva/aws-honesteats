@@ -101,6 +101,11 @@ class MenuService:
                 update_expressions.append('#category = :category')
                 expression_attribute_names['#category'] = 'category'
                 expression_attribute_values[':category'] = {'S': updates['category']}
+
+            if 'subCategory' in updates:
+                update_expressions.append('#subCategory = :subCategory')
+                expression_attribute_names['#subCategory'] = 'subCategory'
+                expression_attribute_values[':subCategory'] = {'S': updates['subCategory']}
             
             if 'isVeg' in updates:
                 update_expressions.append('#isVeg = :isVeg')

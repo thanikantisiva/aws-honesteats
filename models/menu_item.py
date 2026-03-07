@@ -32,7 +32,8 @@ class MenuItem:
         is_available: bool = True,
         is_veg: Optional[bool] = None,
         description: Optional[str] = None,
-        image: Optional[Union[str, List[str]]] = None
+        image: Optional[Union[str, List[str]]] = None,
+        sub_category: Optional[str] = None
     ):
         self.restaurant_id = restaurant_id
         self.item_id = item_id
@@ -40,6 +41,7 @@ class MenuItem:
         self.restaurant_price = float(restaurant_price)
         self.hike_percentage = float(hike_percentage) if hike_percentage is not None else 0.0
         self.category = category
+        self.sub_category = sub_category
         self.is_available = is_available
         self.is_veg = is_veg
         self.description = description
@@ -74,6 +76,8 @@ class MenuItem:
         }
         if self.category:
             result["category"] = self.category
+        if self.sub_category:
+            result["subCategory"] = self.sub_category
         if self.is_veg is not None:
             result["isVeg"] = self.is_veg
         if self.description:
@@ -109,6 +113,7 @@ class MenuItem:
             restaurant_price=restaurant_price,
             hike_percentage=hike_percentage,
             category=item.get("category", {}).get("S") if "category" in item else None,
+            sub_category=item.get("subCategory", {}).get("S") if "subCategory" in item else None,
             is_available=item.get("isAvailable", {}).get("BOOL", True) if "isAvailable" in item else True,
             is_veg=item.get("isVeg", {}).get("BOOL") if "isVeg" in item else None,
             description=item.get("description", {}).get("S") if "description" in item else None,
@@ -128,6 +133,8 @@ class MenuItem:
         }
         if self.category:
             item["category"] = {"S": self.category}
+        if self.sub_category:
+            item["subCategory"] = {"S": self.sub_category}
         if self.is_veg is not None:
             item["isVeg"] = {"BOOL": self.is_veg}
         if self.description:

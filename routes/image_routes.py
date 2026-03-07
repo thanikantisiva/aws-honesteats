@@ -265,7 +265,7 @@ def register_image_routes(app):
         Request body:
         {
           "listBase64": ["data:image/jpeg;base64,..."],
-          "entity": "RESTAURANT" | "ITEM",
+          "entity": "RESTAURANT" | "ITEM" | "SUBCATEGORY",
           "restaurantId": "RES-...",
           "itemId": "ITEM-..."  # required for ITEM
         }
@@ -281,17 +281,19 @@ def register_image_routes(app):
 
             if not isinstance(list_base64, list) or len(list_base64) == 0:
                 return {"error": "listBase64 must be a non-empty array"}, 400
-            if entity not in ("RESTAURANT", "ITEM"):
-                return {"error": "entity must be RESTAURANT or ITEM"}, 400
-            if not restaurant_id:
+            if entity not in ("RESTAURANT", "ITEM", "SUBCATEGORY"):
+                return {"error": "entity must be RESTAURANT, ITEM, or SUBCATEGORY"}, 400
+            if entity in ("RESTAURANT", "ITEM") and not restaurant_id:
                 return {"error": "restaurantId is required"}, 400
             if entity == "ITEM" and not item_id:
                 return {"error": "itemId is required for ITEM entity"}, 400
 
             if entity == "RESTAURANT":
                 base_prefix = f"restaurant-images/{restaurant_id}"
-            else:
+            elif entity == "ITEM":
                 base_prefix = f"restaurant-images/{restaurant_id}/{item_id}"
+            else:
+                base_prefix = "subcategory"
 
             uploaded = []
             now = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
@@ -317,7 +319,7 @@ def register_image_routes(app):
             return {
                 "bucket": RESTAURANT_IMAGES_BUCKET,
                 "entity": entity,
-                "restaurantId": restaurant_id,
+                "restaurantId": restaurant_id if entity in ("RESTAURANT", "ITEM") else None,
                 "itemId": item_id if entity == "ITEM" else None,
                 "total": len(uploaded),
                 "images": uploaded

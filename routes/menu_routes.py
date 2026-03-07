@@ -59,6 +59,7 @@ def register_menu_routes(app):
             restaurant_price = body.get('restaurantPrice')
             hike_percentage = body.get('hikePercentage', 0)
             category = body.get('category')
+            sub_category = body.get('subCategory')
             
             if not name or restaurant_price is None:
                 return {"error": "Name and restaurantPrice are required"}, 400
@@ -75,6 +76,7 @@ def register_menu_routes(app):
                 restaurant_price=restaurant_price,
                 hike_percentage=hike_percentage,
                 category=category,
+                sub_category=sub_category,
                 is_veg=body.get('isVeg'),
                 is_available=body.get('isAvailable', True),
                 description=body.get('description'),
@@ -109,6 +111,8 @@ def register_menu_routes(app):
                 updates['hikePercentage'] = float(body['hikePercentage'])
             if 'category' in body:
                 updates['category'] = body['category']
+            if 'subCategory' in body:
+                updates['subCategory'] = body['subCategory']
             if 'isVeg' in body:
                 updates['isVeg'] = body['isVeg']
             if 'isAvailable' in body:
@@ -144,4 +148,3 @@ def register_menu_routes(app):
         except Exception as e:
             logger.error("Error deleting menu item", exc_info=True)
             return {"error": "Failed to delete menu item", "message": str(e)}, 500
-
