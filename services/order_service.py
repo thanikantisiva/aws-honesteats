@@ -307,6 +307,14 @@ class OrderService:
                 ExpressionAttributeNames=expression_attribute_names,
                 ExpressionAttributeValues=expression_attribute_values
             )
+
+            # Startup-friendly aggregation: keep orderedCount only on menu item row.
+            if status == Order.STATUS_DELIVERED and order.status != Order.STATUS_DELIVERED:
+                try:
+                    from services.menu_service import MenuService
+                    MenuService.increment_ordered_count(order.restaurant_id, order.items)
+                except Exception as e:
+                    logger.error(f"[orderId={order_id}] Failed to increment orderedCount on menu items: {str(e)}")
             
             logger.info(f"[orderId={order_id}] Status update complete")
             return OrderService.get_order(order_id)

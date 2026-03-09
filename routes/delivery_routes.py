@@ -1,65 +1,159 @@
 """Delivery fee calculation routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from utils.dynamodb import dynamodb_client, TABLES
+from utils.dynamodb_helpers import dynamodb_to_python
+from datetime import datetime, timezone
 
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
 
+CONFIG_PK = "CONFIG#GLOBAL"
+CONFIG_SK = "CONFIG"
+REQUIRED_CONFIG_KEYS = [
+    "platformFee",
+    "riderBaseFare",
+    "riderFarePerKm",
+    "riderFreeDeliveryBelowKm",
+    "riderSurgePricePerKm",
+    "riderSurgeChargeAfterKms",
+    "freeDeliveryAboveThreshold",
+]
 
-def calculate_delivery_fee(distance_km: float, item_count: int, item_total: float) -> dict:
-    """
-    Calculate delivery fee based on distance, items, and order value
-    
-    Pricing Logic:
-    - Base fee: ₹12 per km, minimum ₹60
-    - Free delivery if order > ₹500
-    - Handling fee: ₹10 for every 5 items
-    - Surge pricing for long distance (>10km): +20%
-    
-    Args:
-        distance_km: Distance from restaurant to delivery address
-        item_count: Number of items in cart
-        item_total: Total value of items
-    
-    Returns:
-        dict with deliveryFee, breakdown, and discount info
-    """
-    # Base delivery fee: ₹12/km, minimum ₹60
-    base_fee = max(30, int(distance_km * 10))
-    
-    # Handling fee: ₹10 for every 5 items (bulk order handling)
-    handling_fee = (item_count // 5) * 10
-    
-    # Surge pricing for long distance (>10km): +20%
-    surge_fee = 0
-    if distance_km > 10:
-        surge_fee = int(base_fee * 0.2)
-        logger.info(f"⚡ Surge pricing applied: +₹{surge_fee} (distance > 10km)")
-    
-    # Calculate total before discounts
-    total_before_discount = base_fee + handling_fee + surge_fee
-    
-    # Free delivery discount if order value >= ₹500
-    discount = 0
-    final_fee = total_before_discount
-    
-    if item_total >= 500:
-        discount = total_before_discount
-        logger.info(f"🎉 FREE DELIVERY applied (order ₹{item_total} >= ₹500)")
-    
-    return {
-        'deliveryFee': final_fee,
-        'breakdown': {
-            'baseFee': base_fee,
-            'handlingFee': handling_fee,
-            'surgeFee': surge_fee,
-            'discount': discount
+def _to_float(value):
+    """Safely parse numeric values from config payload."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fetch_global_delivery_config():
+    """Fetch and validate global delivery fee config from config table."""
+    response = dynamodb_client.get_item(
+        TableName=TABLES["CONFIG"],
+        Key={
+            "partitionkey": {"S": CONFIG_PK},
+            "sortKey": {"S": CONFIG_SK},
         },
-        'freeDeliveryThreshold': 500,
-        'isFreeDelivery': final_fee == 0,
-        'distance': distance_km
+    )
+    item = response.get("Item")
+    if not item:
+        return None, REQUIRED_CONFIG_KEYS.copy()
+
+    config_payload = dynamodb_to_python(item.get("config", {"NULL": True}))
+    if not isinstance(config_payload, dict):
+        return None, REQUIRED_CONFIG_KEYS.copy()
+
+    parsed_config = {}
+    missing_keys = []
+    for key in REQUIRED_CONFIG_KEYS:
+        parsed = _to_float(config_payload.get(key))
+        if parsed is None:
+            missing_keys.append(key)
+        else:
+            parsed_config[key] = parsed
+
+    if missing_keys:
+        return None, missing_keys
+    return parsed_config, []
+
+
+def _build_safe_zero_response(distance_km: float, missing_keys):
+    """Return a safe response when config is missing/invalid."""
+    return {
+        "deliveryFee": 0.0,
+        "platformFee": 0.0,
+        "breakdown": {
+            "baseFee": 0.0,
+            "distanceFee": 0.0,
+            "surgeFee": 0.0,
+            "discount": 0.0,
+            "couponDiscount": 0.0,
+        },
+        "freeDeliveryThreshold": 0.0,
+        "isFreeDelivery": False,
+        "distance": round(distance_km, 2),
+        "couponApplied": False,
+        "configMissing": True,
+        "missingKeys": missing_keys,
     }
+
+
+def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) -> dict:
+    """Calculate delivery fee using dynamic global config."""
+    chargeable_km = max(0.0, distance_km - config["riderFreeDeliveryBelowKm"])
+    normal_km = min(chargeable_km, config["riderSurgeChargeAfterKms"])
+    surge_km = max(0.0, chargeable_km - config["riderSurgeChargeAfterKms"])
+
+    base_fee = config["riderBaseFare"]
+    distance_fee = normal_km * config["riderFarePerKm"]
+    surge_fee = surge_km * config["riderSurgePricePerKm"]
+    calculated_delivery_fee = base_fee + distance_fee + surge_fee
+
+    free_delivery_threshold = config["freeDeliveryAboveThreshold"]
+    is_free_delivery = item_total >= free_delivery_threshold
+    final_delivery_fee = 0.0 if is_free_delivery else calculated_delivery_fee
+
+    logger.info(
+        "Calculated delivery km split: "
+        f"distanceKm={distance_km}, chargeableKm={chargeable_km}, "
+        f"normalKm={normal_km}, surgeKm={surge_km}"
+    )
+    logger.info(
+        "Free delivery evaluation: "
+        f"itemTotal={item_total}, freeDeliveryAboveThreshold={free_delivery_threshold}, "
+        f"isFreeDelivery={is_free_delivery}"
+    )
+
+    return {
+        "deliveryFee": round(final_delivery_fee, 2),
+        "platformFee": round(config["platformFee"], 2),
+        "breakdown": {
+            "baseFee": round(base_fee, 2),
+            "distanceFee": round(distance_fee, 2),
+            "surgeFee": round(surge_fee, 2),
+            "discount": 0.0,
+            "couponDiscount": 0.0,
+        },
+        "freeDeliveryThreshold": round(free_delivery_threshold, 2),
+        "isFreeDelivery": is_free_delivery,
+        "distance": round(distance_km, 2),
+    }
+
+
+def _parse_iso_or_date(value: str):
+    """Parse date strings in YYYY-MM-DD or ISO datetime format."""
+    if not value:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        # Handles YYYY-MM-DD directly
+        if len(value) == 10 and value[4] == "-" and value[7] == "-":
+            return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        # Handles ISO formats with/without Z
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _is_coupon_active(start_date: str, end_date: str) -> bool:
+    """Validate coupon active window if start/end are provided."""
+    now = datetime.now(timezone.utc)
+    parsed_start = _parse_iso_or_date(start_date) if start_date else None
+    parsed_end = _parse_iso_or_date(end_date) if end_date else None
+
+    if parsed_start and now < parsed_start:
+        return False
+    if parsed_end and now > parsed_end:
+        return False
+    return True
 
 
 def register_delivery_routes(app):
@@ -70,26 +164,51 @@ def register_delivery_routes(app):
     def calculate_fee():
         """Calculate delivery fee based on distance, items, and total"""
         try:
-            body = app.current_event.json_body
+            body = app.current_event.json_body or {}
             distance_km = body.get('distanceKm')
-            item_count = body.get('itemCount')
             item_total = body.get('itemTotal')
+            item_count = body.get('itemCount')  # Accepted for backward compatibility
             coupon_code = body.get('couponCode')
-            
-            if distance_km is None or item_count is None or item_total is None:
+
+            if distance_km is None or item_total is None:
                 return {
-                    "error": "distanceKm, itemCount, and itemTotal are required"
+                    "error": "distanceKm and itemTotal are required"
                 }, 400
-            
-            logger.info(f"📦 Delivery fee request: {distance_km}km, {item_count} items, ₹{item_total}")
-            
-            result = calculate_delivery_fee(
-                float(distance_km),
-                int(item_count),
-                float(item_total)
+
+            distance_km = float(distance_km)
+            item_total = float(item_total)
+            logger.info(
+                "Delivery fee request received: "
+                f"distanceKm={distance_km}, itemTotal={item_total}, "
+                f"itemCount={item_count}, couponCode={coupon_code}"
             )
 
-            # Apply coupon discount on delivery fee if provided
+            config, missing_keys = _fetch_global_delivery_config()
+            if not config:
+                logger.warning(
+                    "Global delivery config missing or invalid for calculate-fee: "
+                    f"missingKeys={missing_keys}"
+                )
+                metrics.add_metric(name="DeliveryFeeConfigMissing", unit="Count", value=1)
+                return _build_safe_zero_response(distance_km, missing_keys), 200
+
+            logger.info(
+                "Global delivery config loaded: "
+                f"platformFee={config['platformFee']}, riderBaseFare={config['riderBaseFare']}, "
+                f"riderFarePerKm={config['riderFarePerKm']}, "
+                f"riderFreeDeliveryBelowKm={config['riderFreeDeliveryBelowKm']}, "
+                f"riderSurgePricePerKm={config['riderSurgePricePerKm']}, "
+                f"riderSurgeChargeAfterKms={config['riderSurgeChargeAfterKms']}, "
+                f"freeDeliveryAboveThreshold={config['freeDeliveryAboveThreshold']}"
+            )
+
+            result = calculate_delivery_fee(
+                distance_km=distance_km,
+                item_total=item_total,
+                config=config
+            )
+
+            # Coupon is informational only: discount is reported but deliveryFee is unchanged.
             coupon_applied = False
             if coupon_code:
                 try:
@@ -107,16 +226,7 @@ def register_delivery_routes(app):
                         start_date = item.get('startDate', {}).get('S')
                         end_date = item.get('endDate', {}).get('S')
 
-                        # Validate coupon date range if present (YYYY-MM-DD)
-                        if start_date or end_date:
-                            from datetime import datetime
-                            today_str = datetime.utcnow().strftime('%Y-%m-%d')
-                            if start_date and today_str < start_date:
-                                coupon_type = None
-                            if end_date and today_str > end_date:
-                                coupon_type = None
-
-                        if coupon_type and coupon_value:
+                        if coupon_type and coupon_value and _is_coupon_active(start_date, end_date):
                             coupon_value = float(coupon_value)
                             delivery_fee = result['deliveryFee']
                             coupon_discount = 0.0
@@ -126,26 +236,50 @@ def register_delivery_routes(app):
                             elif coupon_type.lower() == 'fixed':
                                 coupon_discount = coupon_value
 
-                            coupon_discount = max(0.0, min(coupon_discount, delivery_fee))
+
                             # Do not reduce deliveryFee; only report coupon discount
                             result['breakdown']['couponDiscount'] = round(coupon_discount, 2)
                             result['breakdown']['discount'] = round(
                                 result['breakdown'].get('discount', 0) + coupon_discount, 2
                             )
                             coupon_applied = coupon_discount > 0
+                            logger.info(
+                                "Coupon evaluated successfully for calculate-fee: "
+                                f"couponCode={coupon_code}, couponType={coupon_type}, "
+                                f"couponValue={coupon_value}, couponDiscount={coupon_discount}, "
+                                f"deliveryFeeUnchanged={result['deliveryFee']}"
+                            )
+                        else:
+                            logger.info(
+                                "Coupon not applied for calculate-fee: "
+                                f"couponCode={coupon_code}, reason=inactive_or_invalid"
+                            )
+                    else:
+                        logger.info(
+                            "Coupon not found for calculate-fee: "
+                            f"couponCode={coupon_code}"
+                        )
                 except Exception as e:
                     logger.error(f"Error applying coupon {coupon_code}: {str(e)}")
 
             result['couponApplied'] = coupon_applied
-            
-            logger.info(f"💰 Calculated delivery fee: ₹{result['deliveryFee']}")
-            
+
+            logger.info(
+                "Delivery fee calculation completed: "
+                f"deliveryFee={result['deliveryFee']}, platformFee={result['platformFee']}, "
+                f"isFreeDelivery={result['isFreeDelivery']}, couponApplied={coupon_applied}"
+            )
+
             metrics.add_metric(name="DeliveryFeeCalculated", unit="Count", value=1)
             if result['isFreeDelivery']:
                 metrics.add_metric(name="FreeDeliveryApplied", unit="Count", value=1)
-            
+
             return result, 200
-            
+
+        except ValueError:
+            return {
+                "error": "distanceKm and itemTotal must be numeric values"
+            }, 400
         except Exception as e:
             logger.error("Error calculating delivery fee", exc_info=True)
             metrics.add_metric(name="DeliveryFeeCalculationFailed", unit="Count", value=1)

@@ -33,7 +33,8 @@ class MenuItem:
         is_veg: Optional[bool] = None,
         description: Optional[str] = None,
         image: Optional[Union[str, List[str]]] = None,
-        sub_category: Optional[str] = None
+        sub_category: Optional[str] = None,
+        ordered_count: int = 0
     ):
         self.restaurant_id = restaurant_id
         self.item_id = item_id
@@ -46,6 +47,7 @@ class MenuItem:
         self.is_veg = is_veg
         self.description = description
         self.image = self._normalize_image_list(image)
+        self.ordered_count = int(ordered_count or 0)
 
     @property
     def price(self) -> float:
@@ -72,7 +74,8 @@ class MenuItem:
             "price": self.price,
             "restaurantPrice": self.restaurant_price,
             "hikePercentage": self.hike_percentage,
-            "isAvailable": self.is_available
+            "isAvailable": self.is_available,
+            "orderedCount": self.ordered_count
         }
         if self.category:
             result["category"] = self.category
@@ -117,7 +120,8 @@ class MenuItem:
             is_available=item.get("isAvailable", {}).get("BOOL", True) if "isAvailable" in item else True,
             is_veg=item.get("isVeg", {}).get("BOOL") if "isVeg" in item else None,
             description=item.get("description", {}).get("S") if "description" in item else None,
-            image=image
+            image=image,
+            ordered_count=int(float(item.get("orderedCount", {}).get("N", "0"))) if "orderedCount" in item else 0
         )
 
     def to_dynamodb_item(self) -> dict:
@@ -141,4 +145,5 @@ class MenuItem:
             item["description"] = {"S": self.description}
         if self.image:
             item["image"] = {"L": [{"S": img} for img in self.image]}
+        item["orderedCount"] = {"N": str(self.ordered_count)}
         return item

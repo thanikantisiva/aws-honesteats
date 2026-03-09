@@ -3,6 +3,9 @@ from typing import List, Optional
 from botocore.exceptions import ClientError
 from models.menu_item import MenuItem
 from utils.dynamodb import dynamodb_client, TABLES
+from aws_lambda_powertools import Logger
+
+logger = Logger()
 
 
 class MenuService:
@@ -164,3 +167,41 @@ class MenuService:
             )
         except ClientError as e:
             raise Exception(f"Failed to delete menu item: {str(e)}")
+
+    @staticmethod
+    def increment_ordered_count(restaurant_id: str, items: List[dict]) -> None:
+        """Increment orderedCount for each delivered order item."""
+        if not items:
+            return
+
+        # Merge increments by itemId to avoid multiple updates for same item in one order.
+        increments = {}
+        for item in items:
+            item_id = item.get("itemId")
+            if not item_id:
+                continue
+            quantity = item.get("quantity", 1)
+            try:
+                quantity = int(quantity)
+            except (TypeError, ValueError):
+                quantity = 1
+            if quantity < 1:
+                quantity = 1
+            increments[item_id] = increments.get(item_id, 0) + quantity
+
+        for item_id, qty in increments.items():
+            try:
+                dynamodb_client.update_item(
+                    TableName=TABLES["MENU_ITEMS"],
+                    Key={
+                        "PK": {"S": f"RESTAURANT#{restaurant_id}"},
+                        "SK": {"S": f"ITEM#{item_id}"}
+                    },
+                    UpdateExpression="ADD orderedCount :inc",
+                    ExpressionAttributeValues={
+                        ":inc": {"N": str(qty)}
+                    }
+                )
+                logger.info(f"Incremented orderedCount for restaurantId={restaurant_id} itemId={item_id} by {qty}")
+            except ClientError as e:
+                logger.error(f"Failed increment orderedCount for itemId={item_id}: {str(e)}")
