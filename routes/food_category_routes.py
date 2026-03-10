@@ -29,9 +29,15 @@ def _parse_db_item(item: dict) -> dict:
         "category": item.get("category", {}).get("S", ""),
         "subCategory": item.get("subCategory", {}).get("S", ""),
         "imageUrl": item.get("imageUrl", {}).get("S", ""),
+        "isDisplayItem": item.get("isDisplayItem", {}).get("S", ""),
         "createdAt": item.get("createdAt", {}).get("S"),
         "updatedAt": item.get("updatedAt", {}).get("S"),
     }
+
+def _coerce_text(value, default=""):
+    if value is None:
+        return default
+    return str(value).strip()
 
 
 def register_food_category_routes(app):
@@ -46,6 +52,7 @@ def register_food_category_routes(app):
             category = body.get("category")
             sub_category = body.get("subCategory")
             image_url = body.get("imageUrl")
+            is_display_item = _coerce_text(body.get("isDisplayItem"), default="true")
 
             if not category or not sub_category or not image_url:
                 return {"error": "category, subCategory, imageUrl are required"}, 400
@@ -71,6 +78,7 @@ def register_food_category_routes(app):
                     "category": {"S": str(category).strip()},
                     "subCategory": {"S": str(sub_category).strip()},
                     "imageUrl": {"S": str(image_url).strip()},
+                    "isDisplayItem": {"S": is_display_item},
                     "createdAt": {"S": created_at},
                     "updatedAt": {"S": now},
                 },
@@ -137,6 +145,30 @@ def register_food_category_routes(app):
             logger.error("Error listing food categories", exc_info=True)
             return {"error": "Failed to list food categories", "message": str(e)}, 500
 
+    @app.get("/api/v1/food-categories/display")
+    @tracer.capture_method
+    def list_display_food_categories():
+        """List categories using isDisplayItem GSI. Defaults to true."""
+        try:
+            query_params = app.current_event.query_string_parameters or {}
+            display_value = _coerce_text(query_params.get("isDisplayItem"), default="true")
+
+            response = dynamodb_client.query(
+                TableName=TABLES["CONFIG"],
+                IndexName="isDisplayItem-index",
+                KeyConditionExpression="isDisplayItem = :display",
+                ExpressionAttributeValues={
+                    ":display": {"S": display_value},
+                },
+            )
+            rows = response.get("Items", [])
+            data = [_parse_db_item(item) for item in rows]
+            metrics.add_metric(name="FoodCategoriesDisplayListed", unit="Count", value=1)
+            return data, 200
+        except Exception as e:
+            logger.error("Error listing display food categories", exc_info=True)
+            return {"error": "Failed to list display food categories", "message": str(e)}, 500
+
     @app.get("/api/v1/food-categories/<category>/<sub_category>")
     @tracer.capture_method
     def get_food_category(category: str, sub_category: str):
@@ -169,6 +201,7 @@ def register_food_category_routes(app):
             new_category = body.get("category", category)
             new_sub_category = body.get("subCategory", sub_category)
             image_url = body.get("imageUrl")
+            is_display_item = body.get("isDisplayItem")
 
             old_sort_key = _build_sort_key(category, sub_category)
             get_response = dynamodb_client.get_item(
@@ -185,6 +218,10 @@ def register_food_category_routes(app):
             new_sort_key = _build_sort_key(new_category, new_sub_category)
             now = now_ist_iso()
             final_image = image_url if image_url is not None else old_item.get("imageUrl", {}).get("S", "")
+            final_display = _coerce_text(
+                is_display_item,
+                default=old_item.get("isDisplayItem", {}).get("S", "true")
+            )
 
             dynamodb_client.put_item(
                 TableName=TABLES["CONFIG"],
@@ -194,6 +231,7 @@ def register_food_category_routes(app):
                     "category": {"S": str(new_category).strip()},
                     "subCategory": {"S": str(new_sub_category).strip()},
                     "imageUrl": {"S": str(final_image).strip()},
+                    "isDisplayItem": {"S": final_display},
                     "createdAt": {"S": old_item.get("createdAt", {}).get("S", now)},
                     "updatedAt": {"S": now},
                 },

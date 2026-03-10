@@ -392,7 +392,8 @@ class RestaurantService:
                     rating=updates.get('rating', existing_restaurant.rating),
                     rated_count=existing_restaurant.rated_count,
                     owner_id=updates.get('ownerId', existing_restaurant.owner_id),
-                    restaurant_image=updates.get('restaurantImage', existing_restaurant.restaurant_image)
+                    restaurant_image=updates.get('restaurantImage', existing_restaurant.restaurant_image),
+                    closes_at=updates.get('closesAt', existing_restaurant.closes_at)
                 )
                 
                 logger.info(f"   Creating new entry with geohash: {updated_restaurant.geohash}")
@@ -465,6 +466,11 @@ class RestaurantService:
                 update_expressions.append('#ownerId = :ownerId')
                 expression_attribute_names['#ownerId'] = 'ownerId'
                 expression_attribute_values[':ownerId'] = {'S': updates['ownerId']}
+
+            if 'closesAt' in updates and updates['closesAt'] != existing_restaurant.closes_at:
+                update_expressions.append('#closesAt = :closesAt')
+                expression_attribute_names['#closesAt'] = 'closesAt'
+                expression_attribute_values[':closesAt'] = {'S': updates['closesAt']}
             
             if not update_expressions:
                 logger.info("No changes detected, returning existing restaurant")

@@ -97,6 +97,27 @@ def register_restaurant_routes(app):
         except Exception as e:
             logger.error("Error getting restaurant", exc_info=True)
             return {"error": "Failed to get restaurant", "message": str(e)}, 500
+
+    @app.get("/api/v1/restaurants/<restaurant_id>/status")
+    @tracer.capture_method
+    def get_restaurant_status(restaurant_id: str):
+        """Get live status for a restaurant"""
+        try:
+            logger.info(f"Getting restaurant status: {restaurant_id}")
+            restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+
+            if not restaurant:
+                return {"error": "Restaurant not found"}, 404
+
+            metrics.add_metric(name="RestaurantStatusRetrieved", unit="Count", value=1)
+            return {
+                "restaurantId": restaurant_id,
+                "isOpen": restaurant.is_open,
+                "closesAt": restaurant.closes_at
+            }, 200
+        except Exception as e:
+            logger.error("Error getting restaurant status", exc_info=True)
+            return {"error": "Failed to get restaurant status", "message": str(e)}, 500
     
     @app.post("/api/v1/restaurants")
     @tracer.capture_method
@@ -237,6 +258,8 @@ def register_restaurant_routes(app):
                 updates['rating'] = float(body['rating'])
             if 'ownerId' in body:
                 updates['ownerId'] = body['ownerId']
+            if 'closesAt' in body:
+                updates['closesAt'] = body['closesAt']
             
             if not updates:
                 return {"error": "No fields to update"}, 400

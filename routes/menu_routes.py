@@ -3,7 +3,7 @@ from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.menu_service import MenuService
 from services.restaurant_service import RestaurantService
 from models.menu_item import MenuItem
-from utils.dynamodb import generate_id
+from utils.dynamodb import generate_id, dynamodb_client, TABLES
 from config.pricing import get_platform_commission
 
 logger = Logger()
@@ -13,7 +13,31 @@ metrics = Metrics()
 
 def register_menu_routes(app):
     """Register menu routes"""
-    
+
+    @app.get("/api/v1/restaurants/<restaurant_id>/menu/changed")
+    @tracer.capture_method
+    def get_menu_change_marker(restaurant_id: str):
+        """Check if menu has changed for a restaurant within TTL window."""
+        try:
+            pk = f"RESTAURANT#{restaurant_id}"
+            sk = "CHANGED"
+            response = dynamodb_client.get_item(
+                TableName=TABLES["MENU_ITEMS"],
+                Key={
+                    "PK": {"S": pk},
+                    "SK": {"S": sk}
+                }
+            )
+            exists = "Item" in response and response["Item"] is not None
+            metrics.add_metric(name="MenuChangeChecked", unit="Count", value=1)
+            return {
+                "restaurantId": restaurant_id,
+                "changed": bool(exists)
+            }, 200
+        except Exception as e:
+            logger.error("Error checking menu change marker", exc_info=True)
+            return {"error": "Failed to check menu change marker", "message": str(e)}, 500
+
     @app.get("/api/v1/restaurants/<restaurant_id>/menu")
     @tracer.capture_method
     def list_menu_items(restaurant_id: str):

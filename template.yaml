@@ -560,6 +560,46 @@ Resources:
           ENVIRONMENT: !Ref Environment
           FIREBASE_PROJECT_ID: appnearbites-85b8c
           NOTIFICATION_SERVICE: FIREBASE
+
+  RestaurantMenuChangeHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-restaurant-menu-change-${Environment}'
+      CodeUri: .
+      Handler: restaurant_menu_change_handler.lambda_handler
+      Runtime: python3.11
+      Architectures:
+        - x86_64
+      Timeout: 30
+      MemorySize: 256
+      Events:
+        MenuItemsStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt MenuItemsTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 5
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource:
+                - !GetAtt MenuItemsTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:DescribeStream
+                - dynamodb:GetRecords
+                - dynamodb:GetShardIterator
+                - dynamodb:ListStreams
+              Resource:
+                - !GetAtt MenuItemsTable.StreamArn
+      Environment:
+        Variables:
+          MENU_ITEMS_TABLE_NAME: !Ref MenuItemsTable
+          ENVIRONMENT: !Ref Environment
   
   OrderAssignmentHandlerFunction:
     Type: AWS::Serverless::Function
@@ -1055,6 +1095,11 @@ Resources:
           KeyType: HASH
         - AttributeName: SK
           KeyType: RANGE
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -1340,11 +1385,20 @@ Resources:
           AttributeType: S
         - AttributeName: sortKey
           AttributeType: S
+        - AttributeName: isDisplayItem
+          AttributeType: S
       KeySchema:
         - AttributeName: partitionkey
           KeyType: HASH
         - AttributeName: sortKey
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: isDisplayItem-index
+          KeySchema:
+            - AttributeName: isDisplayItem
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       Tags:
         - Key: Environment
           Value: !Ref Environment

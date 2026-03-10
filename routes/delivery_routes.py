@@ -119,6 +119,7 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
         "freeDeliveryThreshold": round(free_delivery_threshold, 2),
         "isFreeDelivery": is_free_delivery,
         "distance": round(distance_km, 2),
+
     }
 
 
