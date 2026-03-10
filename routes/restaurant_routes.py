@@ -113,7 +113,8 @@ def register_restaurant_routes(app):
             return {
                 "restaurantId": restaurant_id,
                 "isOpen": restaurant.is_open,
-                "closesAt": restaurant.closes_at
+                "closesAt": restaurant.closes_at,
+                "opensAt": restaurant.opens_at
             }, 200
         except Exception as e:
             logger.error("Error getting restaurant status", exc_info=True)
@@ -260,6 +261,8 @@ def register_restaurant_routes(app):
                 updates['ownerId'] = body['ownerId']
             if 'closesAt' in body:
                 updates['closesAt'] = body['closesAt']
+            if 'opensAt' in body:
+                updates['opensAt'] = body['opensAt']
             
             if not updates:
                 return {"error": "No fields to update"}, 400

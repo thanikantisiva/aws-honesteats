@@ -33,7 +33,8 @@ class Restaurant:
         restaurant_image: Optional[Union[str, List[str]]] = None,
         geohash: Optional[str] = None,
         created_at: Optional[str] = None,
-        closes_at: Optional[str] = None
+        closes_at: Optional[str] = None,
+        opens_at: Optional[str] = None
     ):
         self.location_id = location_id
         self.restaurant_id = restaurant_id
@@ -52,6 +53,7 @@ class Restaurant:
         self.geohash_4 = self.geohash[:4]
         self.created_at = created_at or now_ist_iso()
         self.closes_at = closes_at
+        self.opens_at = opens_at
     
     @property
     def pk(self) -> str:
@@ -116,6 +118,8 @@ class Restaurant:
             result["createdAt"] = self.created_at
         if self.closes_at:
             result["closesAt"] = self.closes_at
+        if self.opens_at:
+            result["opensAt"] = self.opens_at
         return result
     
     @classmethod
@@ -177,7 +181,8 @@ class Restaurant:
             restaurant_image=restaurant_image,
             geohash=geohash,
             created_at=item.get("createdAt", {}).get("S") if "createdAt" in item else None,
-            closes_at=item.get("closesAt", {}).get("S") if "closesAt" in item else None
+            closes_at=item.get("closesAt", {}).get("S") if "closesAt" in item else None,
+            opens_at=item.get("opensAt", {}).get("S") if "opensAt" in item else None
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -213,5 +218,7 @@ class Restaurant:
             item["createdAt"] = {"S": self.created_at}
         if self.closes_at:
             item["closesAt"] = {"S": self.closes_at}
+        if self.opens_at:
+            item["opensAt"] = {"S": self.opens_at}
         
         return item
