@@ -58,6 +58,7 @@ PUBLIC_ROUTES = [
 # operations (POST/PUT/DELETE) on these paths still require authentication.
 GUEST_PUBLIC_GET_PREFIXES = [
     "/api/v1/restaurants",        # list nearby, get by id, status, menu
+    "/api/v1/homescreen",         # homescreen carousel images
 ]
 
 # Specific non-GET endpoints that are safe to call without JWT.
