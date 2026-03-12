@@ -53,6 +53,18 @@ PUBLIC_ROUTES = [
     "/api/v1/globalconfig"
 ]
 
+# Route PREFIXES that are publicly accessible (guest browsing).
+# Only GET requests on these prefixes are allowed without JWT - write
+# operations (POST/PUT/DELETE) on these paths still require authentication.
+GUEST_PUBLIC_GET_PREFIXES = [
+    "/api/v1/restaurants",        # list nearby, get by id, status, menu
+]
+
+# Specific non-GET endpoints that are safe to call without JWT.
+GUEST_PUBLIC_POST_PATHS = [
+    "/api/v1/location/geohash",   # coordinate to geohash (pure math, no data mutation)
+]
+
 # Retool bypass header and secret value.
 # Rotate by setting RETOOL_BYPASS_VALUE in Lambda environment.
 AUTH_BYPASS_HEADER = "x-retool-header"
@@ -134,7 +146,11 @@ def auth_middleware(handler, event, context):
     method = event.get('httpMethod', '')
     
     # Check if this is a public route
-    is_public = path in PUBLIC_ROUTES
+    is_public = (
+        path in PUBLIC_ROUTES
+        or (method == 'GET' and any(path == p or path.startswith(p + '/') for p in GUEST_PUBLIC_GET_PREFIXES))
+        or (method == 'POST' and path in GUEST_PUBLIC_POST_PATHS)
+    )
     headers = event.get('headers', {}) or {}
 
     # Optional bypass for trusted callers that attach the retool header with the correct value.
