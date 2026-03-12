@@ -152,7 +152,12 @@ class UserService:
                 update_expressions.append('#approvedAt = :approvedAt')
                 expression_attribute_names['#approvedAt'] = 'approvedAt'
                 expression_attribute_values[':approvedAt'] = {'S': updates['approvedAt']}
-            
+
+            if 'upiId' in updates:
+                update_expressions.append('#upiId = :upiId')
+                expression_attribute_names['#upiId'] = 'upiId'
+                expression_attribute_values[':upiId'] = {'S': updates['upiId']}
+
             if not update_expressions and not remove_expressions:
                 return UserService.get_user_by_role(phone, role)
             
