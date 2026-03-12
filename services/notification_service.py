@@ -138,7 +138,7 @@ class NotificationService:
                             title=title,
                             body=body_text,
                             sound="default",
-                            color="#EF4444"
+                            icon="ic_launcher"
                         )
                     ),
                     apns=apns_config

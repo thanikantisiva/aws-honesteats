@@ -2,6 +2,7 @@
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.earnings_service import EarningsService
 from services.restaurant_earnings_service import RestaurantEarningsService
+from datetime import datetime
 
 logger = Logger()
 tracer = Tracer()
@@ -27,14 +28,18 @@ def register_earnings_routes(app):
             logger.info(f"Getting earnings for rider: {rider_id}, period: {period}")
             
             if period == 'today':
-                earnings = EarningsService.get_today_earnings(rider_id)
-                # Convert to match the same format as week/month
+                today = datetime.utcnow().strftime('%Y-%m-%d')
+                today_earnings = EarningsService.get_earnings_for_date_range(
+                    rider_id,
+                    today,
+                    today
+                )
                 result = {
                     "period": "today",
-                    "totalDeliveries": earnings.total_deliveries,
-                    "totalEarnings": earnings.total_earnings,
-                    "totalTips": earnings.tips,
-                    "dailyBreakdown": [earnings.to_dict()]
+                    "totalDeliveries": sum(e.total_deliveries for e in today_earnings),
+                    "totalEarnings": sum(e.total_earnings for e in today_earnings),
+                    "totalTips": sum(e.tips for e in today_earnings),
+                    "dailyBreakdown": [e.to_dict() for e in today_earnings]
                 }
             elif period == 'week':
                 result = EarningsService.get_weekly_earnings(rider_id)

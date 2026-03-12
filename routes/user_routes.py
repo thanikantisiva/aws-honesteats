@@ -16,10 +16,15 @@ def register_user_routes(app):
     @app.get("/api/v1/users/<phone>")
     @tracer.capture_method
     def get_user(phone: str):
-        """Get user by phone number (CUSTOMER role)"""
+        """Get user by phone number. Query param role defaults to CUSTOMER."""
         try:
-            logger.info(f"Getting user: {phone}")
-            user = UserService.get_user_by_role(phone, "CUSTOMER")
+            query_params = app.current_event.query_string_parameters or {}
+            role = (query_params.get("role") or "CUSTOMER").upper()
+            if role not in ("CUSTOMER", "RIDER"):
+                return {"error": "Invalid role"}, 400
+
+            logger.info(f"Getting user: {phone}, role: {role}")
+            user = UserService.get_user_by_role(phone, role)
             
             if not user:
                 return {"error": "User not found"}, 404
@@ -69,9 +74,12 @@ def register_user_routes(app):
     @app.put("/api/v1/users/<phone>")
     @tracer.capture_method
     def update_user(phone: str):
-        """Update user information"""
+        """Update user information. Request body may include role, default CUSTOMER."""
         try:
             body = app.current_event.json_body
+            role = (body.get("role") or "CUSTOMER").upper()
+            if role not in ("CUSTOMER", "RIDER"):
+                return {"error": "Invalid role"}, 400
             updates = {}
             
             if 'name' in body:
@@ -86,9 +94,9 @@ def register_user_routes(app):
             if not updates:
                 return {"error": "No fields to update"}, 400
             
-            logger.info(f"Updating user: {phone}, updates: {updates}")
+            logger.info(f"Updating user: {phone}, role: {role}, updates: {updates}")
             
-            updated_user = UserService.update_user(phone, "CUSTOMER", updates)
+            updated_user = UserService.update_user(phone, role, updates)
             metrics.add_metric(name="UserUpdated", unit="Count", value=1)
             
             return updated_user.to_dict(), 200

@@ -7,6 +7,7 @@ from services.earnings_service import EarningsService
 from services.restaurant_earnings_service import RestaurantEarningsService
 from services.restaurant_service import RestaurantService
 from services.address_service import AddressService
+from services.notification_service import NotificationService
 from models.order import Order
 from datetime import datetime
 import random
@@ -120,6 +121,20 @@ def register_rider_order_routes(app):
                     logger.info(f"Copied rider location to order: ({rider.lat}, {rider.lng})")
             
             OrderService.update_order(order_id, update_data)
+
+            # Notify the rider after the order is accepted and assigned.
+            if rider and rider.phone:
+                try:
+                    NotificationService.send_order_assigned_notification(
+                        rider_mobile=rider.phone,
+                        order_id=order_id,
+                        restaurant_name=order.restaurant_name or "Restaurant",
+                        delivery_fee=order.delivery_fee
+                    )
+                except Exception as notification_error:
+                    logger.error(
+                        f"[orderId={order_id}] Failed to send rider notification after accept: {str(notification_error)}"
+                    )
             
             logger.info(f"[orderId={order_id}] Accepted by rider {rider_id}")
             metrics.add_metric(name="OrderAcceptedByRider", unit="Count", value=1)
