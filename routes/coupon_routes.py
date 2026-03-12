@@ -22,6 +22,11 @@ def register_coupon_routes(app):
             start_date = body.get('startDate')
             end_date = body.get('endDate')
             issued_by = body.get('issuedBy')
+            is_once_per_user = body.get('isOncePerUser', False)
+            if isinstance(is_once_per_user, str):
+                is_once_per_user = is_once_per_user.strip().lower() in ('true', '1', 'yes')
+            else:
+                is_once_per_user = bool(is_once_per_user)
 
             if not code or not coupon_type or coupon_value is None:
                 return {"error": "couponCode, couponType, couponValue are required"}, 400
@@ -41,6 +46,7 @@ def register_coupon_routes(app):
                 item['endDate'] = {'S': str(end_date)}
             if issued_by:
                 item['issuedBy'] = {'S': str(issued_by)}
+            item['isOncePerUser'] = {'BOOL': is_once_per_user}
 
             dynamodb_client.put_item(
                 TableName=TABLES['CONFIG'],

@@ -147,19 +147,24 @@ def register_user_routes(app):
     @app.post("/api/v1/users/<phone>/logout")
     @tracer.capture_method
     def logout_user(phone: str):
-        """Logout user by clearing FCM token and setting isActive to false"""
+        """Logout user by clearing FCM token and setting isActive to false. Optional body: { \"role\": \"RIDER\" } (default CUSTOMER)."""
         try:
-            logger.info(f"Logging out user: {phone}")
+            body = app.current_event.json_body or {}
+            role = (body.get("role") or "CUSTOMER").upper()
+            if role not in ("CUSTOMER", "RIDER"):
+                return {"error": "Invalid role"}, 400
+
+            logger.info(f"Logging out user: {phone}, role: {role}")
 
             updates = {
                 'fcmToken': None,
                 'isActive': False
             }
 
-            updated_user = UserService.update_user(phone, "CUSTOMER", updates)
+            updated_user = UserService.update_user(phone, role, updates)
             metrics.add_metric(name="UserLoggedOut", unit="Count", value=1)
 
-            return {"message": "User logged out successfully", "phone": phone}, 200
+            return {"message": "User logged out successfully", "phone": phone, "role": role}, 200
         except Exception as e:
             logger.error("Error logging out user", exc_info=True)
             return {"error": "Failed to logout user", "message": str(e)}, 500
