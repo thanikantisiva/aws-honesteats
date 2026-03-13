@@ -244,6 +244,9 @@ def register_rider_signup_routes(app):
                 first_name=body['firstName'],
                 last_name=body['lastName'],
                 address=body['address'],
+                email=(body.get('email') or '').strip() or None,
+                date_of_birth=(body.get('dateOfBirth') or '').strip() or None,
+                upi_id=(body.get('upiId') or '').strip() or None,
                 aadhar_number=aadhar_number,
                 aadhar_image_url=aadhar_image_api_url,
                 pan_number=pan_number,
@@ -283,6 +286,25 @@ def register_rider_signup_routes(app):
             logger.error("Error in rider signup", exc_info=True)
             metrics.add_metric(name="RiderSignupFailed", unit="Count", value=1)
             return {"error": "Failed to submit signup", "message": str(e)}, 500
+
+    @app.get("/api/v1/riders/<rider_id>/rating")
+    @tracer.capture_method
+    def get_rider_rating(rider_id: str):
+        """
+        Fetch rider's rating and rated count from Riders table.
+        Used by the Orders tab to show rating in the header.
+        """
+        try:
+            if not rider_id:
+                return {"error": "riderId is required"}, 400
+            rider_rating, rider_rated_count = RiderService.get_rider_rating_and_count(rider_id)
+            return {
+                "riderRating": rider_rating,
+                "riderRatedCount": rider_rated_count,
+            }, 200
+        except Exception as e:
+            logger.error(f"Error fetching rider rating for {rider_id}", exc_info=True)
+            return {"error": "Failed to fetch rating", "message": str(e)}, 500
 
     @app.get("/api/v1/riders/<rider_id>/documents")
     @tracer.capture_method

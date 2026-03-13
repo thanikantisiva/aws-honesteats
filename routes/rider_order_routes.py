@@ -70,11 +70,17 @@ def register_rider_order_routes(app):
                 
                 enriched_orders.append(order_dict)
             
+            # Include rider's own rating and count for the Orders tab (from Riders table, raw item)
+            rider_rating, rider_rated_count = RiderService.get_rider_rating_and_count(rider_id)
+            logger.info(f"[riderId={rider_id}] Returning rating={rider_rating}, ratedCount={rider_rated_count}")
+            
             metrics.add_metric(name="RiderOrdersRetrieved", unit="Count", value=1)
             
             return {
                 "orders": enriched_orders,
-                "total": len(enriched_orders)
+                "total": len(enriched_orders),
+                "riderRating": rider_rating,
+                "riderRatedCount": rider_rated_count,
             }, 200
             
         except Exception as e:

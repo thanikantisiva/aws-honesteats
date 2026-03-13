@@ -38,7 +38,8 @@ class User:
         pan_image_url: Optional[str] = None,  # S3 URL (new)
         rider_status: Optional[str] = None,
         rejection_reason: Optional[str] = None,
-        approved_at: Optional[str] = None
+        approved_at: Optional[str] = None,
+        upi_id: Optional[str] = None,
     ):
         self.phone = phone
         self.name = name  # Used for customers
@@ -67,7 +68,8 @@ class User:
         self.rider_status = rider_status
         self.rejection_reason = rejection_reason
         self.approved_at = approved_at
-    
+        self.upi_id = upi_id
+
     def to_dict(self) -> dict:
         """Convert to dictionary"""
         result = {
@@ -122,7 +124,9 @@ class User:
             result["rejectionReason"] = self.rejection_reason
         if self.approved_at:
             result["approvedAt"] = self.approved_at
-            
+        if self.upi_id:
+            result["upiId"] = self.upi_id
+
         return result
     
     @classmethod
@@ -154,7 +158,8 @@ class User:
             pan_image_url=item.get("panImageUrl", {}).get("S") if "panImageUrl" in item else None,
             rider_status=item.get("riderStatus", {}).get("S") if "riderStatus" in item else None,
             rejection_reason=item.get("rejectionReason", {}).get("S") if "rejectionReason" in item else None,
-            approved_at=item.get("approvedAt", {}).get("S") if "approvedAt" in item else None
+            approved_at=item.get("approvedAt", {}).get("S") if "approvedAt" in item else None,
+            upi_id=item.get("upiId", {}).get("S") if "upiId" in item else None,
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -211,5 +216,7 @@ class User:
             item["rejectionReason"] = {"S": self.rejection_reason}
         if self.approved_at:
             item["approvedAt"] = {"S": self.approved_at}
-            
+        if self.upi_id:
+            item["upiId"] = {"S": self.upi_id}
+
         return item

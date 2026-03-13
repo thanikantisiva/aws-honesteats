@@ -67,6 +67,40 @@ class RiderService:
             return Rider.from_dynamodb_item(response['Item'])
         except ClientError as e:
             raise Exception(f"Failed to get rider: {str(e)}")
+
+    @staticmethod
+    def get_rider_rating_and_count(rider_id: str) -> tuple:
+        """
+        Get rider's rating and ratedCount from Riders table.
+        Returns (rating: float or None, rated_count: int).
+        Reads from raw DynamoDB item to support different attribute name conventions.
+        """
+        try:
+            response = dynamodb_client.get_item(
+                TableName=TABLES['RIDERS'],
+                Key={'riderId': {'S': rider_id}}
+            )
+            item = response.get('Item') or {}
+            rating = None
+            rated_count = 0
+            for key in ('rating', 'Rating'):
+                if key in item and 'N' in item[key]:
+                    try:
+                        rating = float(item[key]['N'])
+                        break
+                    except (TypeError, ValueError):
+                        pass
+            for key in ('ratedCount', 'RatedCount', 'rated_count'):
+                if key in item and 'N' in item[key]:
+                    try:
+                        rated_count = int(float(item[key]['N']))
+                        break
+                    except (TypeError, ValueError):
+                        pass
+            return (rating, rated_count)
+        except ClientError as e:
+            logger.warning(f"get_rider_rating_and_count failed for {rider_id}: {e}")
+            return (None, 0)
     
     @staticmethod
     def get_rider_by_mobile(phone: str) -> Optional[Rider]:

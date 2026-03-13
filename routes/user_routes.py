@@ -90,7 +90,9 @@ def register_user_routes(app):
                 updates['isActive'] = body['isActive']
             if 'dateOfBirth' in body:
                 updates['dateOfBirth'] = body['dateOfBirth']
-            
+            if 'upiId' in body:
+                updates['upiId'] = body['upiId']
+
             if not updates:
                 return {"error": "No fields to update"}, 400
             
