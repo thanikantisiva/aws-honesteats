@@ -58,12 +58,15 @@ PUBLIC_ROUTES = [
 # operations (POST/PUT/DELETE) on these paths still require authentication.
 GUEST_PUBLIC_GET_PREFIXES = [
     "/api/v1/restaurants",        # list nearby, get by id, status, menu
-    "/api/v1/homescreen",         # homescreen carousel images
+    "/api/v1/homescreen",         # homescreen base
+    "/api/v1/homescreen/images",  # homescreen carousel images (explicit)
 ]
 
 # Specific non-GET endpoints that are safe to call without JWT.
 GUEST_PUBLIC_POST_PATHS = [
-    "/api/v1/location/geohash",   # coordinate to geohash (pure math, no data mutation)
+    "/api/v1/location/geohash",          # coordinate to geohash (pure math, no data mutation)
+    "/api/v1/location/reverse-geocode",  # lat/lng to human-readable address (read-only)
+    "/api/v1/delivery/calculate-fee",    # delivery fee estimate (read-only, no data mutation)
 ]
 
 # Retool bypass header and secret value.
