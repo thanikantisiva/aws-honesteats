@@ -1,5 +1,6 @@
 """User routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
+from services.address_service import AddressService
 from services.user_service import UserService
 from utils.geohash import encode as geohash_encode
 from utils.datetime_ist import now_ist_iso
@@ -105,6 +106,37 @@ def register_user_routes(app):
         except Exception as e:
             logger.error("Error updating user", exc_info=True)
             return {"error": "Failed to update user", "message": str(e)}, 500
+
+    @app.delete("/api/v1/users/<phone>")
+    @tracer.capture_method
+    def delete_user(phone: str):
+        """Delete user account. Query param role defaults to CUSTOMER."""
+        try:
+            query_params = app.current_event.query_string_parameters or {}
+            role = (query_params.get("role") or "CUSTOMER").upper()
+            if role not in ("CUSTOMER", "RIDER"):
+                return {"error": "Invalid role"}, 400
+
+            logger.info(f"Deleting user: {phone}, role: {role}")
+
+            existing_user = UserService.get_user_by_role(phone, role)
+            if not existing_user:
+                return {"error": "User not found"}, 404
+
+            if role == "CUSTOMER":
+                AddressService.delete_all_addresses(phone)
+
+            UserService.delete_user(phone, role)
+            metrics.add_metric(name="UserDeleted", unit="Count", value=1)
+
+            return {
+                "message": "User deleted successfully",
+                "phone": phone,
+                "role": role
+            }, 200
+        except Exception as e:
+            logger.error("Error deleting user", exc_info=True)
+            return {"error": "Failed to delete user", "message": str(e)}, 500
     
     @app.post("/api/v1/users/<phone>/fcm-token")
     @tracer.capture_method
@@ -165,6 +197,10 @@ def register_user_routes(app):
                 return {"error": "Invalid role"}, 400
 
             logger.info(f"Logging out user: {phone}, role: {role}")
+
+            existing_user = UserService.get_user_by_role(phone, role)
+            if not existing_user:
+                return {"error": "User not found"}, 404
 
             updates = {
                 'fcmToken': None,

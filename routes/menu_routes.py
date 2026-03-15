@@ -45,12 +45,14 @@ def register_menu_routes(app):
         try:
             logger.info(f"Listing menu items for restaurant: {restaurant_id}")
             menu_items = MenuService.list_menu_items(restaurant_id)
+            # Exclude items without itemId
+            valid_items = [item for item in menu_items if item.item_id]
             metrics.add_metric(name="MenuItemsListed", unit="Count", value=1)
             
             return {
                 "restaurantId": restaurant_id,
-                "items": [item.to_dict() for item in menu_items],
-                "total": len(menu_items)
+                "items": [item.to_dict() for item in valid_items],
+                "total": len(valid_items)
             }, 200
         except Exception as e:
             logger.error("Error listing menu items", exc_info=True)

@@ -79,6 +79,20 @@ class UserService:
             return user
         except ClientError as e:
             raise Exception(f"Failed to create user: {str(e)}")
+
+    @staticmethod
+    def delete_user(phone: str, role: str) -> None:
+        """Delete a user by phone number and role"""
+        try:
+            dynamodb_client.delete_item(
+                TableName=TABLES['USERS'],
+                Key={
+                    'phone': {'S': phone},
+                    'role': {'S': role}
+                }
+            )
+        except ClientError as e:
+            raise Exception(f"Failed to delete user: {str(e)}")
     
     @staticmethod
     def update_user(phone: str, role: str, updates: dict) -> User:
@@ -88,6 +102,7 @@ class UserService:
             remove_expressions = []
             expression_attribute_names = {}
             expression_attribute_values = {}
+            expression_attribute_names['#role'] = 'role'
             
             if 'name' in updates:
                 update_expressions.append('#name = :name')
@@ -174,12 +189,15 @@ class UserService:
                     'role': {'S': role}
                 },
                 UpdateExpression=" ".join(update_parts),
+                ConditionExpression='attribute_exists(phone) AND attribute_exists(#role)',
                 ExpressionAttributeNames=expression_attribute_names,
                 ExpressionAttributeValues=expression_attribute_values
             )
             
             return UserService.get_user_by_role(phone, role)
         except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                raise Exception("User not found")
             raise Exception(f"Failed to update user: {str(e)}")
     
     @staticmethod

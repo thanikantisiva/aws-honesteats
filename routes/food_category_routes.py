@@ -24,8 +24,11 @@ def _build_sort_key(category: str, sub_category: str) -> str:
     return f"CAT#{category_key}#SUB#{sub_category_key}"
 
 
+VALID_TIME_SLOTS = frozenset({"morning", "brunch", "afternoon", "evening", "night"})
+
+
 def _parse_db_item(item: dict) -> dict:
-    return {
+    result = {
         "category": item.get("category", {}).get("S", ""),
         "subCategory": item.get("subCategory", {}).get("S", ""),
         "imageUrl": item.get("imageUrl", {}).get("S", ""),
@@ -33,6 +36,11 @@ def _parse_db_item(item: dict) -> dict:
         "createdAt": item.get("createdAt", {}).get("S"),
         "updatedAt": item.get("updatedAt", {}).get("S"),
     }
+    # preferredTimeSlots: DynamoDB L of S -> list for client (morning, brunch, afternoon, evening, night)
+    raw_list = item.get("preferredTimeSlots", {}).get("L", [])
+    slots = [x.get("S", "").strip().lower() for x in raw_list if isinstance(x, dict) and x.get("S")]
+    result["preferredTimeSlots"] = [s for s in slots if s in VALID_TIME_SLOTS]
+    return result
 
 def _coerce_text(value, default=""):
     if value is None:
@@ -53,6 +61,7 @@ def register_food_category_routes(app):
             sub_category = body.get("subCategory")
             image_url = body.get("imageUrl")
             is_display_item = _coerce_text(body.get("isDisplayItem"), default="true")
+            preferred_time_slots = body.get("preferredTimeSlots")
 
             if not category or not sub_category or not image_url:
                 return {"error": "category, subCategory, imageUrl are required"}, 400
@@ -70,18 +79,23 @@ def register_food_category_routes(app):
             ).get("Item")
             created_at = existing.get("createdAt", {}).get("S", now) if existing else now
 
+            item = {
+                "partitionkey": {"S": FOOD_CATEGORY_PK},
+                "sortKey": {"S": sort_key},
+                "category": {"S": str(category).strip()},
+                "subCategory": {"S": str(sub_category).strip()},
+                "imageUrl": {"S": str(image_url).strip()},
+                "isDisplayItem": {"S": is_display_item},
+                "createdAt": {"S": created_at},
+                "updatedAt": {"S": now},
+            }
+            if preferred_time_slots is not None and isinstance(preferred_time_slots, list):
+                valid = [str(s).strip().lower() for s in preferred_time_slots if str(s).strip().lower() in VALID_TIME_SLOTS]
+                item["preferredTimeSlots"] = {"L": [{"S": s} for s in valid]}
+
             dynamodb_client.put_item(
                 TableName=TABLES["CONFIG"],
-                Item={
-                    "partitionkey": {"S": FOOD_CATEGORY_PK},
-                    "sortKey": {"S": sort_key},
-                    "category": {"S": str(category).strip()},
-                    "subCategory": {"S": str(sub_category).strip()},
-                    "imageUrl": {"S": str(image_url).strip()},
-                    "isDisplayItem": {"S": is_display_item},
-                    "createdAt": {"S": created_at},
-                    "updatedAt": {"S": now},
-                },
+                Item=item,
             )
 
             metrics.add_metric(name="FoodCategoryCreated", unit="Count", value=1)
@@ -202,6 +216,7 @@ def register_food_category_routes(app):
             new_sub_category = body.get("subCategory", sub_category)
             image_url = body.get("imageUrl")
             is_display_item = body.get("isDisplayItem")
+            preferred_time_slots = body.get("preferredTimeSlots")
 
             old_sort_key = _build_sort_key(category, sub_category)
             get_response = dynamodb_client.get_item(
@@ -223,18 +238,27 @@ def register_food_category_routes(app):
                 default=old_item.get("isDisplayItem", {}).get("S", "true")
             )
 
+            put_item = {
+                "partitionkey": {"S": FOOD_CATEGORY_PK},
+                "sortKey": {"S": new_sort_key},
+                "category": {"S": str(new_category).strip()},
+                "subCategory": {"S": str(new_sub_category).strip()},
+                "imageUrl": {"S": str(final_image).strip()},
+                "isDisplayItem": {"S": final_display},
+                "createdAt": {"S": old_item.get("createdAt", {}).get("S", now)},
+                "updatedAt": {"S": now},
+            }
+            if preferred_time_slots is not None and isinstance(preferred_time_slots, list):
+                valid = [str(s).strip().lower() for s in preferred_time_slots if str(s).strip().lower() in VALID_TIME_SLOTS]
+                put_item["preferredTimeSlots"] = {"L": [{"S": s} for s in valid]}
+            else:
+                # Preserve existing preferredTimeSlots
+                if "preferredTimeSlots" in old_item:
+                    put_item["preferredTimeSlots"] = old_item["preferredTimeSlots"]
+
             dynamodb_client.put_item(
                 TableName=TABLES["CONFIG"],
-                Item={
-                    "partitionkey": {"S": FOOD_CATEGORY_PK},
-                    "sortKey": {"S": new_sort_key},
-                    "category": {"S": str(new_category).strip()},
-                    "subCategory": {"S": str(new_sub_category).strip()},
-                    "imageUrl": {"S": str(final_image).strip()},
-                    "isDisplayItem": {"S": final_display},
-                    "createdAt": {"S": old_item.get("createdAt", {}).get("S", now)},
-                    "updatedAt": {"S": now},
-                },
+                Item=put_item,
             )
 
             if new_sort_key != old_sort_key:

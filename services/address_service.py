@@ -58,6 +58,32 @@ class AddressService:
             return addresses
         except ClientError as e:
             raise Exception(f"Failed to list addresses: {str(e)}")
+
+    @staticmethod
+    def delete_all_addresses(phone: str) -> None:
+        """Delete all addresses for a customer"""
+        try:
+            response = dynamodb_client.query(
+                TableName=TABLES['ADDRESSES'],
+                KeyConditionExpression='phone = :phone',
+                ExpressionAttributeValues={
+                    ':phone': {'S': phone}
+                }
+            )
+
+            for item in response.get('Items', []):
+                address_id = item.get('addressId', {}).get('S')
+                if not address_id:
+                    continue
+                dynamodb_client.delete_item(
+                    TableName=TABLES['ADDRESSES'],
+                    Key={
+                        'phone': {'S': phone},
+                        'addressId': {'S': address_id}
+                    }
+                )
+        except ClientError as e:
+            raise Exception(f"Failed to delete all addresses: {str(e)}")
     
     @staticmethod
     def update_address(phone: str, address_id: str, updates: dict) -> Address:

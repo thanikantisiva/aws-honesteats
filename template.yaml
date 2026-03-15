@@ -420,6 +420,7 @@ Resources:
                 - !GetAtt RiderEarningsTable.Arn
                 - !GetAtt RestaurantEarningsTable.Arn
                 - !GetAtt ConfigTable.Arn
+                - !Sub '${ConfigTable.Arn}/index/isDisplayItem-index'
                 - !Sub '${OrdersTable.Arn}/index/customer-phone-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/restaurantId-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/riderId-statusCreatedAt-index'
@@ -492,7 +493,7 @@ Resources:
           MESSAGE_CENTRAL_COUNTRY_CODE: !Sub "/rork-honesteats/${Environment}/MESSAGE_CENTRAL_COUNTRY_CODE"
           MESSAGE_CENTRAL_VERIFY_URL: https://cpaas.messagecentral.com/verification/v3/validateOtp
           GOOGLE_MAPS_API_KEY: !Sub "/rork-honesteats/${Environment}/GOOGLE_MAPS_API_KEY"
-          RAZORPAY_MODE: test
+          RAZORPAY_MODE: live
           RAZORPAY_TEST_KEY_ID: !Sub "/rork-honesteats/${Environment}/RAZORPAY_TEST_KEY_ID"
           RAZORPAY_TEST_KEY_SECRET: !Sub "/rork-honesteats/${Environment}/RAZORPAY_TEST_KEY_SECRET"
           RAZORPAY_LIVE_KEY_ID: !Sub "/rork-honesteats/${Environment}/RAZORPAY_LIVE_KEY_ID"
