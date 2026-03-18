@@ -21,7 +21,9 @@ class Rider:
         rated_count: int = 0,
         working_on_order: Optional[List[str]] = None,
         last_seen: Optional[str] = None,
-        geohash: Optional[str] = None
+        geohash: Optional[str] = None,
+        orders_assigned_last_7d: int = 0,
+        assignment_window_start: Optional[str] = None
     ):
         self.rider_id = rider_id
         self.phone = phone
@@ -35,6 +37,8 @@ class Rider:
         self.rated_count = rated_count or 0
         self.working_on_order = working_on_order or []
         self.last_seen = last_seen or now_ist_iso()
+        self.orders_assigned_last_7d = orders_assigned_last_7d or 0
+        self.assignment_window_start = assignment_window_start
         
         # Auto-generate geohash if lat/lng provided
         if geohash:
@@ -102,6 +106,10 @@ class Rider:
         }
         if self.rating is not None:
             result["rating"] = self.rating
+        if self.orders_assigned_last_7d:
+            result["ordersAssignedLast7d"] = self.orders_assigned_last_7d
+        if self.assignment_window_start:
+            result["assignmentWindowStart"] = self.assignment_window_start
         return result
     
     @classmethod
@@ -124,7 +132,9 @@ class Rider:
                 else []
             ),
             last_seen=item.get("lastSeen", {}).get("S", ""),
-            geohash=item.get("geohash", {}).get("S") if "geohash" in item else None
+            geohash=item.get("geohash", {}).get("S") if "geohash" in item else None,
+            orders_assigned_last_7d=int(float(item.get("ordersAssignedLast7d", {}).get("N", "0"))) if "ordersAssignedLast7d" in item else 0,
+            assignment_window_start=item.get("assignmentWindowStart", {}).get("S") if "assignmentWindowStart" in item else None
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -150,6 +160,10 @@ class Rider:
             item["rating"] = {"N": str(self.rating)}
         if self.working_on_order:
             item["workingOnOrder"] = {"L": [{"S": str(v)} for v in self.working_on_order]}
+        if self.orders_assigned_last_7d:
+            item["ordersAssignedLast7d"] = {"N": str(self.orders_assigned_last_7d)}
+        if self.assignment_window_start:
+            item["assignmentWindowStart"] = {"S": self.assignment_window_start}
         
         # Add geohash fields for spatial indexing
         if self.geohash:

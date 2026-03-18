@@ -1,18 +1,48 @@
 """Order assignment service for automatic rider allocation"""
-from typing import Optional
+from typing import Optional, List, Tuple
 from aws_lambda_powertools import Logger
 from services.rider_service import RiderService
 from services.order_service import OrderService
 from services.notification_service import NotificationService
+from models.rider import Rider
 from models.order import Order
 from datetime import datetime, timedelta
-import random
 import json
 import os
 import boto3
-import time
 
 logger = Logger()
+
+W_FAIRNESS = 0.5
+W_RATING = 0.2
+W_DISTANCE = 0.3
+NEW_RIDER_THRESHOLD = 5
+
+
+def _compute_rider_score(rider: Rider, distance_km: float) -> float:
+    """
+    Score a rider for assignment. Higher is better.
+    - Fairness: riders with fewer assignments in the last 7 days score higher.
+    - Rating: slight bias toward higher-rated riders; new riders get neutral score.
+    - Distance: closer riders score higher.
+    """
+    fairness = 1.0 / (1.0 + (rider.orders_assigned_last_7d or 0))
+
+    if rider.rating is not None and (rider.rated_count or 0) >= NEW_RIDER_THRESHOLD:
+        rating_score = max(0.0, min(1.0, (rider.rating - 3.0) / 2.0))
+    else:
+        rating_score = 0.55
+
+    distance_score = 1.0 / (1.0 + distance_km)
+
+    return W_FAIRNESS * fairness + W_RATING * rating_score + W_DISTANCE * distance_score
+
+
+def _rank_riders(riders: List[Tuple[Rider, float]]) -> List[Tuple[Rider, float, float]]:
+    """Return riders sorted by composite score descending. Each element: (Rider, distance, score)."""
+    scored = [(r, d, _compute_rider_score(r, d)) for r, d in riders]
+    scored.sort(key=lambda x: x[2], reverse=True)
+    return scored
 
 
 class OrderAssignmentService:
@@ -21,15 +51,16 @@ class OrderAssignmentService:
     @staticmethod
     def assign_order_to_rider(order_id: str, restaurant_lat: float, restaurant_lng: float) -> Optional[str]:
         """
-        Offer order to nearest available rider
+        Offer order to best-scoring available rider.
         
         Algorithm:
-        1. Find online riders within 5km of restaurant
+        1. Find online riders within 10km of restaurant
         2. Filter riders not currently working on an order
-        3. Sort by distance
-        4. Offer to nearest rider (status OFFERED_TO_RIDER)
-        5. Send FCM notification to rider
-        6. Emit EventBridge event to check acceptance
+        3. Filter riders who have rejected this order
+        4. Score each rider (fairness + rating bias + distance)
+        5. Offer to best-scoring rider (status OFFERED_TO_RIDER)
+        6. Send FCM notification to rider
+        7. Schedule EventBridge check for acceptance
         
         Returns:
             rider_id if assigned, None if no riders available
@@ -96,17 +127,16 @@ class OrderAssignmentService:
                 
                 return None
             
-            # If everyone has rejected, assign directly to nearest rider
+            # If everyone has rejected, direct-assign to best-scoring from available_riders
             if not filtered_riders and available_riders:
-                nearest_rider, distance = available_riders[0]
-                logger.info(f"[orderId={order_id}] All riders rejected; direct assign to {nearest_rider.rider_id} ({distance:.2f}km)")
-                logger.info(f"[orderId={order_id}] Direct assignment rider: id={nearest_rider.rider_id} phone={nearest_rider.phone} lat={nearest_rider.lat} lng={nearest_rider.lng}")
+                ranked = _rank_riders(available_riders)
+                nearest_rider, distance, score = ranked[0]
+                logger.info(f"[orderId={order_id}] All riders rejected; direct assign to {nearest_rider.rider_id} (score={score:.3f}, dist={distance:.2f}km)")
 
                 OrderService.update_order(order_id, {
                     'riderId': nearest_rider.rider_id,
                     'riderAssignedAt': datetime.utcnow().isoformat(),
                     'status': Order.RIDER_ASSIGNED,
-                    # Copy rider's current location for initial tracking
                     'riderCurrentLat': nearest_rider.lat,
                     'riderCurrentLng': nearest_rider.lng,
                     'riderSpeed': nearest_rider.speed,
@@ -115,6 +145,7 @@ class OrderAssignmentService:
                 })
 
                 RiderService.set_working_on_order(nearest_rider.rider_id, order_id)
+                RiderService.increment_assignment_count(nearest_rider.rider_id)
 
                 try:
                     order = OrderService.get_order(order_id)
@@ -132,10 +163,12 @@ class OrderAssignmentService:
                 logger.info(f"[orderId={order_id}] Assigned directly to rider {nearest_rider.rider_id}")
                 return nearest_rider.rider_id
 
-            # Get nearest rider from filtered list (returns list of tuples: (Rider, distance))
-            nearest_rider, distance = filtered_riders[0]
-            logger.info(f"[orderId={order_id}] Offering to rider {nearest_rider.rider_id} ({distance:.2f}km)")
-            logger.info(f"[orderId={order_id}] Offer rider: id={nearest_rider.rider_id} phone={nearest_rider.phone} lat={nearest_rider.lat} lng={nearest_rider.lng}")
+            # Score filtered riders and pick the best
+            ranked = _rank_riders(filtered_riders)
+            best_rider, distance, score = ranked[0]
+            logger.info(f"[orderId={order_id}] Offering to rider {best_rider.rider_id} (score={score:.3f}, dist={distance:.2f}km)")
+            logger.info(f"[orderId={order_id}] Offer rider: id={best_rider.rider_id} phone={best_rider.phone} lat={best_rider.lat} lng={best_rider.lng}")
+            nearest_rider = best_rider
             
             # Update order with offered rider and status
             OrderService.update_order(order_id, {

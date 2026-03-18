@@ -6,6 +6,7 @@ from middleware.api_key_auth import APIKeyAuth
 from middleware.jwt_auth import generate_token
 from services.messagecentral_service import MessageCentralService
 from services.rate_limiter_service import RateLimiterService
+from utils import normalize_phone
 from utils.dynamodb import dynamodb_client
 
 logger = Logger()
@@ -32,7 +33,7 @@ def register_auth_routes(app):
                 return error_response['body'], error_response['statusCode']
 
             body = app.current_event.json_body or {}
-            phone = body.get('phone')
+            phone = normalize_phone(body.get('phone'))
 
             if not phone:
                 return {"error": "Phone number is required"}, 400
@@ -85,7 +86,7 @@ def register_auth_routes(app):
                 return error_response['body'], error_response['statusCode']
             
             body = app.current_event.json_body
-            phone = body.get('phone')
+            phone = normalize_phone(body.get('phone'))
             code = body.get('code')
             
             if not phone or not code:

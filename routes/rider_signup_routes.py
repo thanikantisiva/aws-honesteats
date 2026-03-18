@@ -9,6 +9,7 @@ from services.user_service import UserService
 from services.rider_service import RiderService
 from models.user import User
 from models.rider import Rider
+from utils import normalize_phone
 from utils.dynamodb import generate_id
 from utils.datetime_ist import now_ist_iso, now_ist_strftime
 
@@ -105,7 +106,7 @@ def register_rider_signup_routes(app):
                 return {"error": "CDN base URL not configured"}, 500
             body = app.current_event.json_body
             
-            phone = body.get('phone')
+            phone = normalize_phone(body.get('phone'))
             document_type = body.get('documentType')
             image_base64 = body.get('imageBase64')
             
@@ -196,7 +197,7 @@ def register_rider_signup_routes(app):
                 if not body.get(field):
                     return {"error": f"Missing required field: {field}"}, 400
             
-            phone = body['phone']
+            phone = normalize_phone(body['phone'])
             
             # Check if rider role already exists (customer role is OK)
             existing_rider = UserService.get_user_by_role(phone, "RIDER")
@@ -373,7 +374,7 @@ def register_rider_signup_routes(app):
         """
         try:
             body = app.current_event.json_body
-            phone = body.get('phone')
+            phone = normalize_phone(body.get('phone'))
             
             if not phone:
                 return {"error": "Phone number required"}, 400
@@ -488,7 +489,7 @@ def register_rider_signup_routes(app):
         """Approve rider (ops team) - Updates both Users and Riders tables"""
         try:
             body = app.current_event.json_body
-            phone = body.get('phone')
+            phone = normalize_phone(body.get('phone'))
             
             if not phone:
                 return {"error": "Phone number required"}, 400
@@ -524,7 +525,7 @@ def register_rider_signup_routes(app):
         """Reject rider (ops team)"""
         try:
             body = app.current_event.json_body
-            phone = body.get('phone')
+            phone = normalize_phone(body.get('phone'))
             reason = body.get('reason', 'Document verification failed')
             
             if not phone:

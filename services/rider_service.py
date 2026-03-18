@@ -1,11 +1,14 @@
 """Rider service for operational data"""
 from typing import List, Optional, Tuple
 from botocore.exceptions import ClientError
+from datetime import datetime, timedelta, timezone
 from models.rider import Rider
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.geohash import encode as geohash_encode, get_neighbors, get_precision_for_radius
 from utils.datetime_ist import now_ist_iso
 from aws_lambda_powertools import Logger
+
+ASSIGNMENT_WINDOW_DAYS = 7
 
 logger = Logger()
 
@@ -312,7 +315,80 @@ class RiderService:
             return RiderService.get_rider(rider_id)
         except ClientError as e:
             raise Exception(f"Failed to add rider rating: {str(e)}")
-    
+
+    @staticmethod
+    def increment_assignment_count(rider_id: str) -> Optional[Rider]:
+        """
+        Increment the rider's 7-day assignment count. If the window has elapsed
+        (or never been set), reset to 1 and start a new window.
+        """
+        try:
+            rider = RiderService.get_rider(rider_id)
+            if not rider:
+                logger.warning(f"increment_assignment_count: rider not found {rider_id}")
+                return None
+
+            now = datetime.now(timezone.utc)
+            window_start = rider.assignment_window_start
+            reset_window = True
+
+            if window_start:
+                try:
+                    start_dt = datetime.fromisoformat(window_start.replace("Z", "+00:00"))
+                    if start_dt.tzinfo is None:
+                        start_dt = start_dt.replace(tzinfo=timezone.utc)
+                    if (now - start_dt) < timedelta(days=ASSIGNMENT_WINDOW_DAYS):
+                        reset_window = False
+                except (ValueError, TypeError):
+                    pass
+
+            if reset_window:
+                new_count = 1
+                new_window_start = now.isoformat()
+            else:
+                new_count = (rider.orders_assigned_last_7d or 0) + 1
+                new_window_start = window_start
+
+            dynamodb_client.update_item(
+                TableName=TABLES['RIDERS'],
+                Key={'riderId': {'S': rider_id}},
+                UpdateExpression='SET ordersAssignedLast7d = :cnt, assignmentWindowStart = :ws',
+                ExpressionAttributeValues={
+                    ':cnt': {'N': str(new_count)},
+                    ':ws': {'S': new_window_start}
+                }
+            )
+            logger.info(f"[riderId={rider_id}] Assignment count updated: {new_count} (window reset={reset_window})")
+            return RiderService.get_rider(rider_id)
+        except ClientError as e:
+            logger.error(f"increment_assignment_count failed for {rider_id}: {e}")
+            return None
+
+    @staticmethod
+    def apply_rejection_penalty(rider_id: str, deduction: float = 0.1) -> Optional[Rider]:
+        """
+        Deduct from rider's rating for an order rejection (no-response or explicit).
+        Does not change ratedCount. New rating = max(0, current_rating - deduction).
+        """
+        try:
+            rider = RiderService.get_rider(rider_id)
+            if not rider:
+                logger.warning(f"apply_rejection_penalty: rider not found {rider_id}")
+                return None
+            current = rider.rating if rider.rating is not None else 0.0
+            new_rating = round(max(0.0, current - deduction), 2)
+            dynamodb_client.update_item(
+                TableName=TABLES['RIDERS'],
+                Key={'riderId': {'S': rider_id}},
+                UpdateExpression='SET rating = :rating',
+                ExpressionAttributeValues={':rating': {'N': str(new_rating)}}
+            )
+            logger.info(f"[riderId={rider_id}] Rejection penalty applied: rating {current} -> {new_rating}")
+            return RiderService.get_rider(rider_id)
+        except ClientError as e:
+            logger.error(f"apply_rejection_penalty failed for {rider_id}: {e}")
+            return None
+
     @staticmethod
     def _query_riders_by_geohash(geohash: str, precision: int = 7) -> List[Rider]:
         """Query riders by geohash at specific precision with pagination"""

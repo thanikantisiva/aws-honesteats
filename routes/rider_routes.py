@@ -2,6 +2,7 @@
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.rider_service import RiderService
 from models.rider import Rider
+from utils import normalize_phone
 from utils.dynamodb import generate_id
 
 logger = Logger()
@@ -52,7 +53,7 @@ def register_rider_routes(app):
         """Create a new rider (admin endpoint - direct operational record creation)"""
         try:
             body = app.current_event.json_body
-            phone = body.get('phone')
+            phone = normalize_phone(body.get('phone'))
             
             if not phone:
                 return {"error": "Phone number is required"}, 400

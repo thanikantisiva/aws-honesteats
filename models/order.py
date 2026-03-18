@@ -89,7 +89,8 @@ class Order:
         # Rider offer tracking
         offered_at: Optional[str] = None,
         rejected_by_riders: Optional[List[str]] = None,
-        created_at: Optional[Union[int, str]] = None
+        created_at: Optional[Union[int, str]] = None,
+        calculated_fee_response: Optional[Dict[str, Any]] = None
     ):
         self.order_id = order_id
         self.customer_phone = customer_phone
@@ -132,6 +133,7 @@ class Order:
         self.last_assignment_attempt_at = last_assignment_attempt_at
         self.offered_at = offered_at
         self.rejected_by_riders = rejected_by_riders or []
+        self.calculated_fee_response = calculated_fee_response
         # Store as IST ISO string; support int (legacy) for backward compatibility
         self.created_at = created_at if created_at is not None else now_ist_iso()
     
@@ -167,6 +169,8 @@ class Order:
             result["paymentMethod"] = self.payment_method
         if self.revenue:
             result["revenue"] = self.revenue
+        if self.calculated_fee_response:
+            result["calculatedFeeResponse"] = self.calculated_fee_response
         # Rider fields
         if self.pickup_address:
             result["pickupAddress"] = self.pickup_address
@@ -276,7 +280,8 @@ class Order:
             # Rider offer tracking
             offered_at=item.get("offeredAt", {}).get("S") if "offeredAt" in item else None,
             rejected_by_riders=dynamodb_to_python(item["rejectedByRiders"]) if "rejectedByRiders" in item else [],
-            created_at=created_at
+            created_at=created_at,
+            calculated_fee_response=dynamodb_to_python(item["calculatedFeeResponse"]) if "calculatedFeeResponse" in item and "M" in item["calculatedFeeResponse"] else None
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -326,7 +331,9 @@ class Order:
         if self.rating is not None:
             item["rating"] = {"N": str(self.rating)}
         if self.revenue:
-            item["revenue"] = python_to_dynamodb(self.revenue)  # Store as Map
+            item["revenue"] = python_to_dynamodb(self.revenue)
+        if self.calculated_fee_response:
+            item["calculatedFeeResponse"] = python_to_dynamodb(self.calculated_fee_response)
         # Rider fields
         if self.pickup_address:
             item["pickupAddress"] = {"S": self.pickup_address}

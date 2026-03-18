@@ -1,5 +1,6 @@
 """Order routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
+from utils import normalize_phone
 from utils.datetime_ist import now_ist_iso
 from services.order_service import OrderService
 from services.user_service import UserService
@@ -83,9 +84,7 @@ def register_order_routes(app):
             rider_id = query_params.get('riderId')
             limit = int(query_params.get('limit', 20))
             
-            # Add '+' prefix if not present and phone doesn't start with '+'
-            if customer_phone and not customer_phone.startswith('+'):
-                customer_phone = '+' + customer_phone.strip()
+            customer_phone = normalize_phone(customer_phone)
             
             # Optional status filter
             status_filter = query_params.get('status')
@@ -141,7 +140,7 @@ def register_order_routes(app):
         """Create a new order"""
         try:
             body = app.current_event.json_body
-            customer_phone = body.get('customerPhone')
+            customer_phone = normalize_phone(body.get('customerPhone'))
             restaurant_id = body.get('restaurantId')
             items = body.get('items', [])
             food_total = body.get('foodTotal', 0)

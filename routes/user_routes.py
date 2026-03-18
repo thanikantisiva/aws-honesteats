@@ -2,6 +2,7 @@
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.address_service import AddressService
 from services.user_service import UserService
+from utils import normalize_phone
 from utils.geohash import encode as geohash_encode
 from utils.datetime_ist import now_ist_iso
 from models.user import User
@@ -42,7 +43,7 @@ def register_user_routes(app):
         """Create a new user"""
         try:
             body = app.current_event.json_body
-            phone = body.get('phone')
+            phone = normalize_phone(body.get('phone'))
             name = body.get('name', 'User')
             email = body.get('email')
             date_of_birth = body.get('dateOfBirth')
@@ -230,7 +231,7 @@ def register_user_routes(app):
         """
         try:
             body = app.current_event.json_body or {}
-            phone = body.get('phone')
+            phone = normalize_phone(body.get('phone'))
             lat = body.get('lat')
             lng = body.get('lng')
 

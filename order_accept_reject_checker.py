@@ -64,6 +64,10 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             "status": Order.STATUS_AWAITING_RIDER_ASSIGNMENT
         })
 
+        # Deduct rating for no-response rejection
+        if order.rider_id:
+            RiderService.apply_rejection_penalty(order.rider_id)
+
         # Remove order from rider's workingOnOrder if set
         if order.rider_id:
             try:

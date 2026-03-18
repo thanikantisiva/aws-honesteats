@@ -3,17 +3,28 @@ Lambda function to handle DynamoDB Stream events from OrdersTable
 Sends push notifications when order status changes
 """
 import json
+import os
+import re
 import boto3
+from botocore.exceptions import ClientError
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from aws_lambda_powertools import Logger
 from utils.datetime_ist import now_ist_iso, epoch_ms_to_ist_iso
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from services.notification_service import NotificationService
+from services.sns_alert_service import publish_order_alert
 from utils.dynamodb_helpers import dynamodb_to_python
 from utils.dynamodb import TABLES
 
 logger = Logger(service="notification-handler")
 dynamodb_client = boto3.client('dynamodb')
+
+
+def _order_alert_enabled(env_key: str, default: bool = True) -> bool:
+    """True if env is true/1/yes (case-insensitive); otherwise False. Missing => default."""
+    v = (os.environ.get(env_key) or ("true" if default else "false")).strip().lower()
+    return v in ("true", "1", "yes")
 
 
 def _extract_order_item_summary(new_image: dict) -> tuple[str, str]:
@@ -212,6 +223,21 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             if new_status == "OFFERED_TO_RIDER":
                 logger.info(f"[orderId={order_id}] Skipping customer notification for OFFERED_TO_RIDER")
                 continue
+
+            # Publish to SNS order-alerts topic (subscribers get SMS) — gated by toggle
+            if new_status == "AWAITING_RIDER_ASSIGNMENT" and _order_alert_enabled("ORDER_ALERTS_RIDER_ENABLED"):
+                sms_text = f"Order {order_id} is awaiting rider assignment. Restaurant: {restaurant_name}"
+                try:
+                    publish_order_alert(sms_text, subject="Order awaiting rider")
+                except Exception as sns_err:
+                    logger.warning(f"[orderId={order_id}] SNS alert failed: {sns_err}")
+
+            # Schedule a one-time check in x mins: if order still CONFIRMED, send SNS alert — gated by toggle
+            if new_status == "CONFIRMED" and _order_alert_enabled("ORDER_ALERTS_CONFIRMED_ENABLED"):
+                try:
+                    _schedule_confirmed_alert(order_id)
+                except Exception as schedule_err:
+                    logger.warning(f"[orderId={order_id}] Schedule CONFIRMED alert failed: {schedule_err}")
             
             # Get user's FCM token from UsersTable
             # UsersTableV2 has composite key: phone (HASH) + role (RANGE)
@@ -268,6 +294,37 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             'errors': errors
         })
     }
+
+
+def _schedule_confirmed_alert(order_id: str) -> None:
+    """Create a one-time EventBridge Scheduler to run in x mins; handler checks if order still CONFIRMED and sends SNS."""
+    handler_arn = os.environ.get("ORDER_CONFIRMED_ALERT_HANDLER_ARN", "").strip()
+    role_arn = os.environ.get("ORDER_CONFIRMED_ALERT_HANDLER_ROLE_ARN", "").strip()
+    delay_mins = int(os.environ.get("ORDER_CONFIRMED_ALERT_DELAY_MINS", "15") or "15")
+    if not handler_arn or not role_arn:
+        logger.warning("ORDER_CONFIRMED_ALERT_HANDLER_ARN or ROLE_ARN not set, skipping schedule")
+        return
+    run_at = datetime.now(timezone.utc) + timedelta(minutes=delay_mins)
+    schedule_name = "order-confirmed-alert-" + re.sub(r"[^a-zA-Z0-9_-]", "-", order_id)[:48]
+    try:
+        scheduler = boto3.client("scheduler")
+        scheduler.create_schedule(
+            Name=schedule_name,
+            ScheduleExpression=f"at({run_at.strftime('%Y-%m-%dT%H:%M:%S')})",
+            FlexibleTimeWindow={"Mode": "OFF"},
+            Target={
+                "Arn": handler_arn,
+                "RoleArn": role_arn,
+                "Input": json.dumps({"orderId": order_id, "delayMins": delay_mins}),
+            },
+            ActionAfterCompletion="DELETE",
+        )
+        logger.info(f"[orderId={order_id}] Scheduled CONFIRMED alert in {delay_mins} mins at {run_at.isoformat()}")
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConflictException":
+            logger.info(f"[orderId={order_id}] Schedule already exists: {schedule_name}")
+        else:
+            raise
 
 
 def _fetch_rider_name(rider_id: str) -> str:

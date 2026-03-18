@@ -93,6 +93,7 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
 
     free_delivery_threshold = config["freeDeliveryAboveThreshold"]
     is_free_delivery = item_total >= free_delivery_threshold
+    free_delivery_discount = calculated_delivery_fee if is_free_delivery else 0.0
     final_delivery_fee = 0.0 if is_free_delivery else calculated_delivery_fee
 
     logger.info(
@@ -103,7 +104,7 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
     logger.info(
         "Free delivery evaluation: "
         f"itemTotal={item_total}, freeDeliveryAboveThreshold={free_delivery_threshold}, "
-        f"isFreeDelivery={is_free_delivery}"
+        f"isFreeDelivery={is_free_delivery}, freeDeliveryDiscount={free_delivery_discount}"
     )
 
     return {
@@ -113,13 +114,13 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
             "baseFee": round(base_fee, 2),
             "distanceFee": round(distance_fee, 2),
             "surgeFee": round(surge_fee, 2),
-            "discount": 0.0,
+            "freeDeliveryDiscount": round(free_delivery_discount, 2),
+            "discount": round(free_delivery_discount, 2),
             "couponDiscount": 0.0,
         },
         "freeDeliveryThreshold": round(free_delivery_threshold, 2),
         "isFreeDelivery": is_free_delivery,
         "distance": round(distance_km, 2),
-
     }
 
 

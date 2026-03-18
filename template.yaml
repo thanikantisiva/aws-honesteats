@@ -554,6 +554,21 @@ Resources:
                 - ssm:GetParametersByPath
               Resource:
                 - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rork-honesteats/${Environment}/*'
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource:
+                - !Ref OrderAlertsTopic
+            - Effect: Allow
+              Action:
+                - scheduler:CreateSchedule
+                - scheduler:GetSchedule
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource:
+                - !GetAtt OrderConfirmedAlertInvokeRole.Arn
       Environment:
         Variables:
           USERS_TABLE_NAME: !Ref UsersTableV2
@@ -561,6 +576,65 @@ Resources:
           ENVIRONMENT: !Ref Environment
           FIREBASE_PROJECT_ID: appnearbites-85b8c
           NOTIFICATION_SERVICE: FIREBASE
+          ORDER_ALERTS_TOPIC_ARN: !Ref OrderAlertsTopic
+          ORDER_CONFIRMED_ALERT_HANDLER_ARN: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-confirmed-alert-${Environment}'
+          ORDER_CONFIRMED_ALERT_HANDLER_ROLE_ARN: !GetAtt OrderConfirmedAlertInvokeRole.Arn
+          ORDER_CONFIRMED_ALERT_DELAY_MINS: "15"
+          ORDER_ALERTS_RIDER_ENABLED: "true"
+          ORDER_ALERTS_CONFIRMED_ENABLED: "true"
+
+  # ---------------- ORDER CONFIRMED ALERT (scheduled x mins after CONFIRMED) ----------------
+  OrderConfirmedAlertHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-order-confirmed-alert-${Environment}'
+      CodeUri: .
+      Handler: order_confirmed_alert_handler.lambda_handler
+      Runtime: python3.11
+      Architectures:
+        - x86_64
+      Timeout: 30
+      MemorySize: 256
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource:
+                - !GetAtt OrdersTable.Arn
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource:
+                - !Ref OrderAlertsTopic
+      Environment:
+        Variables:
+          ORDERS_TABLE_NAME: !Ref OrdersTable
+          ORDER_ALERTS_TOPIC_ARN: !Ref OrderAlertsTopic
+          ENVIRONMENT: !Ref Environment
+          ORDER_ALERTS_CONFIRMED_ENABLED: "true"
+
+  OrderConfirmedAlertInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeOrderConfirmedAlert
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-confirmed-alert-${Environment}'
 
   RestaurantMenuChangeHandlerFunction:
     Type: AWS::Serverless::Function
@@ -602,6 +676,78 @@ Resources:
           MENU_ITEMS_TABLE_NAME: !Ref MenuItemsTable
           ENVIRONMENT: !Ref Environment
   
+  # ---------------- REVENUE CALCULATOR (stream-triggered on CONFIRMED) ----------------
+  RevenueCalculatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-revenue-calculator-${Environment}'
+      CodeUri: .
+      Handler: revenue_calculator.lambda_handler
+      Runtime: python3.11
+      Architectures:
+        - x86_64
+      Timeout: 30
+      MemorySize: 256
+      Events:
+        OrdersStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt OrdersTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 5
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName": ["MODIFY"], "dynamodb": {"NewImage": {"status": {"S": ["CONFIRMED"]}}}}'
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt OrdersTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt PaymentsTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt MenuItemsTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt ConfigTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:DescribeStream
+                - dynamodb:GetRecords
+                - dynamodb:GetShardIterator
+                - dynamodb:ListStreams
+              Resource:
+                - !GetAtt OrdersTable.StreamArn
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rork-honesteats/${Environment}/*'
+      Environment:
+        Variables:
+          ORDERS_TABLE_NAME: !Ref OrdersTable
+          PAYMENTS_TABLE_NAME: !Ref PaymentsTable
+          MENU_ITEMS_TABLE_NAME: !Ref MenuItemsTable
+          CONFIG_TABLE_NAME: !Ref ConfigTable
+          ENVIRONMENT: !Ref Environment
+
   OrderAssignmentHandlerFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -951,6 +1097,16 @@ Resources:
                   - lambda:InvokeFunction
                 Resource:
                   - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-assignment-delay-${Environment}'
+
+  # ---------------- SNS TOPIC (order alerts → SMS to subscribers) ----------------
+  OrderAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'rork-honesteats-order-alerts-${Environment}'
+      DisplayName: !Sub 'Order Alerts (${Environment})'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
 
   # ---------------- SQS QUEUE ----------------
   OrderAssignmentQueue:
@@ -1582,3 +1738,9 @@ Outputs:
   ImageCdnDomain:
     Description: CloudFront domain for image delivery
     Value: !GetAtt ImageCdnDistribution.DomainName
+
+  OrderAlertsTopicArn:
+    Description: SNS topic for order alerts (subscribe phone numbers for SMS)
+    Value: !Ref OrderAlertsTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-OrderAlertsTopicArn'

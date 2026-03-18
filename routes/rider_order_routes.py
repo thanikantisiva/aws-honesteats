@@ -142,6 +142,8 @@ def register_rider_order_routes(app):
                         f"[orderId={order_id}] Failed to send rider notification after accept: {str(notification_error)}"
                     )
             
+            RiderService.increment_assignment_count(rider_id)
+
             logger.info(f"[orderId={order_id}] Accepted by rider {rider_id}")
             metrics.add_metric(name="OrderAcceptedByRider", unit="Count", value=1)
             
@@ -169,15 +171,24 @@ def register_rider_order_routes(app):
             if order.rider_id != rider_id:
                 return {"error": "Order not assigned to this rider"}, 403
             
-            # Only allow rejecting orders in RIDER_ASSIGNED status
+            # Only allow rejecting orders in OFFERED_TO_RIDER status
             if order.status != 'OFFERED_TO_RIDER':
                 return {"error": f"Order cannot be rejected in {order.status} status"}, 400
             
+            # Add this rider to rejectedByRiders so they are not offered this order again
+            rejected = list(order.rejected_by_riders or [])
+            if rider_id not in rejected:
+                rejected.append(rider_id)
+            
             # Clear rider assignment and mark awaiting reassignment
             OrderService.update_order(order_id, {
+                'rejectedByRiders': rejected,
                 'riderId': None,
                 'status': Order.STATUS_AWAITING_RIDER_ASSIGNMENT
             })
+
+            # Deduct rating for explicit rejection
+            RiderService.apply_rejection_penalty(rider_id)
 
             # Reassign to next available rider
             restaurant_lat = order.pickup_lat

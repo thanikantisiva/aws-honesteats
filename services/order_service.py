@@ -49,41 +49,38 @@ class OrderService:
         """List orders by customer phone using GSI with optional status filter"""
         try:
             logger.info(f"Listing orders for customer={customer_phone} status={status} limit={limit}")
+            query_params = {
+                'TableName': TABLES['ORDERS'],
+                'IndexName': 'customer-phone-statusCreatedAt-index',
+                'ScanIndexForward': False,
+            }
             if status:
-                # Use composite key for efficient status filtering
-                response = dynamodb_client.query(
-                    TableName=TABLES['ORDERS'],
-                    IndexName='customer-phone-statusCreatedAt-index',
-                    KeyConditionExpression='customerPhone = :phone AND begins_with(customerStatusCreatedAt, :statusPrefix)',
-                    ExpressionAttributeValues={
-                        ':phone': {'S': customer_phone},
-                        ':statusPrefix': {'S': f'{status}#'}
-                    },
-                    ScanIndexForward=False,  # Most recent first
-                    Limit=limit
-                )
+                query_params['KeyConditionExpression'] = 'customerPhone = :phone AND begins_with(customerStatusCreatedAt, :statusPrefix)'
+                query_params['ExpressionAttributeValues'] = {
+                    ':phone': {'S': customer_phone},
+                    ':statusPrefix': {'S': f'{status}#'}
+                }
             else:
-                # Fetch all statuses
-                response = dynamodb_client.query(
-                    TableName=TABLES['ORDERS'],
-                    IndexName='customer-phone-statusCreatedAt-index',
-                    KeyConditionExpression='customerPhone = :phone',
-                    ExpressionAttributeValues={
-                        ':phone': {'S': customer_phone}
-                    },
-                    ScanIndexForward=False,  # Most recent first
-                    Limit=limit
-                )
-            
+                query_params['KeyConditionExpression'] = 'customerPhone = :phone'
+                query_params['ExpressionAttributeValues'] = {
+                    ':phone': {'S': customer_phone}
+                }
+
             orders = []
-            for item in response.get('Items', []):
-                status_val = item.get("status", {}).get("S")
-                if status_val == Order.STATUS_INITIATED:
-                    continue
-                orders.append(Order.from_dynamodb_item(item))
-            
+            while True:
+                response = dynamodb_client.query(**query_params)
+                for item in response.get('Items', []):
+                    if item.get("status", {}).get("S") == Order.STATUS_INITIATED:
+                        continue
+                    orders.append(Order.from_dynamodb_item(item))
+                    if len(orders) >= limit:
+                        break
+                if len(orders) >= limit or 'LastEvaluatedKey' not in response:
+                    break
+                query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
             logger.info(f"Listed {len(orders)} orders for customer={customer_phone}")
-            return orders
+            return orders[:limit]
         except ClientError as e:
             raise Exception(f"Failed to list customer orders: {str(e)}")
     
@@ -92,38 +89,36 @@ class OrderService:
         """List orders by restaurant ID using GSI with optional status filter"""
         try:
             logger.info(f"Listing orders for restaurant={restaurant_id} status={status} limit={limit}")
+            query_params = {
+                'TableName': TABLES['ORDERS'],
+                'IndexName': 'restaurantId-statusCreatedAt-index',
+                'ScanIndexForward': False,
+            }
             if status:
-                # Use composite key for efficient status filtering
-                response = dynamodb_client.query(
-                    TableName=TABLES['ORDERS'],
-                    IndexName='restaurantId-statusCreatedAt-index',
-                    KeyConditionExpression='restaurantId = :restaurantId AND begins_with(restaurantStatusCreatedAt, :statusPrefix)',
-                    ExpressionAttributeValues={
-                        ':restaurantId': {'S': restaurant_id},
-                        ':statusPrefix': {'S': f'{status}#'}
-                    },
-                    ScanIndexForward=False,  # Most recent first
-                    Limit=limit
-                )
+                query_params['KeyConditionExpression'] = 'restaurantId = :restaurantId AND begins_with(restaurantStatusCreatedAt, :statusPrefix)'
+                query_params['ExpressionAttributeValues'] = {
+                    ':restaurantId': {'S': restaurant_id},
+                    ':statusPrefix': {'S': f'{status}#'}
+                }
             else:
-                # Fetch all statuses
-                response = dynamodb_client.query(
-                    TableName=TABLES['ORDERS'],
-                    IndexName='restaurantId-statusCreatedAt-index',
-                    KeyConditionExpression='restaurantId = :restaurantId',
-                    ExpressionAttributeValues={
-                        ':restaurantId': {'S': restaurant_id}
-                    },
-                    ScanIndexForward=False,  # Most recent first
-                    Limit=limit
-                )
-            
+                query_params['KeyConditionExpression'] = 'restaurantId = :restaurantId'
+                query_params['ExpressionAttributeValues'] = {
+                    ':restaurantId': {'S': restaurant_id}
+                }
+
             orders = []
-            for item in response.get('Items', []):
-                orders.append(Order.from_dynamodb_item(item))
-            
+            while True:
+                response = dynamodb_client.query(**query_params)
+                for item in response.get('Items', []):
+                    orders.append(Order.from_dynamodb_item(item))
+                    if len(orders) >= limit:
+                        break
+                if len(orders) >= limit or 'LastEvaluatedKey' not in response:
+                    break
+                query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
             logger.info(f"Listed {len(orders)} orders for restaurant={restaurant_id}")
-            return orders
+            return orders[:limit]
         except ClientError as e:
             raise Exception(f"Failed to list restaurant orders: {str(e)}")
     
@@ -132,38 +127,36 @@ class OrderService:
         """List orders by rider ID using GSI with optional status filter"""
         try:
             logger.info(f"Listing orders for rider={rider_id} status={status} limit={limit}")
+            query_params = {
+                'TableName': TABLES['ORDERS'],
+                'IndexName': 'riderId-statusCreatedAt-index',
+                'ScanIndexForward': False,
+            }
             if status:
-                # Use composite key for efficient status filtering
-                response = dynamodb_client.query(
-                    TableName=TABLES['ORDERS'],
-                    IndexName='riderId-statusCreatedAt-index',
-                    KeyConditionExpression='riderId = :riderId AND begins_with(riderStatusCreatedAt, :statusPrefix)',
-                    ExpressionAttributeValues={
-                        ':riderId': {'S': rider_id},
-                        ':statusPrefix': {'S': f'{status}#'}
-                    },
-                    ScanIndexForward=False,  # Most recent first
-                    Limit=limit
-                )
+                query_params['KeyConditionExpression'] = 'riderId = :riderId AND begins_with(riderStatusCreatedAt, :statusPrefix)'
+                query_params['ExpressionAttributeValues'] = {
+                    ':riderId': {'S': rider_id},
+                    ':statusPrefix': {'S': f'{status}#'}
+                }
             else:
-                # Fetch all statuses
-                response = dynamodb_client.query(
-                    TableName=TABLES['ORDERS'],
-                    IndexName='riderId-statusCreatedAt-index',
-                    KeyConditionExpression='riderId = :riderId',
-                    ExpressionAttributeValues={
-                        ':riderId': {'S': rider_id}
-                    },
-                    ScanIndexForward=False,  # Most recent first
-                    Limit=limit
-                )
-            
+                query_params['KeyConditionExpression'] = 'riderId = :riderId'
+                query_params['ExpressionAttributeValues'] = {
+                    ':riderId': {'S': rider_id}
+                }
+
             orders = []
-            for item in response.get('Items', []):
-                orders.append(Order.from_dynamodb_item(item))
-            
+            while True:
+                response = dynamodb_client.query(**query_params)
+                for item in response.get('Items', []):
+                    orders.append(Order.from_dynamodb_item(item))
+                    if len(orders) >= limit:
+                        break
+                if len(orders) >= limit or 'LastEvaluatedKey' not in response:
+                    break
+                query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
             logger.info(f"Listed {len(orders)} orders for rider={rider_id}")
-            return orders
+            return orders[:limit]
         except ClientError as e:
             raise Exception(f"Failed to list rider orders: {str(e)}")
     

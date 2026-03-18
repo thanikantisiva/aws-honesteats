@@ -6,6 +6,7 @@ from services.restaurant_service import RestaurantService
 from services.address_service import AddressService
 from models.payment import Payment
 from models.order import Order
+from utils import normalize_phone
 from utils.dynamodb import generate_id, dynamodb_client, TABLES
 import random
 
@@ -25,7 +26,7 @@ def register_payment_routes(app):
         """
         try:
             body = app.current_event.json_body
-            customer_phone = body.get('customerPhone')
+            customer_phone = normalize_phone(body.get('customerPhone'))
             restaurant_id = body.get('restaurantId')
             restaurant_name = body.get('restaurantName')
             amount = float(body.get('amount', 0))
@@ -41,13 +42,14 @@ def register_payment_routes(app):
             coupon_code = body.get('couponCode')
             coupon_applied = bool(body.get('couponApplied'))
             total_discount = float(body.get('totalDiscount', 0))
+            calculated_fee_response = body.get('calculatedFeeResponse')
             
             if not all([customer_phone, restaurant_id, restaurant_name, amount]):
                 return {"error": "Missing required fields"}, 400
             
             # Generate IDs
             payment_id = generate_id('PAY')
-            order_id = generate_id('ORD')  # Generate order ID now
+            order_id = generate_id('ORD')
             
             logger.info(f"[orderId={order_id}] 💳 Initiating payment: {payment_id}, amount: ₹{amount}")
             
@@ -56,7 +58,6 @@ def register_payment_routes(app):
             
             enriched_items = []
             total_customer_amount = 0
-            total_restaurant_amount = 0
             
             for item in items:
                 item_id = item.get('itemId')
@@ -73,67 +74,15 @@ def register_payment_routes(app):
                     customer_price = 0.0
                     restaurant_price = 0.0
                 
-                item_customer_total = customer_price * quantity
-                item_restaurant_total = restaurant_price * quantity
-                
                 enriched_items.append({
                     'itemId': item_id,
                     'name': item.get('name'),
                     'quantity': quantity,
                     'price': customer_price,
                     'restaurantPrice': restaurant_price,
-                    'itemCommission': round(item_customer_total - item_restaurant_total, 2)
                 })
                 
-                total_customer_amount += item_customer_total
-                total_restaurant_amount += item_restaurant_total
-            
-            # Calculate revenue
-            food_commission = round(total_customer_amount - total_restaurant_amount, 2)
-            total_platform_revenue = round(food_commission + platform_fee, 2)
-
-            # Coupon handling based on issuedBy
-            issued_by = None
-            if coupon_applied and coupon_code:
-                try:
-                    pk = f"COUPON#{coupon_code}"
-                    response = dynamodb_client.query(
-                        TableName=TABLES['CONFIG'],
-                        KeyConditionExpression='partitionkey = :pk',
-                        ExpressionAttributeValues={':pk': {'S': pk}},
-                        Limit=1
-                    )
-                    item = response.get('Items', [None])[0] if response.get('Items') else None
-                    if item:
-                        issued_by = item.get('issuedBy', {}).get('S')
-                except Exception as e:
-                    logger.error(f"[orderId={order_id}] Failed to fetch coupon {coupon_code}: {str(e)}")
-
-            # Adjust revenue based on issuedBy
-            restaurant_settlement = round(total_restaurant_amount, 2)
-            coupon_discount = 0.0
-            if coupon_applied and total_discount > 0:
-                coupon_discount = total_discount
-                if issued_by == "YUMDUDE":
-                    total_platform_revenue = round(total_platform_revenue - total_discount, 2)
-                elif issued_by == "RESTAURANT":
-                    restaurant_settlement = round(restaurant_settlement - total_discount, 2)
-
-            revenue = {
-                'totalCustomerPaid': round(amount, 2),
-                'totalDiscount': round(total_discount, 2),
-                'restaurantSettlement': restaurant_settlement,
-                'couponCode': coupon_code,
-                'couponApplied': coupon_applied,
-                'couponIssuedBy': issued_by,
-                'platformRevenue': {
-                    'foodCommission': food_commission,
-                    'deliveryFee': delivery_fee,
-                    'platformFee': platform_fee,
-                    'totalCommission': total_platform_revenue,
-                    'couponDiscount': round(coupon_discount, 2)
-                }
-            }
+                total_customer_amount += customer_price * quantity
             
             # Fetch restaurant location details
             pickup_address = None
@@ -165,7 +114,7 @@ def register_payment_routes(app):
                 except Exception as e:
                     logger.error(f"[orderId={order_id}] Failed to fetch delivery address location: {str(e)}")
             
-            # Create Order in DB with INITIATED status
+            # Create Order in DB with INITIATED status (revenue is computed later by revenue_calculator Lambda)
             order = Order(
                 order_id=order_id,
                 customer_phone=customer_phone,
@@ -175,18 +124,16 @@ def register_payment_routes(app):
                 delivery_fee=delivery_fee,
                 platform_fee=platform_fee,
                 grand_total=amount,
-                status=Order.STATUS_INITIATED,  # INITIATED - payment pending
+                status=Order.STATUS_INITIATED,
                 restaurant_name=restaurant_name,
                 restaurant_image=restaurant_image,
                 delivery_address=delivery_address,
                 formatted_address=formatted_address,
                 address_id=address_id,
-                revenue=revenue,
-                # Pickup location (restaurant)
+                calculated_fee_response=calculated_fee_response,
                 pickup_address=pickup_address,
                 pickup_lat=pickup_lat,
                 pickup_lng=pickup_lng,
-                # Delivery location (customer address)
                 delivery_lat=delivery_lat,
                 delivery_lng=delivery_lng
             )
@@ -207,7 +154,6 @@ def register_payment_routes(app):
                 }
             )
             
-            # Create payment record in DynamoDB with revenue
             payment = Payment(
                 payment_id=payment_id,
                 customer_phone=customer_phone,
@@ -216,8 +162,7 @@ def register_payment_routes(app):
                 amount=amount,
                 razorpay_order_id=razorpay_order['id'],
                 payment_status=Payment.STATUS_INITIATED,
-                order_id=order_id,  # Link to order
-                revenue=revenue  # Store revenue in payment
+                order_id=order_id,
             )
             
             PaymentService.create_payment(payment)
@@ -355,10 +300,10 @@ def register_payment_routes(app):
                     order_id=generate_id('ORD'),
                     customer_phone=payment.customer_phone,
                     restaurant_id=payment.restaurant_id,
-                    items=enriched_items,
-                    food_total=food_total,
-                    delivery_fee=delivery_fee,
-                    platform_fee=platform_fee,
+                    items=[],
+                    food_total=0,
+                    delivery_fee=0,
+                    platform_fee=0,
                     grand_total=payment.amount,
                     status=Order.STATUS_CONFIRMED,
                     payment_id=payment_id,
@@ -368,12 +313,9 @@ def register_payment_routes(app):
                     delivery_address=delivery_address,
                     formatted_address=formatted_address,
                     address_id=address_id,
-                    revenue=revenue,
-                    # Pickup location (restaurant)
                     pickup_address=pickup_address,
                     pickup_lat=pickup_lat,
                     pickup_lng=pickup_lng,
-                    # Delivery location (customer address)
                     delivery_lat=delivery_lat,
                     delivery_lng=delivery_lng
                 )
@@ -423,15 +365,11 @@ def register_payment_routes(app):
         """List payments for a customer"""
         try:
             query_params = app.current_event.query_string_parameters or {}
-            customer_phone = query_params.get('customerPhone')
+            customer_phone = normalize_phone(query_params.get('customerPhone'))
             limit = int(query_params.get('limit', 20))
             
             if not customer_phone:
                 return {"error": "customerPhone parameter is required"}, 400
-            
-            # Add '+' prefix if not present
-            if not customer_phone.startswith('+'):
-                customer_phone = '+' + customer_phone.strip()
             
             logger.info(f"Listing payments for customer: {customer_phone}")
             payments = PaymentService.list_payments_by_customer(customer_phone, limit)
