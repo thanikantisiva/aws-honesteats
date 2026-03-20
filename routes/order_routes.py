@@ -145,7 +145,8 @@ def register_order_routes(app):
             items = body.get('items', [])
             food_total = body.get('foodTotal', 0)
             delivery_fee = body.get('deliveryFee', 0)
-            platform_fee = body.get('platformFee', 0)
+            calculated_fee_response = body.get('calculatedFeeResponse')
+            platform_fee = (calculated_fee_response or {}).get('platformFee', body.get('platformFee', 0))
             
             if not all([customer_phone, restaurant_id, items]):
                 return {"error": "customerPhone, restaurantId, and items are required"}, 400
@@ -201,6 +202,7 @@ def register_order_routes(app):
                 delivery_address=body.get('deliveryAddress'),
                 formatted_address=body.get('formattedAddress'),
                 address_id=address_id,
+                calculated_fee_response=calculated_fee_response,
                 # Pickup location (restaurant)
                 pickup_address=pickup_address,
                 pickup_lat=pickup_lat,

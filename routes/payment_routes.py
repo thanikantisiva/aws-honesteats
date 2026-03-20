@@ -34,7 +34,7 @@ def register_payment_routes(app):
             # Order details for pre-creation
             items = body.get('items', [])
             delivery_fee = float(body.get('deliveryFee', 0))
-            platform_fee = float(body.get('platformFee', 0))
+            platform_fee = float((body.get('calculatedFeeResponse') or {}).get('platformFee', body.get('platformFee', 0)))
             delivery_address = body.get('deliveryAddress')
             formatted_address = body.get('formattedAddress')
             address_id = body.get('addressId')
@@ -201,7 +201,8 @@ def register_payment_routes(app):
             # Order details (items, address, fees) from frontend
             items = body.get('items', [])
             delivery_fee = float(body.get('deliveryFee', 0))
-            platform_fee = float(body.get('platformFee', 0))
+            calculated_fee_response = body.get('calculatedFeeResponse')
+            platform_fee = float((calculated_fee_response or {}).get('platformFee', body.get('platformFee', 0)))
             delivery_address = body.get('deliveryAddress')
             formatted_address = body.get('formattedAddress')
             address_id = body.get('addressId')
@@ -313,6 +314,7 @@ def register_payment_routes(app):
                     delivery_address=delivery_address,
                     formatted_address=formatted_address,
                     address_id=address_id,
+                    calculated_fee_response=calculated_fee_response,
                     pickup_address=pickup_address,
                     pickup_lat=pickup_lat,
                     pickup_lng=pickup_lng,

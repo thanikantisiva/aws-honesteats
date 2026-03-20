@@ -265,7 +265,7 @@ def register_image_routes(app):
         Request body:
         {
           "listBase64": ["data:image/jpeg;base64,..."],
-          "entity": "RESTAURANT" | "ITEM" | "SUBCATEGORY",
+          "entity": "RESTAURANT" | "ITEM" | "SUBCATEGORY" | "HEROBANNER",
           "restaurantId": "RES-...",
           "itemId": "ITEM-..."  # required for ITEM
         }
@@ -281,8 +281,8 @@ def register_image_routes(app):
 
             if not isinstance(list_base64, list) or len(list_base64) == 0:
                 return {"error": "listBase64 must be a non-empty array"}, 400
-            if entity not in ("RESTAURANT", "ITEM", "SUBCATEGORY"):
-                return {"error": "entity must be RESTAURANT, ITEM, or SUBCATEGORY"}, 400
+            if entity not in ("RESTAURANT", "ITEM", "SUBCATEGORY", "HEROBANNER"):
+                return {"error": "entity must be RESTAURANT, ITEM, SUBCATEGORY, or HEROBANNER"}, 400
             if entity in ("RESTAURANT", "ITEM") and not restaurant_id:
                 return {"error": "restaurantId is required"}, 400
             if entity == "ITEM" and not item_id:
@@ -292,6 +292,8 @@ def register_image_routes(app):
                 base_prefix = f"restaurant-images/{restaurant_id}"
             elif entity == "ITEM":
                 base_prefix = f"restaurant-images/{restaurant_id}/{item_id}"
+            elif entity == "HEROBANNER":
+                base_prefix = "hero-banner"
             else:
                 # Keep under restaurant-images/* so CloudFront behavior routes to RestaurantImagesOrigin.
                 base_prefix = "restaurant-images/subcategory"

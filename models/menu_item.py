@@ -1,5 +1,6 @@
 """Menu item model"""
 from typing import Optional, List, Union
+from config.pricing import calculate_customer_price_from_hike
 
 
 class MenuItem:
@@ -15,11 +16,6 @@ class MenuItem:
         if isinstance(value, str) and value.strip():
             return [value]
         return []
-
-    @staticmethod
-    def _round_nearest_half(value: float) -> float:
-        """Round to nearest 0.5 (e.g. 67.8 -> 68, 67.3 -> 67.5)."""
-        return round(value * 2) / 2
 
     def __init__(
         self,
@@ -52,8 +48,7 @@ class MenuItem:
     @property
     def price(self) -> float:
         """Customer-facing price: restaurantPrice * (1 + hikePercentage/100), rounded to nearest 0.5."""
-        raw = self.restaurant_price * (1 + self.hike_percentage / 100)
-        return self._round_nearest_half(raw)
+        return calculate_customer_price_from_hike(self.restaurant_price, self.hike_percentage)
 
     @property
     def pk(self) -> str:

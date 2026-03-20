@@ -13,6 +13,7 @@ CONFIG_SK = "CONFIG"
 REQUIRED_CONFIG_KEYS = [
     "platformFee",
     "riderBaseFare",
+    "riderBaseFareApplicableUnderKms",
     "riderFarePerKm",
     "riderFreeDeliveryBelowKm",
     "riderSurgePricePerKm",
@@ -63,13 +64,16 @@ def _build_safe_zero_response(distance_km: float, missing_keys):
     """Return a safe response when config is missing/invalid."""
     return {
         "deliveryFee": 0.0,
+        "riderSettlementAmount": 0.0,
         "platformFee": 0.0,
         "breakdown": {
             "baseFee": 0.0,
             "distanceFee": 0.0,
             "surgeFee": 0.0,
-            "discount": 0.0,
+            "deliveryFeeDiscount": 0.0,
             "couponDiscount": 0.0,
+            "totalDiscount": 0.0,
+            "discount": 0.0,
         },
         "freeDeliveryThreshold": 0.0,
         "isFreeDelivery": False,
@@ -81,42 +85,64 @@ def _build_safe_zero_response(distance_km: float, missing_keys):
 
 
 def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) -> dict:
-    """Calculate delivery fee using dynamic global config."""
-    chargeable_km = max(0.0, distance_km - config["riderFreeDeliveryBelowKm"])
-    normal_km = min(chargeable_km, config["riderSurgeChargeAfterKms"])
-    surge_km = max(0.0, chargeable_km - config["riderSurgeChargeAfterKms"])
+    """Calculate delivery fee using dynamic global config.
 
-    base_fee = config["riderBaseFare"]
-    distance_fee = normal_km * config["riderFarePerKm"]
-    surge_fee = surge_km * config["riderSurgePricePerKm"]
+    Fare tiers:
+      - distance <= riderBaseFareApplicableUnderKms : flat riderBaseFare (minimum charge)
+      - riderBaseFareApplicableUnderKms < distance <= riderSurgeChargeAfterKms : distance × riderFarePerKm
+      - distance > riderSurgeChargeAfterKms : above + surge km × riderSurgePricePerKm
+
+    Free delivery only applies when there is NO surge (distance <= riderSurgeChargeAfterKms)
+    and itemTotal >= freeDeliveryAboveThreshold.
+    """
+    base_fare_km = config["riderBaseFareApplicableUnderKms"]
+    surge_km_threshold = config["riderSurgeChargeAfterKms"]
+
+    if distance_km <= base_fare_km:
+        base_fee = config["riderBaseFare"]
+        distance_fee = 0.0
+        surge_fee = 0.0
+    else:
+        base_fee = 0.0
+        normal_km = min(distance_km, surge_km_threshold)
+        surge_km = max(0.0, distance_km - surge_km_threshold)
+        distance_fee = normal_km * config["riderFarePerKm"]
+        surge_fee = surge_km * config["riderSurgePricePerKm"]
+
     calculated_delivery_fee = base_fee + distance_fee + surge_fee
 
+    # Surge zone blocks free delivery
+    surge_active = distance_km > surge_km_threshold
     free_delivery_threshold = config["freeDeliveryAboveThreshold"]
-    is_free_delivery = item_total >= free_delivery_threshold
-    free_delivery_discount = calculated_delivery_fee if is_free_delivery else 0.0
+    is_free_delivery = (not surge_active) and (item_total >= free_delivery_threshold)
+    delivery_fee_discount = calculated_delivery_fee if is_free_delivery else 0.0
     final_delivery_fee = 0.0 if is_free_delivery else calculated_delivery_fee
 
     logger.info(
         "Calculated delivery km split: "
-        f"distanceKm={distance_km}, chargeableKm={chargeable_km}, "
-        f"normalKm={normal_km}, surgeKm={surge_km}"
+        f"distanceKm={distance_km}, baseFareKm={base_fare_km}, "
+        f"surgeKmThreshold={surge_km_threshold}, surgeActive={surge_active}, "
+        f"baseFee={base_fee}, distanceFee={distance_fee}, surgeFee={surge_fee}"
     )
     logger.info(
         "Free delivery evaluation: "
         f"itemTotal={item_total}, freeDeliveryAboveThreshold={free_delivery_threshold}, "
-        f"isFreeDelivery={is_free_delivery}, freeDeliveryDiscount={free_delivery_discount}"
+        f"surgeActive={surge_active}, isFreeDelivery={is_free_delivery}, "
+        f"deliveryFeeDiscount={delivery_fee_discount}"
     )
 
     return {
         "deliveryFee": round(final_delivery_fee, 2),
+        "riderSettlementAmount": round(calculated_delivery_fee, 2),  # full earned fee regardless of free delivery
         "platformFee": round(config["platformFee"], 2),
         "breakdown": {
             "baseFee": round(base_fee, 2),
             "distanceFee": round(distance_fee, 2),
             "surgeFee": round(surge_fee, 2),
-            "freeDeliveryDiscount": round(free_delivery_discount, 2),
-            "discount": round(free_delivery_discount, 2),
+            "deliveryFeeDiscount": round(delivery_fee_discount, 2),
             "couponDiscount": 0.0,
+            "totalDiscount": round(delivery_fee_discount, 2),
+            "discount": round(delivery_fee_discount, 2),  # backward compat for CartContext
         },
         "freeDeliveryThreshold": round(free_delivery_threshold, 2),
         "isFreeDelivery": is_free_delivery,
@@ -241,9 +267,10 @@ def register_delivery_routes(app):
 
                             # Do not reduce deliveryFee; only report coupon discount
                             result['breakdown']['couponDiscount'] = round(coupon_discount, 2)
-                            result['breakdown']['discount'] = round(
-                                result['breakdown'].get('discount', 0) + coupon_discount, 2
+                            result['breakdown']['totalDiscount'] = round(
+                                result['breakdown'].get('deliveryFeeDiscount', 0) + coupon_discount, 2
                             )
+                            result['breakdown']['discount'] = result['breakdown']['totalDiscount']  # backward compat
                             coupon_applied = coupon_discount > 0
                             logger.info(
                                 "Coupon evaluated successfully for calculate-fee: "
@@ -265,6 +292,8 @@ def register_delivery_routes(app):
                     logger.error(f"Error applying coupon {coupon_code}: {str(e)}")
 
             result['couponApplied'] = coupon_applied
+            if coupon_applied and coupon_code:
+                result['couponCode'] = coupon_code
 
             logger.info(
                 "Delivery fee calculation completed: "

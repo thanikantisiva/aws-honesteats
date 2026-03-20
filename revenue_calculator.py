@@ -6,60 +6,151 @@ and writes it to both the Order and Payment records.
 import json
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
+from config.pricing import calculate_customer_price_from_hike
 from services.order_service import OrderService
 from services.payment_service import PaymentService
 from services.menu_service import MenuService
 from utils.dynamodb import dynamodb_client, TABLES
+from utils.dynamodb_helpers import dynamodb_to_python
 
 logger = Logger(service="revenue-calculator")
+
+
+def _fetch_restaurant_commission_config(restaurant_id: str) -> dict:
+    """
+    Fetch commission config for a restaurant from CONFIG#RESTAURANT#{restaurant_id}.
+    Returns the parsed 'config' attribute dict, or {} if not found.
+    """
+    try:
+        response = dynamodb_client.get_item(
+            TableName=TABLES["CONFIG"],
+            Key={
+                "partitionkey": {"S": f"CONFIG#RESTAURANT#{restaurant_id}"},
+                "sortKey": {"S": "CONFIG"},
+            },
+        )
+        item = response.get("Item")
+        if not item:
+            return {}
+        config = dynamodb_to_python(item.get("config", {"NULL": True}))
+        return config if isinstance(config, dict) else {}
+    except Exception as e:
+        logger.warning(f"Failed to fetch restaurant commission config for {restaurant_id}: {e}")
+        return {}
+
+
+def _fetch_global_default_commission() -> float:
+    """
+    Fetch defaultCommission from CONFIG#GLOBAL / CONFIG.
+    Returns 0.0 if not found.
+    """
+    try:
+        response = dynamodb_client.get_item(
+            TableName=TABLES["CONFIG"],
+            Key={
+                "partitionkey": {"S": "CONFIG#GLOBAL"},
+                "sortKey": {"S": "CONFIG"},
+            },
+        )
+        item = response.get("Item")
+        if not item:
+            return 0.0
+        config = dynamodb_to_python(item.get("config", {"NULL": True}))
+        if not isinstance(config, dict):
+            return 0.0
+        return float(config.get("defaultCommission", 0) or 0)
+    except Exception as e:
+        logger.warning(f"Failed to fetch global default commission: {e}")
+        return 0.0
+
+
+def _resolve_commission_pct(item_id: str, restaurant_config: dict, global_default: float) -> float:
+    """
+    Resolve commission percentage for an item using 3-tier priority:
+    1. Item-level:       ITM-{item_id}_commissionPercentage  in restaurant config
+    2. Restaurant-level: restaurantCommissionPercentage       in restaurant config
+    3. Global default:   defaultCommission                    from CONFIG#GLOBAL
+    """
+    item_key = f"ITM-{item_id}_commissionPercentage"
+    for field in (item_key, "restaurantCommissionPercentage"):
+        value = restaurant_config.get(field)
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    return global_default
 
 
 def _compute_revenue(order) -> dict:
     """
     Build the revenue dict from an Order object.
-    Mirrors the logic previously in initiate_payment (payment_routes.py).
+    Food commission is percentage-driven using a 3-tier config lookup:
+    item-level → restaurant-level → global default.
     """
-    total_customer_amount = 0.0
-    total_restaurant_amount = 0.0
+    total_customer_paid = 0.0
+    total_food_commission = 0.0
+    restaurantRevenue = {}
+    platformRevenue = {}
+
+    restaurant_config = _fetch_restaurant_commission_config(order.restaurant_id)
+    global_default_commission = _fetch_global_default_commission()
+
+    logger.info(
+        f"Commission config for restaurant {order.restaurant_id}: "
+        f"restaurantCommissionPercentage={restaurant_config.get('restaurantCommissionPercentage')}, "
+        f"globalDefault={global_default_commission}"
+    )
 
     for item in (order.items or []):
         item_id = item.get("itemId") or item.get("item_id") or ""
         quantity = int(item.get("quantity", 1))
-        try:
-            menu_item = MenuService.get_menu_item(order.restaurant_id, item_id)
-            if menu_item:
-                customer_price = menu_item.price
-                restaurant_price = menu_item.restaurant_price
-            else:
-                customer_price = float(item.get("price", 0))
-                restaurant_price = float(item.get("restaurantPrice", 0))
-        except Exception:
-            customer_price = float(item.get("price", 0))
-            restaurant_price = float(item.get("restaurantPrice", 0))
 
-        total_customer_amount += customer_price * quantity
-        total_restaurant_amount += restaurant_price * quantity
+        menu_item = MenuService.get_menu_item(order.restaurant_id, item_id)
 
-    food_commission = round(total_customer_amount - total_restaurant_amount, 2)
-    platform_fee = order.platform_fee or 0
-    total_platform_revenue = round(food_commission + platform_fee, 2)
+        customer_price = item.get("price", 0)
+        
+        commission_pct = _resolve_commission_pct(item_id, restaurant_config, global_default_commission)
+        item_commission = round(customer_price * commission_pct / 100, 4) * quantity
 
-    coupon_code = None
-    coupon_applied = False
-    total_discount = 0.0
+        total_food_commission += item_commission 
+        total_customer_paid += customer_price * quantity
+
+        logger.info(
+            f"Item {item_id}: customerPrice={customer_price}, qty={quantity}, "
+            f"commissionPct={commission_pct}, itemCommission={item_commission}"
+        )
 
     fee_resp = order.calculated_fee_response
+    food_commission = round(total_food_commission, 2)
+    platformRevenue["foodCommission"] = food_commission
+    
+    platform_fee = 0.0
+    if isinstance(fee_resp, dict):
+        try:
+            platform_fee = float(fee_resp.get("platformFee", 0) or 0)
+        except (TypeError, ValueError):
+            platform_fee = 0.0
+    elif order.platform_fee:
+        platform_fee = float(order.platform_fee)
+
+    platformRevenue["platformFee"] = platform_fee
+
+    total_platform_revenue = round(food_commission + platform_fee, 2)
+    restaurant_settlement = round(total_customer_paid - total_platform_revenue, 2)
+    restaurantRevenue["revenue"] = restaurant_settlement
+
+    
+    coupon_code = None
+    coupon_applied = False
+    coupon_discount = 0.0
+    issued_by = None
+
     if isinstance(fee_resp, dict):
         coupon_applied = bool(fee_resp.get("couponApplied"))
-        total_discount = float(fee_resp.get("breakdown", {}).get("discount", 0))
+        coupon_discount = float(fee_resp.get("breakdown", {}).get("couponDiscount", 0))
+        coupon_code = fee_resp.get("couponCode", None)
 
-    issued_by = None
-    if coupon_applied and coupon_code is None:
-        if isinstance(fee_resp, dict):
-            coupon_code = fee_resp.get("couponCode")
-
-    if not coupon_code:
-        coupon_code = _extract_coupon_from_order(order)
 
     if coupon_applied and coupon_code:
         try:
@@ -76,29 +167,33 @@ def _compute_revenue(order) -> dict:
         except Exception as e:
             logger.warning(f"Failed to look up coupon {coupon_code}: {e}")
 
-    restaurant_settlement = round(total_restaurant_amount, 2)
-    coupon_discount = 0.0
-    if coupon_applied and total_discount > 0:
-        coupon_discount = total_discount
+
+    if fee_resp.get("breakdown", {}).get("deliveryFeeDiscount", 0) > 0:
+        total_platform_revenue = round(total_platform_revenue - fee_resp.get("breakdown", {}).get("deliveryFeeDiscount", 0), 2)
+        platformRevenue["deliveryFeeDiscount"] = fee_resp.get("breakdown", {}).get("deliveryFeeDiscount", 0)
+
+    if coupon_applied and coupon_discount > 0:
         if issued_by == "YUMDUDE":
-            total_platform_revenue = round(total_platform_revenue - total_discount, 2)
+            total_platform_revenue = round(total_platform_revenue - coupon_discount, 2)
+            platformRevenue["couponDiscount"] = coupon_discount
         elif issued_by == "RESTAURANT":
-            restaurant_settlement = round(restaurant_settlement - total_discount, 2)
+            restaurant_settlement = round(restaurant_settlement - coupon_discount, 2)
+            restaurantRevenue["couponDiscount"] = coupon_discount
+
+    restaurantRevenue["finalPayout"] = restaurantRevenue.get("revenue", 0) - restaurantRevenue.get("couponDiscount", 0)
+    platformRevenue["finalPayout"] = platformRevenue.get("foodCommission", 0) + platformRevenue.get("platformFee", 0) - platformRevenue.get("deliveryFeeDiscount", 0) - platformRevenue.get("couponDiscount", 0)
 
     return {
-        "totalCustomerPaid": round(order.grand_total, 2),
-        "totalDiscount": round(total_discount, 2),
-        "restaurantSettlement": restaurant_settlement,
+        "totalCustomerPaid": round(total_customer_paid, 2),
+        "totalDiscount": round(fee_resp.get("breakdown", {}).get("totalDiscount", 0), 2),
         "couponCode": coupon_code,
         "couponApplied": coupon_applied,
         "couponIssuedBy": issued_by,
-        "platformRevenue": {
-            "foodCommission": food_commission,
-            "deliveryFee": order.delivery_fee or 0,
-            "platformFee": platform_fee,
-            "totalCommission": total_platform_revenue,
-            "couponDiscount": round(coupon_discount, 2),
-        },
+        "restaurantRevenue": restaurantRevenue,
+        "platformRevenue": platformRevenue,
+        "riderRevenue": {
+            "finalPayout": fee_resp.get("riderSettlementAmount", 0)
+        }
     }
 
 

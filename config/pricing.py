@@ -1,5 +1,7 @@
 """Pricing configuration and markup calculations"""
 
+import math
+
 # Category-based markup percentages for platform commission
 CATEGORY_MARKUP = {
     'Starters': 0.15,          # 15% markup
@@ -43,10 +45,24 @@ def calculate_customer_price(restaurant_price: float, category: str = None) -> f
     customer_price = restaurant_price * (1 + markup_percentage)
     
     # Round UP to nearest multiple of 5
-    import math
     rounded_price = math.ceil(customer_price / 5) * 5
     
     return float(rounded_price)
+
+
+def round_nearest_half(value: float) -> float:
+    """Round to nearest 0.5 (e.g. 67.8 -> 68, 67.3 -> 67.5)."""
+    return round(value * 2) / 2
+
+
+def calculate_customer_price_from_hike(restaurant_price: float, hike_percentage: float = 0) -> float:
+    """
+    Calculate customer-facing price from restaurantPrice and hikePercentage.
+
+    Formula: restaurantPrice * (1 + hikePercentage / 100), rounded to nearest 0.5.
+    """
+    raw = float(restaurant_price) * (1 + (float(hike_percentage or 0) / 100))
+    return round_nearest_half(raw)
 
 
 def get_platform_commission(customer_price: float, restaurant_price: float) -> float:

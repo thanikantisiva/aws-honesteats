@@ -264,13 +264,11 @@ def register_rider_order_routes(app):
                 RiderService.set_working_on_order(rider_id, None)
                 
                 # Add to rider's earnings
-                EarningsService.add_delivery(rider_id, order_id, order.delivery_fee, 0.0)
+                EarningsService.add_delivery(rider_id, order_id, order.get('riderRevenue', {}).get('finalPayout', 0), 0.0)
 
                 # Add restaurant earnings entry
-                restaurant_settlement = 0.0
-                if order.revenue and isinstance(order.revenue, dict):
-                    restaurant_settlement = float(order.revenue.get('restaurantSettlement', 0))
-                RestaurantEarningsService.add_order_earning(order.restaurant_id, order_id, restaurant_settlement)
+                
+                RestaurantEarningsService.add_order_earning(order.restaurant_id, order_id, order.get('restaurantRevenue', {}).get('finalPayout', 0))
             
             # Update order status
             OrderService.update_order_status(order_id, new_status)

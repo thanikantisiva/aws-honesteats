@@ -6,6 +6,16 @@ from utils.datetime_ist import now_ist_iso, epoch_ms_to_ist_iso
 
 class Order:
     """Order model"""
+
+    @staticmethod
+    def _platform_fee_from_calculated_response(calculated_fee_response: Optional[Dict[str, Any]]) -> Optional[float]:
+        if not isinstance(calculated_fee_response, dict):
+            return None
+        try:
+            value = calculated_fee_response.get("platformFee")
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
     
     #restaurant statuses
     STATUS_INITIATED = "INITIATED"  # Order created, payment pending
@@ -98,7 +108,7 @@ class Order:
         self.items = items
         self.food_total = food_total
         self.delivery_fee = delivery_fee
-        self.platform_fee = platform_fee
+        self._platform_fee = float(platform_fee or 0)
         self.grand_total = grand_total
         self.status = status
         self.rider_id = rider_id
@@ -136,6 +146,13 @@ class Order:
         self.calculated_fee_response = calculated_fee_response
         # Store as IST ISO string; support int (legacy) for backward compatibility
         self.created_at = created_at if created_at is not None else now_ist_iso()
+
+    @property
+    def platform_fee(self) -> float:
+        calculated_platform_fee = self._platform_fee_from_calculated_response(self.calculated_fee_response)
+        if calculated_platform_fee is not None:
+            return calculated_platform_fee
+        return self._platform_fee
     
     def to_dict(self) -> dict:
         """Convert to dictionary"""
@@ -303,7 +320,6 @@ class Order:
             "items": python_to_dynamodb(self.items),  # Store as List of Maps
             "foodTotal": {"N": str(self.food_total)},
             "deliveryFee": {"N": str(self.delivery_fee)},
-            "platformFee": {"N": str(self.platform_fee)},
             "grandTotal": {"N": str(self.grand_total)},
             "status": {"S": self.status},
             "createdAt": {"S": created_at},  # IST ISO string
