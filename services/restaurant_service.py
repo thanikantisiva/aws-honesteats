@@ -39,27 +39,6 @@ class RestaurantService:
         Returns:
             Distance in kilometers
         """
-        api_key = os.environ.get('GOOGLE_MAPS_API_KEY')
-        if api_key:
-            try:
-                url = "https://maps.googleapis.com/maps/api/directions/json"
-                params = {
-                    "origin": f"{lat1},{lon1}",
-                    "destination": f"{lat2},{lon2}",
-                    "mode": "driving",
-                    "key": api_key
-                }
-                response = requests.get(url, params=params, timeout=10)
-                data = response.json() if response.content else {}
-                if data.get("status") == "OK":
-                    routes = data.get("routes", [])
-                    if routes and routes[0].get("legs"):
-                        meters = routes[0]["legs"][0]["distance"]["value"]
-                        return round(meters / 1000.0, 3)
-                logger.warning(f"Google Directions API failed: {data.get('status')}")
-            except Exception as e:
-                logger.warning(f"Google Directions API error, falling back to Haversine: {str(e)}")
-
         # Fallback: Haversine distance
         R = 6371  # Earth's radius in km
         

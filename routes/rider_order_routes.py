@@ -11,10 +11,49 @@ from services.notification_service import NotificationService
 from models.order import Order
 from datetime import datetime
 import random
+from typing import Any, Dict, Optional
 
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+
+
+def _revenue_final_payout(order: Order, *path: str) -> float:
+    """Read nested scalar from order.revenue (e.g. ('riderRevenue', 'finalPayout'))."""
+    rev: Optional[Dict[str, Any]] = getattr(order, "revenue", None)
+    if not isinstance(rev, dict):
+        return 0.0
+    node: Any = rev
+    for key in path:
+        if not isinstance(node, dict):
+            return 0.0
+        node = node.get(key)
+        if node is None:
+            return 0.0
+    try:
+        return float(node)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rider_payout_for_earnings(order: Order) -> float:
+    """Rider delivery payout: revenue.riderRevenue.finalPayout, then calculated_fee_response, then delivery_fee."""
+    payout = _revenue_final_payout(order, "riderRevenue", "finalPayout")
+    if payout:
+        return payout
+    cfr = getattr(order, "calculated_fee_response", None)
+    if isinstance(cfr, dict):
+        for key in ("riderSettlementAmount", "riderFare", "deliveryFee"):
+            val = cfr.get(key)
+            if val is not None:
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    pass
+    try:
+        return float(getattr(order, "delivery_fee", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def register_rider_order_routes(app):
@@ -263,12 +302,14 @@ def register_rider_order_routes(app):
                 # Clear rider's working_on_order
                 RiderService.set_working_on_order(rider_id, None)
                 
-                # Add to rider's earnings
-                EarningsService.add_delivery(rider_id, order_id, order.get('riderRevenue', {}).get('finalPayout', 0), 0.0)
+                # Add to rider's earnings (order is an Order model; payouts live under revenue.*)
+                rider_payout = _rider_payout_for_earnings(order)
+                EarningsService.add_delivery(rider_id, order_id, rider_payout, 0.0)
 
-                # Add restaurant earnings entry
-                
-                RestaurantEarningsService.add_order_earning(order.restaurant_id, order_id, order.get('restaurantRevenue', {}).get('finalPayout', 0))
+                restaurant_payout = _revenue_final_payout(order, "restaurantRevenue", "finalPayout")
+                RestaurantEarningsService.add_order_earning(
+                    order.restaurant_id, order_id, restaurant_payout
+                )
             
             # Update order status
             OrderService.update_order_status(order_id, new_status)
