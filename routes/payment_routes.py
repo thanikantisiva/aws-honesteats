@@ -4,6 +4,7 @@ from services.payment_service import PaymentService
 from services.order_service import OrderService
 from services.restaurant_service import RestaurantService
 from services.address_service import AddressService
+from services.restaurant_earnings_service import RestaurantEarningsService
 from models.payment import Payment
 from models.order import Order
 from utils import normalize_phone
@@ -398,6 +399,14 @@ def register_payment_routes(app):
             
             body = app.current_event.body
             signature = app.current_event.get_header_value('X-Razorpay-Signature') or ''
+
+            def _find_payment(razorpay_order_id=None, razorpay_payment_id=None):
+                payment_record = None
+                if razorpay_payment_id:
+                    payment_record = PaymentService.get_payment_by_razorpay_payment_id(razorpay_payment_id)
+                if not payment_record and razorpay_order_id:
+                    payment_record = PaymentService.get_payment_by_razorpay_order_id(razorpay_order_id)
+                return payment_record
             
             # Verify webhook signature
             from utils.ssm import get_secret
@@ -419,26 +428,84 @@ def register_payment_routes(app):
             event = payload.get('event')
             payment_entity = payload.get('payload', {}).get('payment', {}).get('entity', {})
             
-            logger.info(f"📨 Razorpay webhook received: {event}")
+            logger.info(
+                f"Razorpay webhook received: event={event}, "
+                f"razorpayOrderId={payment_entity.get('order_id')}, "
+                f"razorpayPaymentId={payment_entity.get('id')}"
+            )
             
             if event == 'payment.captured':
                 # Payment was successful
                 razorpay_payment_id = payment_entity.get('id')
                 razorpay_order_id = payment_entity.get('order_id')
+                payment_method = (payment_entity.get('method') or '').upper() or None
                 
                 logger.info(f"✅ Payment captured: {razorpay_payment_id}")
                 
                 # Update payment status in database
-                # Find payment by razorpayOrderId
-                # This is a backup mechanism in case frontend verification fails
+                payment = _find_payment(
+                    razorpay_order_id=razorpay_order_id,
+                    razorpay_payment_id=razorpay_payment_id
+                )
+                if payment:
+                    PaymentService.update_payment(payment.payment_id, {
+                        'paymentStatus': Payment.STATUS_SUCCESS,
+                        'razorpayOrderId': razorpay_order_id,
+                        'razorpayPaymentId': razorpay_payment_id,
+                        'paymentMethod': payment_method
+                    })
+                    logger.info(f"✅ Payment {payment.payment_id} marked as SUCCESS via webhook")
+
+                    if payment.order_id:
+                        order = OrderService.get_order(payment.order_id)
+                        if order and order.status == Order.STATUS_INITIATED:
+                            OrderService.update_order_status(payment.order_id, Order.STATUS_CONFIRMED, None)
+
+                        order_updates = {
+                            'paymentId': payment.payment_id
+                        }
+                        if payment_method:
+                            order_updates['paymentMethod'] = payment_method
+                        if not order or not order.delivery_otp:
+                            order_updates['deliveryOtp'] = str(random.randint(1000, 9999))
+                        if not order or not order.pickup_otp:
+                            order_updates['pickupOtp'] = str(random.randint(1000, 9999))
+
+                        OrderService.update_order(payment.order_id, order_updates)
+                        logger.info(f"[orderId={payment.order_id}] Updated order after payment.captured webhook")
+                else:
+                    logger.warning(
+                        f"No payment found for payment.captured webhook: "
+                        f"razorpayOrderId={razorpay_order_id}, razorpayPaymentId={razorpay_payment_id}"
+                    )
                 
             elif event == 'payment.failed':
                 # Payment failed
                 razorpay_payment_id = payment_entity.get('id')
+                razorpay_order_id = payment_entity.get('order_id')
                 error_code = payment_entity.get('error_code')
                 error_description = payment_entity.get('error_description')
                 
                 logger.error(f"❌ Payment failed: {razorpay_payment_id}, {error_code}")
+
+                payment = _find_payment(
+                    razorpay_order_id=razorpay_order_id,
+                    razorpay_payment_id=razorpay_payment_id
+                )
+                if payment:
+                    PaymentService.update_payment(payment.payment_id, {
+                        'paymentStatus': Payment.STATUS_FAILED,
+                        'razorpayOrderId': razorpay_order_id,
+                        'razorpayPaymentId': razorpay_payment_id,
+                        'errorCode': error_code,
+                        'errorDescription': error_description
+                    })
+                    logger.info(f"✅ Payment {payment.payment_id} marked as FAILED via webhook")
+                else:
+                    logger.warning(
+                        f"No payment found for payment.failed webhook: "
+                        f"razorpayOrderId={razorpay_order_id}, razorpayPaymentId={razorpay_payment_id}"
+                    )
                 
             elif event == 'refund.created' or event == 'payment.refunded':
                 # Refund initiated
@@ -447,45 +514,59 @@ def register_payment_routes(app):
                 
                 refund_id = refund_entity.get('id')
                 razorpay_payment_id = refund_entity.get('payment_id') or payment_entity.get('id')
+                razorpay_order_id = payment_entity.get('order_id')
                 amount_refunded = refund_entity.get('amount', 0) / 100  # Convert paise to rupees
                 refund_status = refund_entity.get('status')
+                refund_comment = (
+                    refund_entity.get('notes', {}).get('comment')
+                    if isinstance(refund_entity.get('notes'), dict)
+                    else None
+                ) or ""
+                refund_created_at = refund_entity.get('created_at')
                 
                 logger.info(f"💰 Refund {refund_status}: {refund_id}, payment: {razorpay_payment_id}, amount: ₹{amount_refunded}")
                 
                 # Find and update payment by razorpayPaymentId
-                if razorpay_payment_id:
-                    # Query to find payment by razorpayPaymentId
+                if razorpay_payment_id or razorpay_order_id:
                     try:
-                        # Scan to find payment (alternatively, use GSI if needed)
-                        scan_response = dynamodb_client.scan(
-                            TableName=TABLES['PAYMENTS'],
-                            FilterExpression='razorpayPaymentId = :payment_id',
-                            ExpressionAttributeValues={
-                                ':payment_id': {'S': razorpay_payment_id}
-                            },
-                            Limit=1
+                        payment = _find_payment(
+                            razorpay_order_id=razorpay_order_id,
+                            razorpay_payment_id=razorpay_payment_id
                         )
-                        
-                        if scan_response.get('Items'):
-                            payment_item = scan_response['Items'][0]
-                            payment_id = payment_item['paymentId']['S']
-                            
-                            # Update payment status to REFUNDED
-                            PaymentService.update_payment(payment_id, {
+
+                        if payment:
+                            PaymentService.update_payment(payment.payment_id, {
                                 'paymentStatus': Payment.STATUS_REFUNDED,
+                                'razorpayOrderId': razorpay_order_id,
+                                'razorpayPaymentId': razorpay_payment_id,
+                                'refundAmount': amount_refunded,
                                 'errorCode': refund_id,
                                 'errorDescription': f'Refund {refund_status}: ₹{amount_refunded}'
                             })
-                            
-                            logger.info(f"✅ Payment {payment_id} marked as REFUNDED")
-                            
-                            # Also update associated order status
-                            order_id = payment_item.get('orderId', {}).get('S')
-                            if order_id:
-                                OrderService.update_order_status(order_id, Order.STATUS_CANCELLED, None)
-                                logger.info(f"✅ Order {order_id} marked as CANCELLED")
+
+                            logger.info(f"✅ Payment {payment.payment_id} marked as REFUNDED")
+
+                            if 'restaurant' in refund_comment.lower() and payment.restaurant_id and payment.order_id:
+                                RestaurantEarningsService.add_refund_adjustment(
+                                    restaurant_id=payment.restaurant_id,
+                                    order_id=payment.order_id,
+                                    refund_id=refund_id,
+                                    amount=amount_refunded,
+                                    created_at_epoch=refund_created_at
+                                )
+                                logger.info(
+                                    f"[orderId={payment.order_id}] Added negative restaurant earnings entry "
+                                    f"for refundId={refund_id}, amount={amount_refunded}"
+                                )
+
+                            if payment.order_id:
+                                OrderService.update_order_status(payment.order_id, Order.STATUS_CANCELLED, None)
+                                logger.info(f"✅ Order {payment.order_id} marked as CANCELLED")
                         else:
-                            logger.warning(f"Payment not found for razorpay_payment_id: {razorpay_payment_id}")
+                            logger.warning(
+                                f"Payment not found for refund webhook: "
+                                f"razorpayOrderId={razorpay_order_id}, razorpayPaymentId={razorpay_payment_id}"
+                            )
                     except Exception as e:
                         logger.error(f"Error updating refund status: {str(e)}", exc_info=True)
                 

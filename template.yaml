@@ -433,6 +433,8 @@ Resources:
                 - !Sub '${RestaurantsTable.Arn}/index/GSI2'
                 - !Sub '${RestaurantsTable.Arn}/index/GSI3'
                 - !Sub '${PaymentsTable.Arn}/index/customer-phone-createdAtIso-index'
+                - !Sub '${PaymentsTable.Arn}/index/razorpayPaymentId-index'
+                - !Sub '${PaymentsTable.Arn}/index/razorpayOrderId-index'
                 - !Sub '${RiderEarningsTable.Arn}/index/riderId-date-index'
                 - !Sub '${RestaurantEarningsTable.Arn}/index/restaurantId-date-index'
             - Effect: Allow
@@ -1412,6 +1414,10 @@ Resources:
           AttributeType: S
         - AttributeName: createdAtIso
           AttributeType: S
+        - AttributeName: razorpayPaymentId
+          AttributeType: S
+        - AttributeName: razorpayOrderId
+          AttributeType: S
       KeySchema:
         - AttributeName: paymentId
           KeyType: HASH
@@ -1422,6 +1428,18 @@ Resources:
               KeyType: HASH
             - AttributeName: createdAtIso
               KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: razorpayPaymentId-index
+          KeySchema:
+            - AttributeName: razorpayPaymentId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: razorpayOrderId-index
+          KeySchema:
+            - AttributeName: razorpayOrderId
+              KeyType: HASH
           Projection:
             ProjectionType: ALL
       Tags:

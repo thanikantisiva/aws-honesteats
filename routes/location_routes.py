@@ -72,7 +72,7 @@ def register_location_routes(app):
     @app.post("/api/v1/location/distance")
     @tracer.capture_method
     def calculate_distance():
-        """Calculate distance between two coordinates using Google Directions API"""
+        """Calculate road distance between two coordinates using Google Directions API with Haversine fallback"""
         try:
             body = app.current_event.json_body
             from_lat = body.get('fromLat')
@@ -83,7 +83,7 @@ def register_location_routes(app):
             if from_lat is None or from_lng is None or to_lat is None or to_lng is None:
                 return {"error": "fromLat, fromLng, toLat, toLng are required"}, 400
 
-            distance_km = RestaurantService.calculate_distance(
+            distance_km = RestaurantService.calculate_road_distance(
                 float(from_lat), float(from_lng), float(to_lat), float(to_lng)
             )
 

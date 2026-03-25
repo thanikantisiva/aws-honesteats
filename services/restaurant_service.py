@@ -2,12 +2,13 @@
 from typing import List, Optional, Set
 import math
 import concurrent.futures
-import os
 import requests
 from botocore.exceptions import ClientError
 from models.restaurant import Restaurant
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.geohash import encode as geohash_encode, get_neighbors, get_precision_for_radius
+from utils.distance import calculate_distance as haversine_distance
+from utils.ssm import get_secret
 from aws_lambda_powertools import Logger
 
 logger = Logger()
@@ -29,8 +30,7 @@ class RestaurantService:
     @staticmethod
     def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """
-        Calculate distance between two coordinates using Google Maps Directions API
-        Falls back to Haversine on error or missing API key.
+        Calculate straight-line distance using Haversine formula.
         
         Args:
             lat1, lon1: First coordinate
@@ -39,20 +39,47 @@ class RestaurantService:
         Returns:
             Distance in kilometers
         """
-        # Fallback: Haversine distance
-        R = 6371  # Earth's radius in km
-        
-        dLat = math.radians(lat2 - lat1)
-        dLon = math.radians(lon2 - lon1)
-        
-        a = (math.sin(dLat / 2) * math.sin(dLat / 2) +
-             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
-             math.sin(dLon / 2) * math.sin(dLon / 2))
-        
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        distance = R * c
-        
-        return distance
+        return haversine_distance(lat1, lon1, lat2, lon2)
+
+    @staticmethod
+    def calculate_road_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """
+        Calculate road distance using Google Directions API.
+        Falls back to Haversine when the API call fails or returns no route.
+        """
+        try:
+            api_key = get_secret('GOOGLE_MAPS_API_KEY', '')
+            if not api_key:
+                logger.warning("GOOGLE_MAPS_API_KEY not configured. Falling back to Haversine distance.")
+                return RestaurantService.calculate_distance(lat1, lon1, lat2, lon2)
+
+            response = requests.get(
+                "https://maps.googleapis.com/maps/api/directions/json",
+                params={
+                    "origin": f"{lat1},{lon1}",
+                    "destination": f"{lat2},{lon2}",
+                    "mode": "driving",
+                    "key": api_key,
+                },
+                timeout=10,
+            )
+            data = response.json() if response.content else {}
+            status = data.get("status")
+
+            if response.status_code == 200 and status == "OK":
+                routes = data.get("routes") or []
+                if routes and routes[0].get("legs"):
+                    meters = routes[0]["legs"][0]["distance"]["value"]
+                    return round(meters / 1000.0, 3)
+
+            logger.warning(
+                f"Google Directions API failed. statusCode={response.status_code}, status={status}. "
+                "Falling back to Haversine distance."
+            )
+        except Exception as e:
+            logger.warning(f"Google Directions API error: {str(e)}. Falling back to Haversine distance.")
+
+        return RestaurantService.calculate_distance(lat1, lon1, lat2, lon2)
     
     @staticmethod
     def _query_restaurants_by_geohash(geohash: str, precision: int = 7) -> List[Restaurant]:

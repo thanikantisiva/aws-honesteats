@@ -128,6 +128,52 @@ class PaymentService:
         except ClientError as e:
             logger.error(f"Failed to get payment: {str(e)}")
             raise
+
+    @staticmethod
+    def get_payment_by_razorpay_order_id(razorpay_order_id: str) -> Optional[Payment]:
+        """Get payment by Razorpay order ID using GSI."""
+        try:
+            response = dynamodb_client.query(
+                TableName=TABLES['PAYMENTS'],
+                IndexName='razorpayOrderId-index',
+                KeyConditionExpression='razorpayOrderId = :razorpay_order_id',
+                ExpressionAttributeValues={
+                    ':razorpay_order_id': {'S': razorpay_order_id}
+                },
+                Limit=1
+            )
+
+            items = response.get('Items', [])
+            if not items:
+                return None
+
+            return Payment.from_dynamodb_item(items[0])
+        except ClientError as e:
+            logger.error(f"Failed to get payment by razorpayOrderId: {str(e)}")
+            raise
+
+    @staticmethod
+    def get_payment_by_razorpay_payment_id(razorpay_payment_id: str) -> Optional[Payment]:
+        """Get payment by Razorpay payment ID using GSI."""
+        try:
+            response = dynamodb_client.query(
+                TableName=TABLES['PAYMENTS'],
+                IndexName='razorpayPaymentId-index',
+                KeyConditionExpression='razorpayPaymentId = :razorpay_payment_id',
+                ExpressionAttributeValues={
+                    ':razorpay_payment_id': {'S': razorpay_payment_id}
+                },
+                Limit=1
+            )
+
+            items = response.get('Items', [])
+            if not items:
+                return None
+
+            return Payment.from_dynamodb_item(items[0])
+        except ClientError as e:
+            logger.error(f"Failed to get payment by razorpayPaymentId: {str(e)}")
+            raise
     
     @staticmethod
     def create_payment(payment: Payment) -> Payment:

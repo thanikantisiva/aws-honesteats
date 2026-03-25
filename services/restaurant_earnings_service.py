@@ -33,6 +33,45 @@ class RestaurantEarningsService:
             raise Exception(f"Failed to add restaurant earning: {str(e)}")
 
     @staticmethod
+    def add_refund_adjustment(
+        restaurant_id: str,
+        order_id: str,
+        refund_id: str,
+        amount: float,
+        created_at_epoch: int = None
+    ):
+        """Add a negative restaurant earning row for refund adjustments."""
+        try:
+            if created_at_epoch:
+                date_prefix = datetime.utcfromtimestamp(int(created_at_epoch)).strftime('%Y-%m-%d')
+            else:
+                date_prefix = datetime.utcnow().strftime('%Y-%m-%d')
+
+            earnings = RestaurantEarnings(
+                restaurant_id=restaurant_id,
+                date=f"{date_prefix}#{order_id}#REFUND#{refund_id}",
+                total_orders=0,
+                total_earnings=-abs(float(amount)),
+                order_id=order_id,
+                settled=False,
+                settled_at=None,
+                settlement_id=None
+            )
+
+            dynamodb_client.put_item(
+                TableName=TABLES['RESTAURANT_EARNINGS'],
+                Item=earnings.to_dynamodb_item(),
+                ConditionExpression='attribute_not_exists(restaurantId) AND attribute_not_exists(#date)',
+                ExpressionAttributeNames={
+                    '#date': 'date'
+                }
+            )
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                return
+            raise Exception(f"Failed to add restaurant refund adjustment: {str(e)}")
+
+    @staticmethod
     def get_earnings_for_date_range(restaurant_id: str, start_date: str, end_date: str) -> List[RestaurantEarnings]:
         """Get restaurant earnings for a date range"""
         try:

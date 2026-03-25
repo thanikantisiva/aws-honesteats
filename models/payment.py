@@ -34,6 +34,7 @@ class Payment:
         order_id: Optional[str] = None,
         error_code: Optional[str] = None,
         error_description: Optional[str] = None,
+        refund_amount: Optional[float] = None,
         revenue: Optional[dict] = None,
         created_at: Optional[Union[int, str]] = None,
         updated_at: Optional[Union[int, str]] = None
@@ -52,6 +53,7 @@ class Payment:
         self.order_id = order_id
         self.error_code = error_code
         self.error_description = error_description
+        self.refund_amount = float(refund_amount) if refund_amount is not None else None
         self.revenue = revenue  # Revenue breakdown for analytics
         _now = now_ist_iso()
         self.created_at = created_at if created_at is not None else _now
@@ -73,6 +75,7 @@ class Payment:
             'orderId': self.order_id,
             'errorCode': self.error_code,
             'errorDescription': self.error_description,
+            'refundAmount': self.refund_amount,
             'revenue': self.revenue,
             'createdAt': epoch_ms_to_ist_iso(self.created_at) if isinstance(self.created_at, int) else self.created_at,
             'updatedAt': epoch_ms_to_ist_iso(self.updated_at) if isinstance(self.updated_at, int) else self.updated_at
@@ -126,6 +129,8 @@ class Payment:
             item['errorCode'] = {'S': self.error_code}
         if self.error_description:
             item['errorDescription'] = {'S': self.error_description}
+        if self.refund_amount is not None:
+            item['refundAmount'] = {'N': str(self.refund_amount)}
         if self.revenue:
             from utils.dynamodb_helpers import python_to_dynamodb
             item['revenue'] = python_to_dynamodb(self.revenue)  # Store as Map
@@ -164,6 +169,7 @@ class Payment:
             order_id=item.get('orderId', {}).get('S'),
             error_code=item.get('errorCode', {}).get('S'),
             error_description=item.get('errorDescription', {}).get('S'),
+            refund_amount=float(item['refundAmount']['N']) if 'refundAmount' in item and 'N' in item['refundAmount'] else None,
             created_at=created_at,
             updated_at=updated_at
         )
