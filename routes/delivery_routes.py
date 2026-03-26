@@ -60,12 +60,26 @@ def _fetch_global_delivery_config():
     return parsed_config, []
 
 
-def _build_safe_zero_response(distance_km: float, missing_keys):
+def _build_gst_breakdown(
+    item_total: float, customer_delivery_fee: float, platform_fee: float
+) -> dict:
+    """GST on food (5%), on customer delivery charge and platform fee (18% each)."""
+    rounded_delivery = round(customer_delivery_fee, 2)
+    rounded_platform = round(platform_fee, 2)
+    return {
+        "gstOnFood": round(item_total * 0.05, 2),
+        "gstOnDeliveryFee": round(rounded_delivery * 0.18, 2),
+        "gstOnPlatformFee": round(rounded_platform * 0.18, 2),
+    }
+
+
+def _build_safe_zero_response(distance_km: float, missing_keys, item_total: float = 0.0):
     """Return a safe response when config is missing/invalid."""
     return {
         "deliveryFee": 0.0,
         "riderSettlementAmount": 0.0,
         "platformFee": 0.0,
+        "gst": _build_gst_breakdown(item_total, 0.0, 0.0),
         "breakdown": {
             "baseFee": 0.0,
             "distanceFee": 0.0,
@@ -131,10 +145,14 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
         f"deliveryFeeDiscount={delivery_fee_discount}"
     )
 
+    delivery_fee_rounded = round(final_delivery_fee, 2)
+    platform_fee_rounded = round(config["platformFee"], 2)
+
     return {
-        "deliveryFee": round(final_delivery_fee, 2),
+        "deliveryFee": delivery_fee_rounded,
         "riderSettlementAmount": round(calculated_delivery_fee, 2),  # full earned fee regardless of free delivery
-        "platformFee": round(config["platformFee"], 2),
+        "platformFee": platform_fee_rounded,
+        "gst": _build_gst_breakdown(item_total, delivery_fee_rounded, platform_fee_rounded),
         "breakdown": {
             "baseFee": round(base_fee, 2),
             "distanceFee": round(distance_fee, 2),
@@ -218,7 +236,7 @@ def register_delivery_routes(app):
                     f"missingKeys={missing_keys}"
                 )
                 metrics.add_metric(name="DeliveryFeeConfigMissing", unit="Count", value=1)
-                return _build_safe_zero_response(distance_km, missing_keys), 200
+                return _build_safe_zero_response(distance_km, missing_keys, item_total), 200
 
             logger.info(
                 "Global delivery config loaded: "
