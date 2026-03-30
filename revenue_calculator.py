@@ -204,6 +204,12 @@ def _compute_revenue(order) -> tuple[dict, list]:
     restaurantRevenue["finalPayout"] = restaurantRevenue.get("revenue", 0) - restaurantRevenue.get("couponDiscount", 0)
     platformRevenue["finalPayout"] = platformRevenue.get("foodCommission", 0) + platformRevenue.get("platformFee", 0) - platformRevenue.get("deliveryFeeDiscount", 0) - platformRevenue.get("couponDiscount", 0)
 
+    gst_data = fee_dict.get("gst", {})
+    gst_on_food = round(float(gst_data.get("gstOnFood", 0) or 0), 2)
+    gst_on_delivery = round(float(gst_data.get("gstOnDeliveryFee", 0) or 0), 2)
+    gst_on_platform = round(float(gst_data.get("gstOnPlatformFee", 0) or 0), 2)
+    total_gst = round(gst_on_food + gst_on_delivery + gst_on_platform, 2)
+
     revenue = {
         "totalCustomerPaid": round(total_customer_paid, 2),
         "totalDiscount": round(fee_dict.get("breakdown", {}).get("totalDiscount", 0), 2),
@@ -214,7 +220,13 @@ def _compute_revenue(order) -> tuple[dict, list]:
         "platformRevenue": platformRevenue,
         "riderRevenue": {
             "finalPayout": fee_dict.get("riderSettlementAmount", 0)
-        }
+        },
+        "govtRevenue": {
+            "gstOnFood": gst_on_food,
+            "gstOnDeliveryFee": gst_on_delivery,
+            "gstOnPlatformFee": gst_on_platform,
+            "finalPayout": total_gst,
+        },
     }
     return revenue, enriched_items
 

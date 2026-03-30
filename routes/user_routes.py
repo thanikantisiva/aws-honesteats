@@ -79,6 +79,9 @@ def register_user_routes(app):
         """Update user information. Request body may include role, default CUSTOMER."""
         try:
             body = app.current_event.json_body
+            phone = normalize_phone(phone)
+            if not phone:
+                return {"error": "Phone number is required"}, 400
             role = (body.get("role") or "CUSTOMER").upper()
             if role not in ("CUSTOMER", "RIDER"):
                 return {"error": "Invalid role"}, 400

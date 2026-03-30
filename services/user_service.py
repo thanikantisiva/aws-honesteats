@@ -81,6 +81,36 @@ class UserService:
             raise Exception(f"Failed to create user: {str(e)}")
 
     @staticmethod
+    def _upsert_create_from_updates(phone: str, role: str, updates: dict) -> None:
+        """Insert (phone, role) if absent. Swallows ConditionalCheckFailed (concurrent create)."""
+        raw_name = updates.get("name")
+        name = (raw_name or "").strip() or "User"
+        email = updates.get("email")
+        dob = updates.get("dateOfBirth")
+        is_active = updates["isActive"] if "isActive" in updates else True
+        upi = updates.get("upiId")
+        user = User(
+            phone=phone,
+            name=name,
+            email=email,
+            role=role,
+            is_active=is_active,
+            date_of_birth=dob,
+            upi_id=upi,
+        )
+        try:
+            dynamodb_client.put_item(
+                TableName=TABLES['USERS'],
+                Item=user.to_dynamodb_item(),
+                ConditionExpression="attribute_not_exists(phone) AND attribute_not_exists(#role_col)",
+                ExpressionAttributeNames={"#role_col": "role"},
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return
+            raise Exception(f"Failed to create user: {str(e)}")
+
+    @staticmethod
     def delete_user(phone: str, role: str) -> None:
         """Delete a user by phone number and role"""
         try:
@@ -97,109 +127,115 @@ class UserService:
     @staticmethod
     def update_user(phone: str, role: str, updates: dict) -> User:
         """Update user information (requires role for composite key)"""
-        try:
-            update_expressions = []
-            remove_expressions = []
-            expression_attribute_names = {}
-            expression_attribute_values = {}
-            expression_attribute_names['#role'] = 'role'
-            
-            if 'name' in updates:
-                update_expressions.append('#name = :name')
-                expression_attribute_names['#name'] = 'name'
-                expression_attribute_values[':name'] = {'S': updates['name']}
-            
-            if 'email' in updates:
-                update_expressions.append('#email = :email')
-                expression_attribute_names['#email'] = 'email'
-                expression_attribute_values[':email'] = {'S': updates['email']}
-            
-            if 'isActive' in updates:
-                update_expressions.append('#isActive = :isActive')
-                expression_attribute_names['#isActive'] = 'isActive'
-                expression_attribute_values[':isActive'] = {'BOOL': updates['isActive']}
-            
-            if 'dateOfBirth' in updates:
-                update_expressions.append('#dateOfBirth = :dateOfBirth')
-                expression_attribute_names['#dateOfBirth'] = 'dateOfBirth'
-                expression_attribute_values[':dateOfBirth'] = {'S': updates['dateOfBirth']}
-            
-            if 'fcmToken' in updates:
-                expression_attribute_names['#fcmToken'] = 'fcmToken'
-                if updates['fcmToken'] is None:
-                    remove_expressions.append('#fcmToken')
-                else:
-                    update_expressions.append('#fcmToken = :fcmToken')
-                    expression_attribute_values[':fcmToken'] = {'S': updates['fcmToken']}
-            
-            if 'fcmTokenUpdatedAt' in updates:
-                update_expressions.append('#fcmTokenUpdatedAt = :fcmTokenUpdatedAt')
-                expression_attribute_names['#fcmTokenUpdatedAt'] = 'fcmTokenUpdatedAt'
-                expression_attribute_values[':fcmTokenUpdatedAt'] = {'S': updates['fcmTokenUpdatedAt']}
-            
-            if 'lat' in updates:
-                update_expressions.append('#lat = :lat')
-                expression_attribute_names['#lat'] = 'lat'
-                expression_attribute_values[':lat'] = {'N': str(updates['lat'])}
-            
-            if 'lng' in updates:
-                update_expressions.append('#lng = :lng')
-                expression_attribute_names['#lng'] = 'lng'
-                expression_attribute_values[':lng'] = {'N': str(updates['lng'])}
-            
-            if 'geohash' in updates:
-                update_expressions.append('#geohash = :geohash')
-                expression_attribute_names['#geohash'] = 'geohash'
-                expression_attribute_values[':geohash'] = {'S': updates['geohash']}
-            
-            # Rider-specific fields
-            if 'riderStatus' in updates:
-                update_expressions.append('#riderStatus = :riderStatus')
-                expression_attribute_names['#riderStatus'] = 'riderStatus'
-                expression_attribute_values[':riderStatus'] = {'S': updates['riderStatus']}
-            
-            if 'rejectionReason' in updates:
-                update_expressions.append('#rejectionReason = :rejectionReason')
-                expression_attribute_names['#rejectionReason'] = 'rejectionReason'
-                expression_attribute_values[':rejectionReason'] = {'S': updates['rejectionReason']}
-            
-            if 'approvedAt' in updates:
-                update_expressions.append('#approvedAt = :approvedAt')
-                expression_attribute_names['#approvedAt'] = 'approvedAt'
-                expression_attribute_values[':approvedAt'] = {'S': updates['approvedAt']}
+        update_expressions = []
+        remove_expressions = []
+        expression_attribute_names = {}
+        expression_attribute_values = {}
+        expression_attribute_names['#role'] = 'role'
 
-            if 'upiId' in updates:
-                update_expressions.append('#upiId = :upiId')
-                expression_attribute_names['#upiId'] = 'upiId'
-                expression_attribute_values[':upiId'] = {'S': updates['upiId']}
+        if 'name' in updates:
+            update_expressions.append('#name = :name')
+            expression_attribute_names['#name'] = 'name'
+            expression_attribute_values[':name'] = {'S': updates['name']}
 
-            if not update_expressions and not remove_expressions:
-                return UserService.get_user_by_role(phone, role)
-            
-            update_parts = []
-            if update_expressions:
-                update_parts.append(f"SET {', '.join(update_expressions)}")
-            if remove_expressions:
-                update_parts.append(f"REMOVE {', '.join(remove_expressions)}")
+        if 'email' in updates:
+            update_expressions.append('#email = :email')
+            expression_attribute_names['#email'] = 'email'
+            expression_attribute_values[':email'] = {'S': updates['email']}
 
-            dynamodb_client.update_item(
-                TableName=TABLES['USERS'],
-                Key={
-                    'phone': {'S': phone},
-                    'role': {'S': role}
-                },
-                UpdateExpression=" ".join(update_parts),
-                ConditionExpression='attribute_exists(phone) AND attribute_exists(#role)',
-                ExpressionAttributeNames=expression_attribute_names,
-                ExpressionAttributeValues=expression_attribute_values
-            )
-            
+        if 'isActive' in updates:
+            update_expressions.append('#isActive = :isActive')
+            expression_attribute_names['#isActive'] = 'isActive'
+            expression_attribute_values[':isActive'] = {'BOOL': updates['isActive']}
+
+        if 'dateOfBirth' in updates:
+            update_expressions.append('#dateOfBirth = :dateOfBirth')
+            expression_attribute_names['#dateOfBirth'] = 'dateOfBirth'
+            expression_attribute_values[':dateOfBirth'] = {'S': updates['dateOfBirth']}
+
+        if 'fcmToken' in updates:
+            expression_attribute_names['#fcmToken'] = 'fcmToken'
+            if updates['fcmToken'] is None:
+                remove_expressions.append('#fcmToken')
+            else:
+                update_expressions.append('#fcmToken = :fcmToken')
+                expression_attribute_values[':fcmToken'] = {'S': updates['fcmToken']}
+
+        if 'fcmTokenUpdatedAt' in updates:
+            update_expressions.append('#fcmTokenUpdatedAt = :fcmTokenUpdatedAt')
+            expression_attribute_names['#fcmTokenUpdatedAt'] = 'fcmTokenUpdatedAt'
+            expression_attribute_values[':fcmTokenUpdatedAt'] = {'S': updates['fcmTokenUpdatedAt']}
+
+        if 'lat' in updates:
+            update_expressions.append('#lat = :lat')
+            expression_attribute_names['#lat'] = 'lat'
+            expression_attribute_values[':lat'] = {'N': str(updates['lat'])}
+
+        if 'lng' in updates:
+            update_expressions.append('#lng = :lng')
+            expression_attribute_names['#lng'] = 'lng'
+            expression_attribute_values[':lng'] = {'N': str(updates['lng'])}
+
+        if 'geohash' in updates:
+            update_expressions.append('#geohash = :geohash')
+            expression_attribute_names['#geohash'] = 'geohash'
+            expression_attribute_values[':geohash'] = {'S': updates['geohash']}
+
+        # Rider-specific fields
+        if 'riderStatus' in updates:
+            update_expressions.append('#riderStatus = :riderStatus')
+            expression_attribute_names['#riderStatus'] = 'riderStatus'
+            expression_attribute_values[':riderStatus'] = {'S': updates['riderStatus']}
+
+        if 'rejectionReason' in updates:
+            update_expressions.append('#rejectionReason = :rejectionReason')
+            expression_attribute_names['#rejectionReason'] = 'rejectionReason'
+            expression_attribute_values[':rejectionReason'] = {'S': updates['rejectionReason']}
+
+        if 'approvedAt' in updates:
+            update_expressions.append('#approvedAt = :approvedAt')
+            expression_attribute_names['#approvedAt'] = 'approvedAt'
+            expression_attribute_values[':approvedAt'] = {'S': updates['approvedAt']}
+
+        if 'upiId' in updates:
+            update_expressions.append('#upiId = :upiId')
+            expression_attribute_names['#upiId'] = 'upiId'
+            expression_attribute_values[':upiId'] = {'S': updates['upiId']}
+
+        if not update_expressions and not remove_expressions:
             return UserService.get_user_by_role(phone, role)
-        except ClientError as e:
-            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+
+        update_parts = []
+        if update_expressions:
+            update_parts.append(f"SET {', '.join(update_expressions)}")
+        if remove_expressions:
+            update_parts.append(f"REMOVE {', '.join(remove_expressions)}")
+
+        update_kwargs = {
+            "TableName": TABLES['USERS'],
+            "Key": {
+                'phone': {'S': phone},
+                'role': {'S': role}
+            },
+            "UpdateExpression": " ".join(update_parts),
+            "ConditionExpression": 'attribute_exists(phone) AND attribute_exists(#role)',
+            "ExpressionAttributeNames": expression_attribute_names,
+            "ExpressionAttributeValues": expression_attribute_values,
+        }
+
+        for attempt in range(2):
+            try:
+                dynamodb_client.update_item(**update_kwargs)
+                return UserService.get_user_by_role(phone, role)
+            except ClientError as e:
+                code = e.response.get('Error', {}).get('Code')
+                if code != 'ConditionalCheckFailedException':
+                    raise Exception(f"Failed to update user: {str(e)}")
+                if attempt == 0:
+                    UserService._upsert_create_from_updates(phone, role, updates)
+                    continue
                 raise Exception("User not found")
-            raise Exception(f"Failed to update user: {str(e)}")
-    
+
     @staticmethod
     def get_rider_by_phone(phone: str) -> Optional[User]:
         """Get rider by phone (must have role=RIDER)"""
