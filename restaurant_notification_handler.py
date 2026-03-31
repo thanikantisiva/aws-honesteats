@@ -48,6 +48,32 @@ def _summarize_items(new_image: dict) -> str:
     return f"{first_qty}x {first_name} and {len(items) - 1} more"
 
 
+def _count_items(new_image: dict) -> int:
+    items_attr = new_image.get("items")
+    if not items_attr:
+        return 0
+
+    try:
+        items = dynamodb_to_python(items_attr)
+    except Exception:
+        return 0
+
+    if not isinstance(items, list) or not items:
+        return 0
+
+    total = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        try:
+            total += int(item.get("quantity", 1))
+        except Exception:
+            total += 1
+
+    return total
+
+
 def _is_new_restaurant_order(record: dict, new_image: dict, old_image: dict) -> bool:
     event_name = record.get("eventName")
     new_status = _extract_string_attr(new_image.get("status"))
@@ -87,6 +113,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             created_at = _extract_string_attr(new_image.get("createdAt"))
             amount_raw = _extract_string_attr(new_image.get("grandTotal"))
             item_summary = _summarize_items(new_image)
+            item_count = _count_items(new_image)
 
             try:
                 amount = float(amount_raw or "0")
@@ -112,6 +139,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                 restaurant_name=restaurant_name,
                 customer_phone=customer_phone,
                 item_summary=item_summary,
+                item_count=item_count,
                 amount=amount,
                 created_at=created_at or None
             )

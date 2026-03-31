@@ -316,6 +316,7 @@ class NotificationService:
         restaurant_name: str,
         customer_phone: str,
         item_summary: str,
+        item_count: int,
         amount: float,
         created_at: Optional[str] = None
     ) -> bool:
@@ -333,39 +334,43 @@ class NotificationService:
                 logger.warning("Firebase not initialized - restaurant notification skipped")
                 return False
 
-            masked_phone = customer_phone
-            if customer_phone and len(customer_phone) >= 8:
-                masked_phone = f"{customer_phone[:3]}****{customer_phone[-4:]}"
-
-            item_text = item_summary or "New order received"
-            body_text = f"{masked_phone} - Rs.{amount:.0f} - {item_text}"
+            item_label = "1 item" if item_count == 1 else f"{item_count} items"
+            order_tail = (order_id or "").strip()[-4:] or "----"
+            title_text = f"Rs.{amount:.0f} New Order"
+            body_text = f"{item_label} | #{order_tail}"
             data = {
                 "type": "restaurant_new_order",
                 "orderId": order_id,
                 "restaurantName": restaurant_name,
                 "customerPhone": customer_phone or "",
                 "itemSummary": item_summary or "",
+                "itemCount": str(item_count),
                 "amount": str(amount),
+                "orderTail": order_tail,
                 "status": "CONFIRMED",
                 "createdAt": created_at or now_ist_iso(),
-                "channelId": "new_orders"
+                "channelId": "new_orders",
+                "title": title_text,
+                "body": body_text
             }
 
             message = messaging.Message(
                 token=fcm_token,
                 data=data,
                 notification=messaging.Notification(
-                    title="New Order",
+                    title=title_text,
                     body=body_text
                 ),
                 android=messaging.AndroidConfig(
                     priority="high",
                     notification=messaging.AndroidNotification(
-                        title="New Order",
+                        title=title_text,
                         body=body_text,
-                        sound="telephone_ring.mp3",
+                        sound="telephone_ring",
                         channel_id="new_orders",
-                        icon="ic_launcher"
+                        icon="ic_launcher",
+                        color="#F59E0B",
+                        tag=order_id
                     )
                 )
             )
