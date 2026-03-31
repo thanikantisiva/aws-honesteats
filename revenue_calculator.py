@@ -165,6 +165,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
     coupon_applied = False
     coupon_discount = 0.0
     issued_by = None
+    is_once_per_user = False
 
     if isinstance(fee_resp, dict):
         coupon_applied = bool(fee_resp.get("couponApplied"))
@@ -184,6 +185,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
             coupon_item = (response.get("Items") or [None])[0]
             if coupon_item:
                 issued_by = coupon_item.get("issuedBy", {}).get("S")
+                is_once_per_user = coupon_item.get("isOncePerUser", {}).get("BOOL", False)
         except Exception as e:
             logger.warning(f"Failed to look up coupon {coupon_code}: {e}")
 
@@ -216,6 +218,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
         "couponCode": coupon_code,
         "couponApplied": coupon_applied,
         "couponIssuedBy": issued_by,
+        "couponIsOncePerUser": is_once_per_user,
         "restaurantRevenue": restaurantRevenue,
         "platformRevenue": platformRevenue,
         "riderRevenue": {
@@ -287,6 +290,31 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             if order.payment_id:
                 PaymentService.update_payment(order.payment_id, {"revenue": revenue})
                 logger.info(f"[orderId={order_id}] Revenue written to payment {order.payment_id}")
+
+            if revenue.get("couponApplied") and revenue.get("couponIsOncePerUser") and order.customer_phone:
+                used_code = revenue.get("couponCode")
+                if used_code:
+                    try:
+                        dynamodb_client.update_item(
+                            TableName=TABLES["USERS"],
+                            Key={
+                                "phone": {"S": order.customer_phone},
+                                "role": {"S": "CUSTOMER"},
+                            },
+                            UpdateExpression="ADD usedCoupons :c",
+                            ExpressionAttributeValues={
+                                ":c": {"SS": [used_code]},
+                            },
+                        )
+                        logger.info(
+                            f"[orderId={order_id}] Recorded coupon {used_code} "
+                            f"in usedCoupons for {order.customer_phone}"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[orderId={order_id}] Failed to record coupon usage "
+                            f"for {order.customer_phone}: {e}"
+                        )
 
             processed += 1
 

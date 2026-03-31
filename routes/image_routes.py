@@ -265,9 +265,10 @@ def register_image_routes(app):
         Request body:
         {
           "listBase64": ["data:image/jpeg;base64,..."],
-          "entity": "RESTAURANT" | "ITEM" | "SUBCATEGORY" | "HEROBANNER",
+          "entity": "RESTAURANT" | "ITEM" | "SUBCATEGORY" | "HEROBANNER" | "PACKAGE_EVIDENCE",
           "restaurantId": "RES-...",
-          "itemId": "ITEM-..."  # required for ITEM
+          "itemId": "ITEM-...",   # required for ITEM
+          "orderId": "ORD-..."    # required for PACKAGE_EVIDENCE
         }
         """
         try:
@@ -278,15 +279,18 @@ def register_image_routes(app):
             entity = str(body.get("entity") or "").upper()
             restaurant_id = body.get("restaurantId")
             item_id = body.get("itemId")
+            order_id = body.get("orderId")
 
             if not isinstance(list_base64, list) or len(list_base64) == 0:
                 return {"error": "listBase64 must be a non-empty array"}, 400
-            if entity not in ("RESTAURANT", "ITEM", "SUBCATEGORY", "HEROBANNER"):
-                return {"error": "entity must be RESTAURANT, ITEM, SUBCATEGORY, or HEROBANNER"}, 400
+            if entity not in ("RESTAURANT", "ITEM", "SUBCATEGORY", "HEROBANNER", "PACKAGE_EVIDENCE"):
+                return {"error": "entity must be RESTAURANT, ITEM, SUBCATEGORY, HEROBANNER, or PACKAGE_EVIDENCE"}, 400
             if entity in ("RESTAURANT", "ITEM") and not restaurant_id:
                 return {"error": "restaurantId is required"}, 400
             if entity == "ITEM" and not item_id:
                 return {"error": "itemId is required for ITEM entity"}, 400
+            if entity == "PACKAGE_EVIDENCE" and not order_id:
+                return {"error": "orderId is required for PACKAGE_EVIDENCE entity"}, 400
 
             if entity == "RESTAURANT":
                 base_prefix = f"restaurant-images/{restaurant_id}"
@@ -294,6 +298,8 @@ def register_image_routes(app):
                 base_prefix = f"restaurant-images/{restaurant_id}/{item_id}"
             elif entity == "HEROBANNER":
                 base_prefix = "hero-banner"
+            elif entity == "PACKAGE_EVIDENCE":
+                base_prefix = f"evidence/{order_id}"
             else:
                 # Keep under restaurant-images/* so CloudFront behavior routes to RestaurantImagesOrigin.
                 base_prefix = "restaurant-images/subcategory"
@@ -324,6 +330,7 @@ def register_image_routes(app):
                 "entity": entity,
                 "restaurantId": restaurant_id if entity in ("RESTAURANT", "ITEM") else None,
                 "itemId": item_id if entity == "ITEM" else None,
+                "orderId": order_id if entity == "PACKAGE_EVIDENCE" else None,
                 "total": len(uploaded),
                 "images": uploaded
             }, 200

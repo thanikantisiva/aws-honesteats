@@ -2,6 +2,7 @@
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.dynamodb_helpers import dynamodb_to_python
+from utils import normalize_phone
 from datetime import datetime, timezone
 
 logger = Logger()
@@ -215,6 +216,7 @@ def register_delivery_routes(app):
             item_total = body.get('itemTotal')
             item_count = body.get('itemCount')  # Accepted for backward compatibility
             coupon_code = body.get('couponCode')
+            mobile_number = normalize_phone(body.get('mobileNumber'))
 
             if distance_km is None or item_total is None:
                 return {
@@ -272,7 +274,32 @@ def register_delivery_routes(app):
                         start_date = item.get('startDate', {}).get('S')
                         end_date = item.get('endDate', {}).get('S')
 
+                        is_once_per_user = item.get('isOncePerUser', {}).get('BOOL', False)
+
                         if coupon_type and coupon_value and _is_coupon_active(start_date, end_date):
+                            if is_once_per_user and mobile_number:
+                                try:
+                                    user_resp = dynamodb_client.get_item(
+                                        TableName=TABLES['USERS'],
+                                        Key={
+                                            'phone': {'S': mobile_number},
+                                            'role': {'S': 'CUSTOMER'},
+                                        },
+                                        ProjectionExpression='usedCoupons',
+                                    )
+                                    used_set = user_resp.get('Item', {}).get('usedCoupons', {}).get('SS', [])
+                                    if coupon_code in used_set:
+                                        logger.info(
+                                            "Coupon already used by customer: "
+                                            f"couponCode={coupon_code}, phone={mobile_number}"
+                                        )
+                                        coupon_applied = False
+                                        result['couponApplied'] = coupon_applied
+                                        result['couponRejectedReason'] = 'already_used'
+                                        return result, 200
+                                except Exception as e:
+                                    logger.error(f"Error checking usedCoupons for {mobile_number}: {e}")
+
                             coupon_value = float(coupon_value)
                             delivery_fee = result['deliveryFee']
                             coupon_discount = 0.0
@@ -312,6 +339,8 @@ def register_delivery_routes(app):
             result['couponApplied'] = coupon_applied
             if coupon_applied and coupon_code:
                 result['couponCode'] = coupon_code
+            if mobile_number:
+                result['mobileNumber'] = mobile_number
 
             logger.info(
                 "Delivery fee calculation completed: "
