@@ -400,7 +400,9 @@ class RestaurantService:
                     owner_id=updates.get('ownerId', existing_restaurant.owner_id),
                     restaurant_image=updates.get('restaurantImage', existing_restaurant.restaurant_image),
                     closes_at=updates.get('closesAt', existing_restaurant.closes_at),
-                    opens_at=updates.get('opensAt', existing_restaurant.opens_at)
+                    opens_at=updates.get('opensAt', existing_restaurant.opens_at),
+                    fcm_token=updates.get('fcmToken', existing_restaurant.fcm_token),
+                    fcm_token_updated_at=updates.get('fcmTokenUpdatedAt', existing_restaurant.fcm_token_updated_at)
                 )
                 
                 logger.info(f"   Creating new entry with geohash: {updated_restaurant.geohash}")
@@ -483,22 +485,52 @@ class RestaurantService:
                 update_expressions.append('#opensAt = :opensAt')
                 expression_attribute_names['#opensAt'] = 'opensAt'
                 expression_attribute_values[':opensAt'] = {'S': updates['opensAt']}
+
+            if 'fcmToken' in updates:
+                expression_attribute_names['#fcmToken'] = 'fcmToken'
+                if updates['fcmToken'] is not None:
+                    update_expressions.append('#fcmToken = :fcmToken')
+                    expression_attribute_values[':fcmToken'] = {'S': str(updates['fcmToken'])}
+
+            if 'fcmTokenUpdatedAt' in updates:
+                expression_attribute_names['#fcmTokenUpdatedAt'] = 'fcmTokenUpdatedAt'
+                if updates['fcmTokenUpdatedAt'] is not None:
+                    update_expressions.append('#fcmTokenUpdatedAt = :fcmTokenUpdatedAt')
+                    expression_attribute_values[':fcmTokenUpdatedAt'] = {'S': str(updates['fcmTokenUpdatedAt'])}
             
-            if not update_expressions:
+            set_expressions = [expr for expr in update_expressions if expr]
+            remove_expressions = []
+            if 'fcmToken' in updates and updates['fcmToken'] is None:
+                remove_expressions.append('#fcmToken')
+            if 'fcmTokenUpdatedAt' in updates and updates['fcmTokenUpdatedAt'] is None:
+                remove_expressions.append('#fcmTokenUpdatedAt')
+
+            if not set_expressions and not remove_expressions:
                 logger.info("No changes detected, returning existing restaurant")
                 return existing_restaurant
             
             logger.info(f"Updating fields: {list(updates.keys())}")
             
-            dynamodb_client.update_item(
-                TableName=TABLES['RESTAURANTS'],
-                Key={
+            update_kwargs = {
+                'TableName': TABLES['RESTAURANTS'],
+                'Key': {
                     'PK': {'S': pk},
                     'SK': {'S': sk}
                 },
-                UpdateExpression=f"SET {', '.join(update_expressions)}",
-                ExpressionAttributeNames=expression_attribute_names,
-                ExpressionAttributeValues=expression_attribute_values
+                'UpdateExpression': " ".join(
+                    part for part in [
+                        f"SET {', '.join(set_expressions)}" if set_expressions else "",
+                        f"REMOVE {', '.join(remove_expressions)}" if remove_expressions else ""
+                    ] if part
+                ),
+                'ExpressionAttributeNames': expression_attribute_names
+            }
+
+            if expression_attribute_values:
+                update_kwargs['ExpressionAttributeValues'] = expression_attribute_values
+
+            dynamodb_client.update_item(
+                **update_kwargs
             )
             
             logger.info(f"✅ Restaurant updated successfully")

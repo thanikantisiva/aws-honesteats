@@ -308,3 +308,72 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Error sending rider notification: {str(e)}", exc_info=True)
             return False
+
+    @staticmethod
+    def send_restaurant_new_order_notification(
+        fcm_token: str,
+        order_id: str,
+        restaurant_name: str,
+        customer_phone: str,
+        item_summary: str,
+        amount: float,
+        created_at: Optional[str] = None
+    ) -> bool:
+        """Send a restaurant-side new order notification for the mobile restaurant app."""
+        if not FIREBASE_AVAILABLE:
+            logger.warning("Firebase Admin SDK not available - restaurant notification skipped")
+            return False
+
+        try:
+            from firebase_admin import messaging
+
+            initialize_firebase()
+
+            if not _firebase_initialized:
+                logger.warning("Firebase not initialized - restaurant notification skipped")
+                return False
+
+            masked_phone = customer_phone
+            if customer_phone and len(customer_phone) >= 8:
+                masked_phone = f"{customer_phone[:3]}****{customer_phone[-4:]}"
+
+            item_text = item_summary or "New order received"
+            body_text = f"{masked_phone} - Rs.{amount:.0f} - {item_text}"
+            data = {
+                "type": "restaurant_new_order",
+                "orderId": order_id,
+                "restaurantName": restaurant_name,
+                "customerPhone": customer_phone or "",
+                "itemSummary": item_summary or "",
+                "amount": str(amount),
+                "status": "CONFIRMED",
+                "createdAt": created_at or now_ist_iso(),
+                "channelId": "new_orders"
+            }
+
+            message = messaging.Message(
+                token=fcm_token,
+                data=data,
+                notification=messaging.Notification(
+                    title="New Order",
+                    body=body_text
+                ),
+                android=messaging.AndroidConfig(
+                    priority="high",
+                    notification=messaging.AndroidNotification(
+                        title="New Order",
+                        body=body_text,
+                        sound="telephone_ring.mp3",
+                        channel_id="new_orders",
+                        icon="ic_launcher"
+                    )
+                )
+            )
+
+            logger.info(f"Sending restaurant notification for orderId={order_id}")
+            response = messaging.send(message)
+            logger.info(f"Restaurant notification sent successfully: {response}")
+            return True
+        except Exception as e:
+            logger.error(f"Error sending restaurant notification: {str(e)}", exc_info=True)
+            return False

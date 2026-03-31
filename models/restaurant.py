@@ -34,7 +34,9 @@ class Restaurant:
         geohash: Optional[str] = None,
         created_at: Optional[str] = None,
         closes_at: Optional[str] = None,
-        opens_at: Optional[str] = None
+        opens_at: Optional[str] = None,
+        fcm_token: Optional[str] = None,
+        fcm_token_updated_at: Optional[str] = None
     ):
         self.location_id = location_id
         self.restaurant_id = restaurant_id
@@ -54,6 +56,8 @@ class Restaurant:
         self.created_at = created_at or now_ist_iso()
         self.closes_at = closes_at
         self.opens_at = opens_at
+        self.fcm_token = fcm_token
+        self.fcm_token_updated_at = fcm_token_updated_at
     
     @property
     def pk(self) -> str:
@@ -182,7 +186,9 @@ class Restaurant:
             geohash=geohash,
             created_at=item.get("createdAt", {}).get("S") if "createdAt" in item else None,
             closes_at=item.get("closesAt", {}).get("S") if "closesAt" in item else None,
-            opens_at=item.get("opensAt", {}).get("S") if "opensAt" in item else None
+            opens_at=item.get("opensAt", {}).get("S") if "opensAt" in item else None,
+            fcm_token=item.get("fcmToken", {}).get("S") if "fcmToken" in item else None,
+            fcm_token_updated_at=item.get("fcmTokenUpdatedAt", {}).get("S") if "fcmTokenUpdatedAt" in item else None
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -220,5 +226,9 @@ class Restaurant:
             item["closesAt"] = {"S": self.closes_at}
         if self.opens_at:
             item["opensAt"] = {"S": self.opens_at}
-        
+        if self.fcm_token:
+            item["fcmToken"] = {"S": self.fcm_token}
+        if self.fcm_token_updated_at:
+            item["fcmTokenUpdatedAt"] = {"S": self.fcm_token_updated_at}
+
         return item

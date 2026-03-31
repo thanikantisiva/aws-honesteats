@@ -4,8 +4,9 @@ from services.restaurant_service import RestaurantService
 from models.restaurant import Restaurant
 from utils.dynamodb import generate_id, dynamodb_client, TABLES
 from utils.geohash import encode as geohash_encode
-from middleware.jwt_auth import generate_token
+from middleware.jwt_auth import generate_token, verify_token
 from utils.ssm import get_secret
+from utils.datetime_ist import now_ist_iso
 import jwt
 import re
 import secrets
@@ -18,6 +19,25 @@ metrics = Metrics()
 
 def register_restaurant_routes(app):
     """Register restaurant routes"""
+
+    def _authorize_restaurant_token(restaurant_id: str):
+        headers = app.current_event.headers or {}
+        auth_header = headers.get('authorization') or headers.get('Authorization')
+
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return None, ({"error": "Unauthorized", "message": "Missing or invalid auth token"}, 401)
+
+        token = auth_header.replace('Bearer ', '').strip()
+        payload = verify_token(token)
+
+        if not payload:
+            return None, ({"error": "Unauthorized", "message": "Invalid or expired token"}, 401)
+
+        token_restaurant_id = str(payload.get('restaurantId') or '').strip()
+        if token_restaurant_id != restaurant_id:
+            return None, ({"error": "Forbidden", "message": "Token does not match restaurant"}, 403)
+
+        return payload, None
     
     @app.get("/api/v1/restaurants")
     @tracer.capture_method
@@ -232,6 +252,60 @@ def register_restaurant_routes(app):
         except Exception as e:
             logger.error("Error logging in restaurant", exc_info=True)
             return {"error": "Failed to login", "message": str(e)}, 500
+
+    @app.post("/api/v1/restaurants/<restaurant_id>/fcm-token")
+    @tracer.capture_method
+    def register_restaurant_fcm_token(restaurant_id: str):
+        """Register or replace the active mobile FCM token for a restaurant."""
+        try:
+            _, auth_error = _authorize_restaurant_token(restaurant_id)
+            if auth_error:
+                return auth_error
+
+            body = app.current_event.json_body or {}
+            fcm_token = str(body.get('fcmToken') or '').strip()
+
+            if not fcm_token:
+                return {"error": "fcmToken is required"}, 400
+
+            restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+            if not restaurant:
+                return {"error": "Restaurant not found"}, 404
+
+            RestaurantService.update_restaurant(restaurant_id, {
+                'fcmToken': fcm_token,
+                'fcmTokenUpdatedAt': now_ist_iso()
+            })
+
+            metrics.add_metric(name="RestaurantFCMTokenRegistered", unit="Count", value=1)
+            return {"message": "Restaurant FCM token registered successfully"}, 200
+        except Exception as e:
+            logger.error("Error registering restaurant FCM token", exc_info=True)
+            return {"error": "Failed to register restaurant FCM token", "message": str(e)}, 500
+
+    @app.delete("/api/v1/restaurants/<restaurant_id>/fcm-token")
+    @tracer.capture_method
+    def clear_restaurant_fcm_token(restaurant_id: str):
+        """Clear the active mobile FCM token for a restaurant."""
+        try:
+            _, auth_error = _authorize_restaurant_token(restaurant_id)
+            if auth_error:
+                return auth_error
+
+            restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+            if not restaurant:
+                return {"error": "Restaurant not found"}, 404
+
+            RestaurantService.update_restaurant(restaurant_id, {
+                'fcmToken': None,
+                'fcmTokenUpdatedAt': None
+            })
+
+            metrics.add_metric(name="RestaurantFCMTokenCleared", unit="Count", value=1)
+            return {"message": "Restaurant FCM token cleared successfully"}, 200
+        except Exception as e:
+            logger.error("Error clearing restaurant FCM token", exc_info=True)
+            return {"error": "Failed to clear restaurant FCM token", "message": str(e)}, 500
     
     @app.put("/api/v1/restaurants/<restaurant_id>")
     @tracer.capture_method

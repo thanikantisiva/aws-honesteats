@@ -60,6 +60,7 @@ GUEST_PUBLIC_GET_PREFIXES = [
     "/api/v1/restaurants",        # list nearby, get by id, status, menu
     "/api/v1/homescreen",         # homescreen base
     "/api/v1/homescreen/images",  # homescreen carousel images (explicit)
+    "/api/v1/food-categories/display"
 ]
 
 # Specific non-GET endpoints that are safe to call without JWT.
