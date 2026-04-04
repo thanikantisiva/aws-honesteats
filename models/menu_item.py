@@ -30,7 +30,9 @@ class MenuItem:
         description: Optional[str] = None,
         image: Optional[Union[str, List[str]]] = None,
         sub_category: Optional[str] = None,
-        ordered_count: int = 0
+        ordered_count: int = 0,
+        top_offer_banner: Optional[str] = None,
+        item_offer_coupon_code: Optional[str] = None
     ):
         self.restaurant_id = restaurant_id
         self.item_id = item_id
@@ -44,6 +46,8 @@ class MenuItem:
         self.description = description
         self.image = self._normalize_image_list(image)
         self.ordered_count = int(ordered_count or 0)
+        self.top_offer_banner = top_offer_banner
+        self.item_offer_coupon_code = item_offer_coupon_code
 
     @property
     def price(self) -> float:
@@ -60,13 +64,14 @@ class MenuItem:
         """Get sort key"""
         return f"ITEM#{self.item_id}"
 
-    def to_dict(self) -> dict:
+    def to_dict(self, price: Optional[float] = None, original_price: Optional[float] = None) -> dict:
         """Convert to dictionary"""
+        resolved_price = float(self.price if price is None else price)
         result = {
             "restaurant_id": self.restaurant_id,
             "itemId": self.item_id,
             "itemName": self.item_name,
-            "price": self.price,
+            "price": resolved_price,
             "restaurantPrice": self.restaurant_price,
             "hikePercentage": self.hike_percentage,
             "isAvailable": self.is_available,
@@ -82,6 +87,12 @@ class MenuItem:
             result["description"] = self.description
         if self.image:
             result["image"] = self.image
+        if self.top_offer_banner:
+            result["topOfferBanner"] = self.top_offer_banner
+        if self.item_offer_coupon_code:
+            result["itemOfferCouponCode"] = self.item_offer_coupon_code
+        if original_price is not None and float(original_price) > resolved_price:
+            result["originalPrice"] = float(original_price)
         return result
 
     @classmethod
@@ -104,6 +115,9 @@ class MenuItem:
             elif "S" in image_attr:
                 image = image_attr.get("S")
 
+        top_offer_banner = item.get("topOfferBanner", {}).get("S") if "topOfferBanner" in item else None
+        item_offer_coupon_code = item.get("itemOfferCouponCode", {}).get("S") if "itemOfferCouponCode" in item else None
+
         return cls(
             restaurant_id=restaurant_id,
             item_id=item_id,
@@ -116,7 +130,9 @@ class MenuItem:
             is_veg=item.get("isVeg", {}).get("BOOL") if "isVeg" in item else None,
             description=item.get("description", {}).get("S") if "description" in item else None,
             image=image,
-            ordered_count=int(float(item.get("orderedCount", {}).get("N", "0"))) if "orderedCount" in item else 0
+            ordered_count=int(float(item.get("orderedCount", {}).get("N", "0"))) if "orderedCount" in item else 0,
+            top_offer_banner=top_offer_banner,
+            item_offer_coupon_code=item_offer_coupon_code
         )
 
     def to_dynamodb_item(self) -> dict:
@@ -141,4 +157,8 @@ class MenuItem:
         if self.image:
             item["image"] = {"L": [{"S": img} for img in self.image]}
         item["orderedCount"] = {"N": str(self.ordered_count)}
+        if self.top_offer_banner:
+            item["topOfferBanner"] = {"S": self.top_offer_banner}
+        if self.item_offer_coupon_code:
+            item["itemOfferCouponCode"] = {"S": self.item_offer_coupon_code}
         return item

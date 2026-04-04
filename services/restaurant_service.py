@@ -402,7 +402,9 @@ class RestaurantService:
                     closes_at=updates.get('closesAt', existing_restaurant.closes_at),
                     opens_at=updates.get('opensAt', existing_restaurant.opens_at),
                     fcm_token=updates.get('fcmToken', existing_restaurant.fcm_token),
-                    fcm_token_updated_at=updates.get('fcmTokenUpdatedAt', existing_restaurant.fcm_token_updated_at)
+                    fcm_token_updated_at=updates.get('fcmTokenUpdatedAt', existing_restaurant.fcm_token_updated_at),
+                    position=updates.get('position', existing_restaurant.position),
+                    top_offer_banner=updates.get('topOfferBanner', existing_restaurant.top_offer_banner)
                 )
                 
                 logger.info(f"   Creating new entry with geohash: {updated_restaurant.geohash}")
@@ -486,6 +488,22 @@ class RestaurantService:
                 expression_attribute_names['#opensAt'] = 'opensAt'
                 expression_attribute_values[':opensAt'] = {'S': updates['opensAt']}
 
+            if 'position' in updates:
+                expression_attribute_names['#position'] = 'position'
+                if updates['position'] is None:
+                    pass
+                elif updates['position'] != existing_restaurant.position:
+                    update_expressions.append('#position = :position')
+                    expression_attribute_values[':position'] = {'N': str(int(updates['position']))}
+
+            if 'topOfferBanner' in updates:
+                expression_attribute_names['#topOfferBanner'] = 'topOfferBanner'
+                if updates['topOfferBanner'] is None:
+                    pass
+                elif updates['topOfferBanner'] != existing_restaurant.top_offer_banner:
+                    update_expressions.append('#topOfferBanner = :topOfferBanner')
+                    expression_attribute_values[':topOfferBanner'] = {'S': str(updates['topOfferBanner'])}
+
             if 'fcmToken' in updates:
                 expression_attribute_names['#fcmToken'] = 'fcmToken'
                 if updates['fcmToken'] is not None:
@@ -504,6 +522,10 @@ class RestaurantService:
                 remove_expressions.append('#fcmToken')
             if 'fcmTokenUpdatedAt' in updates and updates['fcmTokenUpdatedAt'] is None:
                 remove_expressions.append('#fcmTokenUpdatedAt')
+            if 'position' in updates and updates['position'] is None:
+                remove_expressions.append('#position')
+            if 'topOfferBanner' in updates and updates['topOfferBanner'] is None:
+                remove_expressions.append('#topOfferBanner')
 
             if not set_expressions and not remove_expressions:
                 logger.info("No changes detected, returning existing restaurant")

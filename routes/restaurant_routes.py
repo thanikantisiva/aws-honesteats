@@ -20,6 +20,21 @@ metrics = Metrics()
 def register_restaurant_routes(app):
     """Register restaurant routes"""
 
+    MAX_TOP_OFFER_BANNER_LENGTH = 20
+
+    def _normalize_top_offer_banner(value):
+        if value is None:
+            return None, None
+        if not isinstance(value, str):
+            return None, ({"error": "topOfferBanner must be a string"}, 400)
+
+        normalized = value.strip()
+        if not normalized:
+            return None, None
+        if len(normalized) > MAX_TOP_OFFER_BANNER_LENGTH:
+            return None, ({"error": f"topOfferBanner must be {MAX_TOP_OFFER_BANNER_LENGTH} characters or fewer"}, 400)
+        return normalized, None
+
     def _authorize_restaurant_token(restaurant_id: str):
         headers = app.current_event.headers or {}
         auth_header = headers.get('authorization') or headers.get('Authorization')
@@ -145,15 +160,18 @@ def register_restaurant_routes(app):
     def create_restaurant():
         """Create a new restaurant"""
         try:
-            body = app.current_event.json_body
+            body = app.current_event.json_body or {}
             location_id = body.get('locationId')
             restaurant_id = generate_id('RES')
             name = body.get('name')
             latitude = body.get('latitude')
             longitude = body.get('longitude')
+            top_offer_banner, banner_error = _normalize_top_offer_banner(body.get('topOfferBanner'))
             
             if not all([location_id, name, latitude is not None, longitude is not None]):
                 return {"error": "locationId, name, latitude, and longitude are required"}, 400
+            if banner_error:
+                return banner_error
             
             logger.info(f"Creating restaurant: {name}, ID: {restaurant_id}, Location: {latitude}, {longitude}")
             
@@ -167,7 +185,9 @@ def register_restaurant_routes(app):
                 cuisine=body.get('cuisine', []),
                 rating=body.get('rating'),
                 owner_id=body.get('ownerId'),
-                restaurant_image=body.get('restaurantImage')
+                restaurant_image=body.get('restaurantImage'),
+                position=int(body['position']) if body.get('position') is not None else None,
+                top_offer_banner=top_offer_banner
                 # geohash auto-generated in __init__
             )
             
@@ -312,7 +332,8 @@ def register_restaurant_routes(app):
     def update_restaurant(restaurant_id: str):
         """Update restaurant information"""
         try:
-            body = app.current_event.json_body
+            body = app.current_event.json_body or {}
+            top_offer_banner = None
             
             
             updates = {}
@@ -337,6 +358,13 @@ def register_restaurant_routes(app):
                 updates['closesAt'] = body['closesAt']
             if 'opensAt' in body:
                 updates['opensAt'] = body['opensAt']
+            if 'position' in body:
+                updates['position'] = int(body['position']) if body['position'] is not None else None
+            if 'topOfferBanner' in body:
+                top_offer_banner, banner_error = _normalize_top_offer_banner(body.get('topOfferBanner'))
+                if banner_error:
+                    return banner_error
+                updates['topOfferBanner'] = top_offer_banner
             
             if not updates:
                 return {"error": "No fields to update"}, 400

@@ -36,7 +36,9 @@ class Restaurant:
         closes_at: Optional[str] = None,
         opens_at: Optional[str] = None,
         fcm_token: Optional[str] = None,
-        fcm_token_updated_at: Optional[str] = None
+        fcm_token_updated_at: Optional[str] = None,
+        position: Optional[int] = None,
+        top_offer_banner: Optional[str] = None
     ):
         self.location_id = location_id
         self.restaurant_id = restaurant_id
@@ -58,6 +60,8 @@ class Restaurant:
         self.opens_at = opens_at
         self.fcm_token = fcm_token
         self.fcm_token_updated_at = fcm_token_updated_at
+        self.position = position
+        self.top_offer_banner = top_offer_banner
     
     @property
     def pk(self) -> str:
@@ -124,6 +128,10 @@ class Restaurant:
             result["closesAt"] = self.closes_at
         if self.opens_at:
             result["opensAt"] = self.opens_at
+        if self.position is not None:
+            result["position"] = self.position
+        if self.top_offer_banner:
+            result["topOfferBanner"] = self.top_offer_banner
         return result
     
     @classmethod
@@ -171,6 +179,12 @@ class Restaurant:
             elif "S" in restaurant_image_attr:
                 restaurant_image = restaurant_image_attr.get("S")
 
+        position = None
+        if "position" in item and "N" in item["position"]:
+            position = int(float(item["position"]["N"]))
+
+        top_offer_banner = item.get("topOfferBanner", {}).get("S") if "topOfferBanner" in item else None
+
         return cls(
             location_id=location_id,
             restaurant_id=restaurant_id,
@@ -188,7 +202,9 @@ class Restaurant:
             closes_at=item.get("closesAt", {}).get("S") if "closesAt" in item else None,
             opens_at=item.get("opensAt", {}).get("S") if "opensAt" in item else None,
             fcm_token=item.get("fcmToken", {}).get("S") if "fcmToken" in item else None,
-            fcm_token_updated_at=item.get("fcmTokenUpdatedAt", {}).get("S") if "fcmTokenUpdatedAt" in item else None
+            fcm_token_updated_at=item.get("fcmTokenUpdatedAt", {}).get("S") if "fcmTokenUpdatedAt" in item else None,
+            position=position,
+            top_offer_banner=top_offer_banner
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -230,5 +246,9 @@ class Restaurant:
             item["fcmToken"] = {"S": self.fcm_token}
         if self.fcm_token_updated_at:
             item["fcmTokenUpdatedAt"] = {"S": self.fcm_token_updated_at}
+        if self.position is not None:
+            item["position"] = {"N": str(self.position)}
+        if self.top_offer_banner:
+            item["topOfferBanner"] = {"S": self.top_offer_banner}
 
         return item

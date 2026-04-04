@@ -1,9 +1,9 @@
 """Delivery fee calculation routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
+from services.coupon_service import CouponService
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.dynamodb_helpers import dynamodb_to_python
 from utils import normalize_phone
-from datetime import datetime, timezone
 
 logger = Logger()
 tracer = Tracer()
@@ -168,41 +168,6 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
         "distance": round(distance_km, 2),
     }
 
-
-def _parse_iso_or_date(value: str):
-    """Parse date strings in YYYY-MM-DD or ISO datetime format."""
-    if not value:
-        return None
-    value = value.strip()
-    if not value:
-        return None
-    try:
-        # Handles YYYY-MM-DD directly
-        if len(value) == 10 and value[4] == "-" and value[7] == "-":
-            return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        # Handles ISO formats with/without Z
-        normalized = value.replace("Z", "+00:00")
-        parsed = datetime.fromisoformat(normalized)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-    except Exception:
-        return None
-
-
-def _is_coupon_active(start_date: str, end_date: str) -> bool:
-    """Validate coupon active window if start/end are provided."""
-    now = datetime.now(timezone.utc)
-    parsed_start = _parse_iso_or_date(start_date) if start_date else None
-    parsed_end = _parse_iso_or_date(end_date) if end_date else None
-
-    if parsed_start and now < parsed_start:
-        return False
-    if parsed_end and now > parsed_end:
-        return False
-    return True
-
-
 def register_delivery_routes(app):
     """Register delivery fee calculation routes"""
     
@@ -216,19 +181,22 @@ def register_delivery_routes(app):
             item_total = body.get('itemTotal')
             item_count = body.get('itemCount')  # Accepted for backward compatibility
             coupon_code = body.get('couponCode')
+            restaurant_id = body.get('restaurantId')
             mobile_number = normalize_phone(body.get('mobileNumber'))
 
             if distance_km is None or item_total is None:
                 return {
                     "error": "distanceKm and itemTotal are required"
                 }, 400
+            if coupon_code and not restaurant_id:
+                return {"error": "restaurantId is required when couponCode is provided"}, 400
 
             distance_km = float(distance_km)
             item_total = float(item_total)
             logger.info(
                 "Delivery fee request received: "
                 f"distanceKm={distance_km}, itemTotal={item_total}, "
-                f"itemCount={item_count}, couponCode={coupon_code}"
+                f"itemCount={item_count}, couponCode={coupon_code}, restaurantId={restaurant_id}"
             )
 
             config, missing_keys = _fetch_global_delivery_config()
@@ -260,23 +228,29 @@ def register_delivery_routes(app):
             coupon_applied = False
             if coupon_code:
                 try:
-                    pk = f"COUPON#{coupon_code}"
-                    response = dynamodb_client.query(
-                        TableName=TABLES['CONFIG'],
-                        KeyConditionExpression='partitionkey = :pk',
-                        ExpressionAttributeValues={':pk': {'S': pk}},
-                        Limit=1
-                    )
-                    item = response.get('Items', [None])[0] if response.get('Items') else None
-                    if item:
-                        coupon_type = item.get('couponType', {}).get('S') or item.get('type', {}).get('S')
-                        coupon_value = item.get('couponValue', {}).get('N') or item.get('value', {}).get('N')
-                        start_date = item.get('startDate', {}).get('S')
-                        end_date = item.get('endDate', {}).get('S')
+                    coupon = CouponService.get_coupon(coupon_code)
+                    if coupon:
+                        coupon_type = str(coupon.get('couponType') or '').strip().lower()
+                        coupon_value = float(coupon.get('couponValue') or 0.0)
+                        is_once_per_user = bool(coupon.get('isOncePerUser'))
+                        coupon_issued_by = str(coupon.get('issuedBy') or '').strip().upper()
 
-                        is_once_per_user = item.get('isOncePerUser', {}).get('BOOL', False)
-
-                        if coupon_type and coupon_value and _is_coupon_active(start_date, end_date):
+                        if not CouponService.is_coupon_active(coupon.get('startDate'), coupon.get('endDate')):
+                            logger.info(
+                                "Coupon not applied for calculate-fee: "
+                                f"couponCode={coupon_code}, reason=inactive_or_invalid"
+                            )
+                            result['couponRejectedReason'] = 'inactive_or_invalid'
+                        elif not CouponService.is_coupon_valid_for_restaurant(coupon, restaurant_id):
+                            logger.info(
+                                "Coupon rejected due to restaurant mismatch: "
+                                f"couponCode={coupon_code}, restaurantId={restaurant_id}, "
+                                f"couponRestaurant={coupon.get('couponRestaurant')}, issuedBy={coupon_issued_by}"
+                            )
+                            result['couponRejectedReason'] = 'restaurant_mismatch'
+                            result['couponApplied'] = False
+                            return result, 200
+                        else:
                             if is_once_per_user and mobile_number:
                                 try:
                                     user_resp = dynamodb_client.get_item(
@@ -300,15 +274,20 @@ def register_delivery_routes(app):
                                 except Exception as e:
                                     logger.error(f"Error checking usedCoupons for {mobile_number}: {e}")
 
-                            coupon_value = float(coupon_value)
                             delivery_fee = result['deliveryFee']
                             coupon_discount = 0.0
 
-                            if coupon_type.lower() == 'percentage':
+                            if coupon_type == 'percentage':
                                 coupon_discount = (delivery_fee * coupon_value) / 100.0
-                            elif coupon_type.lower() == 'fixed':
+                            elif coupon_type == 'fixed':
                                 coupon_discount = coupon_value
-
+                            else:
+                                logger.info(
+                                    "Coupon not applied for calculate-fee: "
+                                    f"couponCode={coupon_code}, reason=unsupported_type, couponType={coupon_type}"
+                                )
+                                result['couponRejectedReason'] = 'inactive_or_invalid'
+                                coupon_discount = 0.0
 
                             # Do not reduce deliveryFee; only report coupon discount
                             result['breakdown']['couponDiscount'] = round(coupon_discount, 2)
@@ -323,16 +302,12 @@ def register_delivery_routes(app):
                                 f"couponValue={coupon_value}, couponDiscount={coupon_discount}, "
                                 f"deliveryFeeUnchanged={result['deliveryFee']}"
                             )
-                        else:
-                            logger.info(
-                                "Coupon not applied for calculate-fee: "
-                                f"couponCode={coupon_code}, reason=inactive_or_invalid"
-                            )
                     else:
                         logger.info(
                             "Coupon not found for calculate-fee: "
                             f"couponCode={coupon_code}"
                         )
+                        result['couponRejectedReason'] = 'inactive_or_invalid'
                 except Exception as e:
                     logger.error(f"Error applying coupon {coupon_code}: {str(e)}")
 

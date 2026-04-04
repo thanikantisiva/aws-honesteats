@@ -187,6 +187,27 @@ def register_config_routes(app):
             logger.error("Error fetching home hero banner", exc_info=True)
             return {"error": str(e)}, 500
 
+    @app.get("/api/v1/config/app-version")
+    @tracer.capture_method
+    def get_app_version_config():
+        """Return minimum required app versions and store URLs for force-update checks."""
+        try:
+            item = _fetch_config_item("CONFIG#APP_VERSION", "MINIMUM")
+            if not item:
+                return {"minAppVersions": {}, "storeUrls": {}}, 200
+
+            config = dynamodb_to_python(item.get("config", {"NULL": True}))
+            if not isinstance(config, dict):
+                return {"minAppVersions": {}, "storeUrls": {}}, 200
+
+            return {
+                "minAppVersions": config.get("minAppVersions", {}),
+                "storeUrls": config.get("storeUrls", {}),
+            }, 200
+        except Exception as e:
+            logger.error("Error fetching app version config", exc_info=True)
+            return {"error": str(e)}, 500
+
     @app.get("/api/v1/config/promo-cards")
     @tracer.capture_method
     def get_promo_cards():

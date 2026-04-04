@@ -132,20 +132,52 @@ class MenuService:
                 expression_attribute_values[':image'] = {
                     'L': [{'S': img} for img in normalized_images]
                 }
+
+            if 'topOfferBanner' in updates:
+                expression_attribute_names['#topOfferBanner'] = 'topOfferBanner'
+                if updates['topOfferBanner'] is None:
+                    pass
+                else:
+                    update_expressions.append('#topOfferBanner = :topOfferBanner')
+                    expression_attribute_values[':topOfferBanner'] = {'S': str(updates['topOfferBanner'])}
+
+            if 'itemOfferCouponCode' in updates:
+                expression_attribute_names['#itemOfferCouponCode'] = 'itemOfferCouponCode'
+                if updates['itemOfferCouponCode'] is None:
+                    pass
+                else:
+                    update_expressions.append('#itemOfferCouponCode = :itemOfferCouponCode')
+                    expression_attribute_values[':itemOfferCouponCode'] = {'S': str(updates['itemOfferCouponCode'])}
             
-            if not update_expressions:
+            set_expressions = [expr for expr in update_expressions if expr]
+            remove_expressions = []
+            if 'topOfferBanner' in updates and updates['topOfferBanner'] is None:
+                remove_expressions.append('#topOfferBanner')
+            if 'itemOfferCouponCode' in updates and updates['itemOfferCouponCode'] is None:
+                remove_expressions.append('#itemOfferCouponCode')
+
+            if not set_expressions and not remove_expressions:
                 return MenuService.get_menu_item(restaurant_id, item_id)
             
-            dynamodb_client.update_item(
-                TableName=TABLES['MENU_ITEMS'],
-                Key={
+            update_kwargs = {
+                'TableName': TABLES['MENU_ITEMS'],
+                'Key': {
                     'PK': {'S': pk},
                     'SK': {'S': sk}
                 },
-                UpdateExpression=f"SET {', '.join(update_expressions)}",
-                ExpressionAttributeNames=expression_attribute_names,
-                ExpressionAttributeValues=expression_attribute_values
-            )
+                'UpdateExpression': " ".join(
+                    part for part in [
+                        f"SET {', '.join(set_expressions)}" if set_expressions else "",
+                        f"REMOVE {', '.join(remove_expressions)}" if remove_expressions else ""
+                    ] if part
+                ),
+                'ExpressionAttributeNames': expression_attribute_names,
+            }
+
+            if expression_attribute_values:
+                update_kwargs['ExpressionAttributeValues'] = expression_attribute_values
+
+            dynamodb_client.update_item(**update_kwargs)
             
             return MenuService.get_menu_item(restaurant_id, item_id)
         except ClientError as e:

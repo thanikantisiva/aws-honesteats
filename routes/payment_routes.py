@@ -55,6 +55,7 @@ def register_payment_routes(app):
             logger.info(f"[orderId={order_id}] 💳 Initiating payment: {payment_id}, amount: ₹{amount}")
             
             # ENRICH items with authoritative price from menu (restaurantPrice + hikePercentage -> price)
+            from services.coupon_service import CouponService
             from services.menu_service import MenuService
             
             enriched_items = []
@@ -62,18 +63,35 @@ def register_payment_routes(app):
             
             for item in items:
                 item_id = item.get('itemId')
-                quantity = item.get('quantity', 1)
+                try:
+                    quantity = int(item.get('quantity', 1) or 1)
+                except (TypeError, ValueError):
+                    quantity = 1
+
                 try:
                     menu_item = MenuService.get_menu_item(restaurant_id, item_id)
                     if menu_item:
-                        customer_price = menu_item.price
+                        pricing = CouponService.get_menu_item_prices(menu_item)
+                        customer_price = pricing["price"]
                         restaurant_price = menu_item.restaurant_price
+                        hike_percentage = menu_item.hike_percentage
+                        item_offer_coupon_code = menu_item.item_offer_coupon_code
+                        coupon_issued_by = pricing.get("couponIssuedBy")
+                        item_discount_amount = float(pricing.get("discountAmount", 0.0) or 0.0)
                     else:
                         customer_price = 0.0
                         restaurant_price = 0.0
+                        hike_percentage = 0.0
+                        item_offer_coupon_code = None
+                        coupon_issued_by = None
+                        item_discount_amount = 0.0
                 except Exception:
                     customer_price = 0.0
                     restaurant_price = 0.0
+                    hike_percentage = 0.0
+                    item_offer_coupon_code = None
+                    coupon_issued_by = None
+                    item_discount_amount = 0.0
                 
                 enriched_items.append({
                     'itemId': item_id,
@@ -81,6 +99,10 @@ def register_payment_routes(app):
                     'quantity': quantity,
                     'price': customer_price,
                     'restaurantPrice': restaurant_price,
+                    'hikePercentage': hike_percentage,
+                    'itemOfferCouponCode': item_offer_coupon_code,
+                    'couponIssuedBy': coupon_issued_by,
+                    'itemDiscountAmount': item_discount_amount,
                 })
                 
                 total_customer_amount += customer_price * quantity

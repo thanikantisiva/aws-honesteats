@@ -22,6 +22,7 @@ def register_coupon_routes(app):
             start_date = body.get('startDate')
             end_date = body.get('endDate')
             issued_by = body.get('issuedBy')
+            coupon_restaurant = body.get('couponRestaurant')
             is_once_per_user = body.get('isOncePerUser', False)
             if isinstance(is_once_per_user, str):
                 is_once_per_user = is_once_per_user.strip().lower() in ('true', '1', 'yes')
@@ -30,6 +31,14 @@ def register_coupon_routes(app):
 
             if not code or not coupon_type or coupon_value is None:
                 return {"error": "couponCode, couponType, couponValue are required"}, 400
+
+            normalized_issued_by = str(issued_by).strip().upper() if issued_by is not None else None
+            normalized_coupon_restaurant = str(coupon_restaurant).strip() if coupon_restaurant is not None else None
+            if normalized_coupon_restaurant == "":
+                normalized_coupon_restaurant = None
+
+            if normalized_issued_by == 'RESTAURANT' and not normalized_coupon_restaurant:
+                return {"error": "couponRestaurant is required when issuedBy is RESTAURANT"}, 400
 
             pk = f"COUPON#{code}"
             sk = "DETAILS"
@@ -44,8 +53,10 @@ def register_coupon_routes(app):
                 item['startDate'] = {'S': str(start_date)}
             if end_date:
                 item['endDate'] = {'S': str(end_date)}
-            if issued_by:
-                item['issuedBy'] = {'S': str(issued_by)}
+            if normalized_issued_by:
+                item['issuedBy'] = {'S': normalized_issued_by}
+            if normalized_coupon_restaurant:
+                item['couponRestaurant'] = {'S': normalized_coupon_restaurant}
             item['isOncePerUser'] = {'BOOL': is_once_per_user}
 
             dynamodb_client.put_item(

@@ -1,5 +1,6 @@
 """Menu routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
+from services.coupon_service import CouponService
 from services.menu_service import MenuService
 from services.restaurant_service import RestaurantService
 from models.menu_item import MenuItem
@@ -13,6 +14,34 @@ metrics = Metrics()
 
 def register_menu_routes(app):
     """Register menu routes"""
+
+    MAX_TOP_OFFER_BANNER_LENGTH = 20
+
+    def _normalize_top_offer_banner(value):
+        if value is None:
+            return None, None
+        if not isinstance(value, str):
+            return None, ({"error": "topOfferBanner must be a string"}, 400)
+
+        normalized = value.strip()
+        if not normalized:
+            return None, None
+        if len(normalized) > MAX_TOP_OFFER_BANNER_LENGTH:
+            return None, ({"error": f"topOfferBanner must be {MAX_TOP_OFFER_BANNER_LENGTH} characters or fewer"}, 400)
+        return normalized, None
+
+    def _normalize_item_offer_coupon_code(value):
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    def _serialize_menu_item(menu_item: MenuItem) -> dict:
+        pricing = CouponService.get_menu_item_prices(menu_item)
+        return menu_item.to_dict(
+            price=pricing["price"],
+            original_price=pricing.get("originalPrice"),
+        )
 
     @app.get("/api/v1/restaurants/<restaurant_id>/menu/changed")
     @tracer.capture_method
@@ -51,7 +80,7 @@ def register_menu_routes(app):
             
             return {
                 "restaurantId": restaurant_id,
-                "items": [item.to_dict() for item in valid_items],
+                "items": [_serialize_menu_item(item) for item in valid_items],
                 "total": len(valid_items)
             }, 200
         except Exception as e:
@@ -70,7 +99,7 @@ def register_menu_routes(app):
                 return {"error": "Menu item not found"}, 404
             
             metrics.add_metric(name="MenuItemRetrieved", unit="Count", value=1)
-            return menu_item.to_dict(), 200
+            return _serialize_menu_item(menu_item), 200
         except Exception as e:
             logger.error("Error getting menu item", exc_info=True)
             return {"error": "Failed to get menu item", "message": str(e)}, 500
@@ -80,15 +109,19 @@ def register_menu_routes(app):
     def create_menu_item(restaurant_id: str):
         """Create menu item - admin provides restaurantPrice and optional hikePercentage; customer price is computed."""
         try:
-            body = app.current_event.json_body
+            body = app.current_event.json_body or {}
             name = body.get('name')
             restaurant_price = body.get('restaurantPrice')
             hike_percentage = body.get('hikePercentage', 0)
             category = body.get('category')
             sub_category = body.get('subCategory')
+            top_offer_banner, banner_error = _normalize_top_offer_banner(body.get('topOfferBanner'))
+            item_offer_coupon_code = _normalize_item_offer_coupon_code(body.get('itemOfferCouponCode'))
             
             if not name or restaurant_price is None:
                 return {"error": "Name and restaurantPrice are required"}, 400
+            if banner_error:
+                return banner_error
             
             restaurant_price = float(restaurant_price)
             hike_percentage = float(hike_percentage) if hike_percentage is not None else 0.0
@@ -106,14 +139,20 @@ def register_menu_routes(app):
                 is_veg=body.get('isVeg'),
                 is_available=body.get('isAvailable', True),
                 description=body.get('description'),
-                image=body.get('image')
+                image=body.get('image'),
+                top_offer_banner=top_offer_banner,
+                item_offer_coupon_code=item_offer_coupon_code
             )
             
             created_item = MenuService.create_menu_item(menu_item)
             metrics.add_metric(name="MenuItemCreated", unit="Count", value=1)
             
-            response = created_item.to_dict()
-            response['platformCommission'] = get_platform_commission(created_item.price, restaurant_price)
+            pricing = CouponService.get_menu_item_prices(created_item)
+            response = created_item.to_dict(
+                price=pricing["price"],
+                original_price=pricing.get("originalPrice"),
+            )
+            response['platformCommission'] = get_platform_commission(pricing["price"], restaurant_price)
             response['hikePercentage'] = created_item.hike_percentage
             
             return response, 201
@@ -126,7 +165,7 @@ def register_menu_routes(app):
     def update_menu_item(restaurant_id: str, item_id: str):
         """Update menu item"""
         try:
-            body = app.current_event.json_body
+            body = app.current_event.json_body or {}
             updates = {}
             
             if 'name' in body or 'itemName' in body:
@@ -147,6 +186,13 @@ def register_menu_routes(app):
                 updates['description'] = body['description']
             if 'image' in body:
                 updates['image'] = body['image']
+            if 'topOfferBanner' in body:
+                top_offer_banner, banner_error = _normalize_top_offer_banner(body.get('topOfferBanner'))
+                if banner_error:
+                    return banner_error
+                updates['topOfferBanner'] = top_offer_banner
+            if 'itemOfferCouponCode' in body:
+                updates['itemOfferCouponCode'] = _normalize_item_offer_coupon_code(body.get('itemOfferCouponCode'))
             
             if not updates:
                 return {"error": "No fields to update"}, 400
@@ -156,7 +202,7 @@ def register_menu_routes(app):
             updated_item = MenuService.update_menu_item(restaurant_id, item_id, updates)
             metrics.add_metric(name="MenuItemUpdated", unit="Count", value=1)
             
-            return updated_item.to_dict(), 200
+            return _serialize_menu_item(updated_item), 200
         except Exception as e:
             logger.error("Error updating menu item", exc_info=True)
             return {"error": "Failed to update menu item", "message": str(e)}, 500

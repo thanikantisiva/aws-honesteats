@@ -9,7 +9,6 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from config.pricing import calculate_customer_price_from_hike
 from services.order_service import OrderService
 from services.payment_service import PaymentService
-from services.menu_service import MenuService
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.dynamodb_helpers import dynamodb_to_python
 
@@ -82,6 +81,32 @@ def _resolve_commission_pct(item_id: str, restaurant_config: dict, global_defaul
     return global_default
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_coupon_issuer(value) -> str | None:
+    normalized = str(value or "").strip().upper()
+    return normalized or None
+
+
+def _get_gross_item_price(item: dict, customer_price: float, stored_discount_amount: float) -> float:
+    restaurant_price = _safe_float(item.get("restaurantPrice"))
+    hike_percentage = _safe_float(item.get("hikePercentage"))
+
+    if restaurant_price > 0:
+        reconstructed = calculate_customer_price_from_hike(restaurant_price, hike_percentage)
+        return round(max(reconstructed, customer_price), 2)
+
+    if stored_discount_amount > 0:
+        return round(customer_price + stored_discount_amount, 2)
+
+    return round(customer_price, 2)
+
+
 def _compute_revenue(order) -> tuple[dict, list]:
     """
     Build the revenue dict from an Order object and a list of order line items
@@ -95,7 +120,11 @@ def _compute_revenue(order) -> tuple[dict, list]:
       - itemCommissionAmount: total platform commission for the line (all units)
     """
     total_customer_paid = 0.0
+    gross_food_value = 0.0
     total_food_commission = 0.0
+    total_item_coupon_discount = 0.0
+    platform_item_coupon_discount = 0.0
+    restaurant_item_coupon_discount = 0.0
     restaurantRevenue = {}
     platformRevenue = {}
     enriched_items: list = []
@@ -112,30 +141,42 @@ def _compute_revenue(order) -> tuple[dict, list]:
     for item in (order.items or []):
         item_copy = dict(item)
         item_id = item.get("itemId") or item.get("item_id") or ""
-        quantity = int(item.get("quantity", 1))
-
-        MenuService.get_menu_item(order.restaurant_id, item_id)
-
         try:
-            customer_price = float(item.get("price", 0) or 0)
+            quantity = int(item.get("quantity", 1) or 1)
         except (TypeError, ValueError):
-            customer_price = 0.0
+            quantity = 1
+        customer_price = _safe_float(item.get("price"))
+        stored_discount_amount = max(_safe_float(item.get("itemDiscountAmount")), 0.0)
+        gross_price = _get_gross_item_price(item, customer_price, stored_discount_amount)
+        item_discount_amount = round(max(gross_price - customer_price, 0.0), 2)
+        coupon_issued_by = _normalize_coupon_issuer(item.get("couponIssuedBy"))
 
         commission_pct = _resolve_commission_pct(item_id, restaurant_config, global_default_commission)
         # Per-unit commission (4 dp), then line total
-        item_commission_per_unit = round(customer_price * commission_pct / 100.0, 4)
+        item_commission_per_unit = round(gross_price * commission_pct / 100.0, 4)
         item_commission = item_commission_per_unit * quantity
 
         item_copy["itemCommissionPercentage"] = round(commission_pct, 4)
         item_copy["itemCommissionAmount"] = round(item_commission, 4)
+        item_copy["grossPrice"] = gross_price
+        item_copy["itemDiscountAmount"] = item_discount_amount
+        item_copy["couponIssuedBy"] = coupon_issued_by
 
         enriched_items.append(item_copy)
 
         total_food_commission += item_commission
         total_customer_paid += customer_price * quantity
+        gross_food_value += gross_price * quantity
+        total_item_coupon_discount += item_discount_amount * quantity
+
+        if coupon_issued_by == "YUMDUDE":
+            platform_item_coupon_discount += item_discount_amount * quantity
+        elif coupon_issued_by == "RESTAURANT":
+            restaurant_item_coupon_discount += item_discount_amount * quantity
 
         logger.info(
-            f"Item {item_id}: customerPrice={customer_price}, qty={quantity}, "
+            f"Item {item_id}: grossPrice={gross_price}, customerPrice={customer_price}, qty={quantity}, "
+            f"itemDiscountAmount={item_discount_amount}, couponIssuedBy={coupon_issued_by}, "
             f"itemCommissionPercentage={item_copy['itemCommissionPercentage']}, "
             f"itemCommissionAmount={item_copy['itemCommissionAmount']}"
         )
@@ -157,7 +198,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
     platformRevenue["platformFee"] = platform_fee
 
     total_platform_revenue = round(food_commission + platform_fee, 2)
-    restaurant_settlement = round(total_customer_paid - food_commission, 2)
+    restaurant_settlement = round(gross_food_value - food_commission, 2)
     restaurantRevenue["revenue"] = restaurant_settlement
 
     
@@ -184,7 +225,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
             )
             coupon_item = (response.get("Items") or [None])[0]
             if coupon_item:
-                issued_by = coupon_item.get("issuedBy", {}).get("S")
+                issued_by = _normalize_coupon_issuer(coupon_item.get("issuedBy", {}).get("S"))
                 is_once_per_user = coupon_item.get("isOncePerUser", {}).get("BOOL", False)
         except Exception as e:
             logger.warning(f"Failed to look up coupon {coupon_code}: {e}")
@@ -203,8 +244,25 @@ def _compute_revenue(order) -> tuple[dict, list]:
             restaurant_settlement = round(restaurant_settlement - coupon_discount, 2)
             restaurantRevenue["couponDiscount"] = coupon_discount
 
-    restaurantRevenue["finalPayout"] = restaurantRevenue.get("revenue", 0) - restaurantRevenue.get("couponDiscount", 0)
-    platformRevenue["finalPayout"] = platformRevenue.get("foodCommission", 0) + platformRevenue.get("platformFee", 0) - platformRevenue.get("deliveryFeeDiscount", 0) - platformRevenue.get("couponDiscount", 0)
+    if platform_item_coupon_discount > 0:
+        platformRevenue["itemCouponDiscount"] = round(platform_item_coupon_discount, 2)
+    if restaurant_item_coupon_discount > 0:
+        restaurantRevenue["itemCouponDiscount"] = round(restaurant_item_coupon_discount, 2)
+
+    restaurantRevenue["finalPayout"] = round(
+        restaurantRevenue.get("revenue", 0)
+        - restaurantRevenue.get("couponDiscount", 0)
+        - restaurantRevenue.get("itemCouponDiscount", 0),
+        2,
+    )
+    platformRevenue["finalPayout"] = round(
+        platformRevenue.get("foodCommission", 0)
+        + platformRevenue.get("platformFee", 0)
+        - platformRevenue.get("deliveryFeeDiscount", 0)
+        - platformRevenue.get("couponDiscount", 0)
+        - platformRevenue.get("itemCouponDiscount", 0),
+        2,
+    )
 
     gst_data = fee_dict.get("gst", {})
     gst_on_food = round(float(gst_data.get("gstOnFood", 0) or 0), 2)
@@ -214,6 +272,11 @@ def _compute_revenue(order) -> tuple[dict, list]:
 
     revenue = {
         "totalCustomerPaid": round(total_customer_paid, 2),
+        "customerPaidFoodValue": round(total_customer_paid, 2),
+        "grossFoodValue": round(gross_food_value, 2),
+        "itemCouponDiscountTotal": round(total_item_coupon_discount, 2),
+        "itemCouponDiscountByPlatform": round(platform_item_coupon_discount, 2),
+        "itemCouponDiscountByRestaurant": round(restaurant_item_coupon_discount, 2),
         "totalDiscount": round(fee_dict.get("breakdown", {}).get("totalDiscount", 0), 2),
         "couponCode": coupon_code,
         "couponApplied": coupon_applied,
