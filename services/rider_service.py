@@ -9,6 +9,7 @@ from utils.datetime_ist import now_ist_iso
 from aws_lambda_powertools import Logger
 
 ASSIGNMENT_WINDOW_DAYS = 7
+RIDER_LAST_SEEN_STALE_SECONDS = 30
 
 logger = Logger()
 
@@ -34,6 +35,68 @@ def _update_order_with_rider_location(order_id: str, lat: float, lng: float, spe
 
 class RiderService:
     """Service for rider operational operations"""
+
+    @staticmethod
+    def _parse_last_seen(last_seen: Optional[str]) -> Optional[datetime]:
+        """Parse an ISO timestamp string into UTC."""
+        if not last_seen or not isinstance(last_seen, str):
+            return None
+
+        normalized = last_seen.strip()
+        if not normalized:
+            return None
+
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            logger.warning(f"Unable to parse rider lastSeen timestamp: {last_seen}")
+            return None
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _is_rider_fresh(last_seen: Optional[str], now: Optional[datetime] = None) -> bool:
+        """Return True when rider heartbeat is recent enough for assignment."""
+        parsed_last_seen = RiderService._parse_last_seen(last_seen)
+        if parsed_last_seen is None:
+            return False
+
+        reference_time = now or datetime.now(timezone.utc)
+        if parsed_last_seen > reference_time:
+            return True
+
+        rider_age = reference_time - parsed_last_seen
+        return rider_age <= timedelta(seconds=RIDER_LAST_SEEN_STALE_SECONDS)
+
+    @staticmethod
+    def _filter_assignable_riders(riders: List[Rider]) -> List[Rider]:
+        """Filter riders who are active, free, located, and recently seen."""
+        reference_time = datetime.now(timezone.utc)
+        assignable_riders: List[Rider] = []
+
+        for rider in riders:
+            if not rider.is_active:
+                continue
+            if rider.working_on_order:
+                continue
+            if rider.lat is None or rider.lng is None:
+                continue
+            if not RiderService._is_rider_fresh(rider.last_seen, reference_time):
+                logger.info(
+                    f"Skipping stale rider {rider.rider_id}: "
+                    f"lastSeen={rider.last_seen}, threshold={RIDER_LAST_SEEN_STALE_SECONDS}s"
+                )
+                continue
+
+            assignable_riders.append(rider)
+
+        return assignable_riders
 
     @staticmethod
     def _ensure_user_rider_exists(rider_id: str):
@@ -471,11 +534,8 @@ class RiderService:
             
             logger.info(f"Found {len(all_riders)} riders in geohash cells")
             
-            # Filter: active and not working on order
-            available_riders = [
-                r for r in all_riders 
-                if r.is_active and not r.working_on_order and r.lat and r.lng
-            ]
+            # Filter: active, recently seen, not working on order, and has location
+            available_riders = RiderService._filter_assignable_riders(all_riders)
             
             logger.info(f"Found {len(available_riders)} available riders")
             
@@ -516,7 +576,9 @@ class RiderService:
             nearby_riders = []
             for item in response.get('Items', []):
                 rider = Rider.from_dynamodb_item(item)
-                if rider.lat and rider.lng:
+                if not RiderService._filter_assignable_riders([rider]):
+                    continue
+                if rider.lat is not None and rider.lng is not None:
                     distance = calculate_distance(lat, lng, rider.lat, rider.lng)
                     if distance <= radius_km:
                         nearby_riders.append((rider, distance))

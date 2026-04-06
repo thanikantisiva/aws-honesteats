@@ -875,6 +875,13 @@ Resources:
               Resource:
                 - !GetAtt OrderAcceptRejectCheckerInvokeRole.Arn
                 - !GetAtt OrderAssignmentDelayInvokeRole.Arn
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - ssm:GetParametersByPath
+              Resource:
+                - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rork-honesteats/${Environment}/*'
             
       Environment:
         Variables:

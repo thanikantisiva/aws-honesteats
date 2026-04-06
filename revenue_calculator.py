@@ -153,7 +153,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
 
         commission_pct = _resolve_commission_pct(item_id, restaurant_config, global_default_commission)
         # Per-unit commission (4 dp), then line total
-        item_commission_per_unit = round(gross_price * commission_pct / 100.0, 4)
+        item_commission_per_unit = round(customer_price * commission_pct / 100.0, 4)
         item_commission = item_commission_per_unit * quantity
 
         item_copy["itemCommissionPercentage"] = round(commission_pct, 4)

@@ -7,6 +7,8 @@ from utils.datetime_ist import now_ist_iso
 from aws_lambda_powertools import Logger
 
 logger = Logger()
+RIDER_NOTIFICATION_CHANNEL_ID = "rider_orders_ring"
+RIDER_NOTIFICATION_SOUND = "new_order_ring"
 
 # Import Firebase Admin SDK
 try:
@@ -87,6 +89,7 @@ class NotificationService:
             # Convert data dict values to strings (FCM requirement)
             string_data = {k: str(v) for k, v in data.items()}
             body_text = (body or "").strip()
+            android_channel_id = string_data.get("channelId") or None
 
             is_order_status_update = string_data.get("type") == "order_status"
 
@@ -137,7 +140,8 @@ class NotificationService:
                         notification=messaging.AndroidNotification(
                             title=title,
                             body=body_text,
-                            sound="default",
+                            sound=string_data.get("sound") or RIDER_NOTIFICATION_SOUND,
+                            channel_id=android_channel_id,
                             icon="ic_launcher"
                         )
                     ),
@@ -287,7 +291,9 @@ class NotificationService:
                 "type": "order_assigned",
                 "orderId": order_id,
                 "restaurantName": restaurant_name,
-                "deliveryFee": str(delivery_fee)
+                "deliveryFee": str(delivery_fee),
+                "channelId": RIDER_NOTIFICATION_CHANNEL_ID,
+                "sound": RIDER_NOTIFICATION_SOUND,
             }
             
             # Send via Firebase FCM
