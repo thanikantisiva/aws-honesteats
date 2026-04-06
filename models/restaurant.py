@@ -35,6 +35,7 @@ class Restaurant:
         created_at: Optional[str] = None,
         closes_at: Optional[str] = None,
         opens_at: Optional[str] = None,
+        avg_preparation_time: Optional[int] = None,
         fcm_token: Optional[str] = None,
         fcm_token_updated_at: Optional[str] = None,
         position: Optional[int] = None,
@@ -58,6 +59,7 @@ class Restaurant:
         self.created_at = created_at or now_ist_iso()
         self.closes_at = closes_at
         self.opens_at = opens_at
+        self.avg_preparation_time = avg_preparation_time
         self.fcm_token = fcm_token
         self.fcm_token_updated_at = fcm_token_updated_at
         self.position = position
@@ -128,6 +130,8 @@ class Restaurant:
             result["closesAt"] = self.closes_at
         if self.opens_at:
             result["opensAt"] = self.opens_at
+        if self.avg_preparation_time is not None:
+            result["avgPreparationTime"] = self.avg_preparation_time
         if self.position is not None:
             result["position"] = self.position
         if self.top_offer_banner:
@@ -184,6 +188,9 @@ class Restaurant:
             position = int(float(item["position"]["N"]))
 
         top_offer_banner = item.get("topOfferBanner", {}).get("S") if "topOfferBanner" in item else None
+        avg_preparation_time = None
+        if "avgPreparationTime" in item and "N" in item["avgPreparationTime"]:
+            avg_preparation_time = int(float(item["avgPreparationTime"]["N"]))
 
         return cls(
             location_id=location_id,
@@ -201,6 +208,7 @@ class Restaurant:
             created_at=item.get("createdAt", {}).get("S") if "createdAt" in item else None,
             closes_at=item.get("closesAt", {}).get("S") if "closesAt" in item else None,
             opens_at=item.get("opensAt", {}).get("S") if "opensAt" in item else None,
+            avg_preparation_time=avg_preparation_time,
             fcm_token=item.get("fcmToken", {}).get("S") if "fcmToken" in item else None,
             fcm_token_updated_at=item.get("fcmTokenUpdatedAt", {}).get("S") if "fcmTokenUpdatedAt" in item else None,
             position=position,
@@ -242,6 +250,8 @@ class Restaurant:
             item["closesAt"] = {"S": self.closes_at}
         if self.opens_at:
             item["opensAt"] = {"S": self.opens_at}
+        if self.avg_preparation_time is not None:
+            item["avgPreparationTime"] = {"N": str(int(self.avg_preparation_time))}
         if self.fcm_token:
             item["fcmToken"] = {"S": self.fcm_token}
         if self.fcm_token_updated_at:

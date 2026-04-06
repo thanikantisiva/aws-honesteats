@@ -21,6 +21,8 @@ def register_restaurant_routes(app):
     """Register restaurant routes"""
 
     MAX_TOP_OFFER_BANNER_LENGTH = 20
+    MIN_PREP_TIME_MINUTES = 5
+    MAX_PREP_TIME_MINUTES = 120
 
     def _normalize_top_offer_banner(value):
         if value is None:
@@ -53,6 +55,18 @@ def register_restaurant_routes(app):
             return None, ({"error": "Forbidden", "message": "Token does not match restaurant"}, 403)
 
         return payload, None
+
+    def _normalize_avg_preparation_time(value):
+        if value is None:
+            return None, None
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return None, ({"error": "avgPreparationTime must be an integer"}, 400)
+
+        if normalized < MIN_PREP_TIME_MINUTES or normalized > MAX_PREP_TIME_MINUTES:
+            return None, ({"error": f"avgPreparationTime must be between {MIN_PREP_TIME_MINUTES} and {MAX_PREP_TIME_MINUTES} minutes"}, 400)
+        return normalized, None
     
     @app.get("/api/v1/restaurants")
     @tracer.capture_method
@@ -167,11 +181,14 @@ def register_restaurant_routes(app):
             latitude = body.get('latitude')
             longitude = body.get('longitude')
             top_offer_banner, banner_error = _normalize_top_offer_banner(body.get('topOfferBanner'))
+            avg_preparation_time, prep_time_error = _normalize_avg_preparation_time(body.get('avgPreparationTime'))
             
             if not all([location_id, name, latitude is not None, longitude is not None]):
                 return {"error": "locationId, name, latitude, and longitude are required"}, 400
             if banner_error:
                 return banner_error
+            if prep_time_error:
+                return prep_time_error
             
             logger.info(f"Creating restaurant: {name}, ID: {restaurant_id}, Location: {latitude}, {longitude}")
             
@@ -186,6 +203,7 @@ def register_restaurant_routes(app):
                 rating=body.get('rating'),
                 owner_id=body.get('ownerId'),
                 restaurant_image=body.get('restaurantImage'),
+                avg_preparation_time=avg_preparation_time,
                 position=int(body['position']) if body.get('position') is not None else None,
                 top_offer_banner=top_offer_banner
                 # geohash auto-generated in __init__
@@ -334,6 +352,7 @@ def register_restaurant_routes(app):
         try:
             body = app.current_event.json_body or {}
             top_offer_banner = None
+            avg_preparation_time = None
             
             
             updates = {}
@@ -365,6 +384,11 @@ def register_restaurant_routes(app):
                 if banner_error:
                     return banner_error
                 updates['topOfferBanner'] = top_offer_banner
+            if 'avgPreparationTime' in body:
+                avg_preparation_time, prep_time_error = _normalize_avg_preparation_time(body.get('avgPreparationTime'))
+                if prep_time_error:
+                    return prep_time_error
+                updates['avgPreparationTime'] = avg_preparation_time
             
             if not updates:
                 return {"error": "No fields to update"}, 400

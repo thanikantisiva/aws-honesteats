@@ -401,6 +401,7 @@ class RestaurantService:
                     restaurant_image=updates.get('restaurantImage', existing_restaurant.restaurant_image),
                     closes_at=updates.get('closesAt', existing_restaurant.closes_at),
                     opens_at=updates.get('opensAt', existing_restaurant.opens_at),
+                    avg_preparation_time=updates.get('avgPreparationTime', existing_restaurant.avg_preparation_time),
                     fcm_token=updates.get('fcmToken', existing_restaurant.fcm_token),
                     fcm_token_updated_at=updates.get('fcmTokenUpdatedAt', existing_restaurant.fcm_token_updated_at),
                     position=updates.get('position', existing_restaurant.position),
@@ -488,6 +489,12 @@ class RestaurantService:
                 expression_attribute_names['#opensAt'] = 'opensAt'
                 expression_attribute_values[':opensAt'] = {'S': updates['opensAt']}
 
+            if 'avgPreparationTime' in updates:
+                expression_attribute_names['#avgPreparationTime'] = 'avgPreparationTime'
+                if updates['avgPreparationTime'] is not None and updates['avgPreparationTime'] != existing_restaurant.avg_preparation_time:
+                    update_expressions.append('#avgPreparationTime = :avgPreparationTime')
+                    expression_attribute_values[':avgPreparationTime'] = {'N': str(int(updates['avgPreparationTime']))}
+
             if 'position' in updates:
                 expression_attribute_names['#position'] = 'position'
                 if updates['position'] is None:
@@ -526,6 +533,8 @@ class RestaurantService:
                 remove_expressions.append('#position')
             if 'topOfferBanner' in updates and updates['topOfferBanner'] is None:
                 remove_expressions.append('#topOfferBanner')
+            if 'avgPreparationTime' in updates and updates['avgPreparationTime'] is None:
+                remove_expressions.append('#avgPreparationTime')
 
             if not set_expressions and not remove_expressions:
                 logger.info("No changes detected, returning existing restaurant")

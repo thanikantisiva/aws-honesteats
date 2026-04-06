@@ -5,6 +5,7 @@ Automatically assigns orders to nearest available riders when status = PREPARING
 import json
 import os
 import boto3
+from typing import Optional
 from datetime import datetime, timedelta
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -12,6 +13,20 @@ from services.order_assignment_service import OrderAssignmentService
 from services.restaurant_service import RestaurantService
 
 logger = Logger(service="order-assignment-handler")
+
+
+def _resolve_assignment_delay_seconds(restaurant_avg_prep_minutes: Optional[int]) -> int:
+    """Resolve delayed assignment time in seconds minus rider travel/acceptance buffer."""
+    default_delay_seconds = int(os.environ.get('ASSIGNMENT_DELAY_SECONDS', '300'))
+    assignment_buffer_seconds = int(os.environ.get('ASSIGNMENT_BUFFER_SECONDS', '300'))
+
+    if restaurant_avg_prep_minutes is None:
+        base_seconds = default_delay_seconds
+    else:
+        base_seconds = int(restaurant_avg_prep_minutes) * 60
+
+    # Assign earlier so rider can accept and reach the restaurant before food is ready.
+    return max(0, base_seconds - assignment_buffer_seconds)
 
 
 def lambda_handler(event: dict, context: LambdaContext) -> dict:
@@ -86,7 +101,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                 # Schedule delayed assignment
                 try:
                     scheduler = boto3.client('scheduler')
-                    delay_seconds = int(os.environ.get('ASSIGNMENT_DELAY_SECONDS', '300'))
+                    delay_seconds = _resolve_assignment_delay_seconds(restaurant.avg_preparation_time)
                     run_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
 
                     checker_arn = os.environ.get('ORDER_ASSIGNMENT_DELAY_HANDLER_ARN')
@@ -94,7 +109,11 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
 
                     if checker_arn and checker_role_arn:
                         schedule_name = f"order-assign-delay-{order_id}"
-                        logger.info(f"[orderId={order_id}] Scheduling delayed assignment name={schedule_name} runAt={run_at.isoformat()} delaySeconds={delay_seconds}")
+                        logger.info(
+                            f"[orderId={order_id}] Scheduling delayed assignment "
+                            f"name={schedule_name} runAt={run_at.isoformat()} delaySeconds={delay_seconds} "
+                            f"restaurantAvgPrepMinutes={restaurant.avg_preparation_time}"
+                        )
                         scheduler.create_schedule(
                             Name=schedule_name,
                             ScheduleExpression=f"at({run_at.strftime('%Y-%m-%dT%H:%M:%S')})",
