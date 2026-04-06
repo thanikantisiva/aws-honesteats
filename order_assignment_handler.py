@@ -100,8 +100,33 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             if new_status == 'PREPARING':
                 # Schedule delayed assignment
                 try:
-                    scheduler = boto3.client('scheduler')
                     delay_seconds = _resolve_assignment_delay_seconds(restaurant.avg_preparation_time)
+
+                    if delay_seconds <= 0:
+                        logger.info(
+                            f"[orderId={order_id}] Delay computed as {delay_seconds}s; assigning immediately "
+                            f"restaurantAvgPrepMinutes={restaurant.avg_preparation_time}"
+                        )
+                        rider_id = OrderAssignmentService.assign_order_to_rider(
+                            order_id,
+                            restaurant.latitude,
+                            restaurant.longitude
+                        )
+
+                        if rider_id:
+                            processed += 1
+                            logger.info(f"[orderId={order_id}] ✅ Assigned immediately to rider {rider_id}")
+                        else:
+                            no_riders += 1
+                            logger.warning(f"[orderId={order_id}] ⚠️ No available riders found for immediate assignment")
+                            logger.warning(
+                                f"[orderId={order_id}] Restaurant: {restaurant.name} "
+                                f"at ({restaurant.latitude}, {restaurant.longitude})"
+                            )
+                            logger.warning(f"[orderId={order_id}] Manual assignment may be required")
+                        continue
+
+                    scheduler = boto3.client('scheduler')
                     run_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
 
                     checker_arn = os.environ.get('ORDER_ASSIGNMENT_DELAY_HANDLER_ARN')
