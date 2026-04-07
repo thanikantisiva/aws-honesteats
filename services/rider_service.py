@@ -4,7 +4,7 @@ from botocore.exceptions import ClientError
 from datetime import datetime, timedelta, timezone
 from models.rider import Rider
 from utils.dynamodb import dynamodb_client, TABLES
-from utils.geohash import encode as geohash_encode, get_neighbors, get_precision_for_radius
+from utils.geohash import encode as geohash_encode
 from utils.datetime_ist import now_ist_iso
 from aws_lambda_powertools import Logger
 
@@ -453,86 +453,37 @@ class RiderService:
             return None
 
     @staticmethod
-    def _query_riders_by_geohash(geohash: str, precision: int = 7) -> List[Rider]:
-        """Query riders by geohash at specific precision with pagination"""
-        try:
-            riders = []
-            last_evaluated_key = None
-            
-            # Choose index based on precision
-            if precision == 7:
-                # No index for P7, would need to scan - skip for now
-                return []
-            elif precision == 6:
-                query_params = {
-                    'TableName': TABLES['RIDERS'],
-                    'IndexName': 'GSI1',
-                    'KeyConditionExpression': 'GSI1PK = :pk',
-                    'ExpressionAttributeValues': {':pk': {'S': geohash}}
-                }
-            elif precision == 5:
-                query_params = {
-                    'TableName': TABLES['RIDERS'],
-                    'IndexName': 'GSI2',
-                    'KeyConditionExpression': 'GSI2PK = :pk',
-                    'ExpressionAttributeValues': {':pk': {'S': geohash}}
-                }
-            elif precision == 4:
-                query_params = {
-                    'TableName': TABLES['RIDERS'],
-                    'IndexName': 'GSI3',
-                    'KeyConditionExpression': 'GSI3PK = :pk',
-                    'ExpressionAttributeValues': {':pk': {'S': geohash}}
-                }
-            else:
-                raise ValueError(f"Unsupported precision: {precision}")
-            
-            # Paginate through results
-            while True:
-                if last_evaluated_key:
-                    query_params['ExclusiveStartKey'] = last_evaluated_key
-                
-                response = dynamodb_client.query(**query_params)
-                
-                for item in response.get('Items', []):
-                    riders.append(Rider.from_dynamodb_item(item))
-                
-                last_evaluated_key = response.get('LastEvaluatedKey')
-                if not last_evaluated_key:
-                    break
-            
-            return riders
-        except Exception as e:
-            logger.error(f"Error querying geohash {geohash} at precision {precision}: {str(e)}")
-            return []
-    
+    def _get_all_riders() -> List[Rider]:
+        """Paginated scan of all riders (single-town deployment)."""
+        riders: List[Rider] = []
+        last_evaluated_key = None
+        while True:
+            kwargs = {'TableName': TABLES['RIDERS']}
+            if last_evaluated_key:
+                kwargs['ExclusiveStartKey'] = last_evaluated_key
+            response = dynamodb_client.scan(**kwargs)
+            for item in response.get('Items', []):
+                riders.append(Rider.from_dynamodb_item(item))
+            last_evaluated_key = response.get('LastEvaluatedKey')
+            if not last_evaluated_key:
+                break
+        return riders
+
     @staticmethod
     def find_available_riders_near(lat: float, lng: float, radius_km: float = 5) -> List[Tuple[Rider, float]]:
         """
-        Find available online riders within radius using geohash spatial indexing
-        
+        Find available online riders within radius.
+
+        Loads all riders from the table (single-town scale), then filters by assignability and distance.
+
         Returns: List of (Rider, distance_km) tuples sorted by distance
         """
         try:
             from utils.distance import calculate_distance
-            
-            # Determine optimal geohash precision for radius
-            precision = get_precision_for_radius(radius_km)
-            logger.info(f"Using geohash precision {precision} for {radius_km}km radius")
-            
-            # Get center geohash and neighbors
-            center_geohash = geohash_encode(lat, lng, precision)
-            geohashes_to_query = [center_geohash] + get_neighbors(center_geohash)
-            
-            logger.info(f"Querying {len(geohashes_to_query)} geohash cells: {geohashes_to_query}")
-            
-            # Query riders in all geohash cells
-            all_riders = []
-            for gh in geohashes_to_query:
-                riders = RiderService._query_riders_by_geohash(gh, precision)
-                all_riders.extend(riders)
-            
-            logger.info(f"Found {len(all_riders)} riders in geohash cells")
+
+            logger.info("Loading all riders from DB (single-town)")
+            all_riders = RiderService._get_all_riders()
+            logger.info(f"Found {len(all_riders)} riders in table")
             
             # Filter: active, recently seen, not working on order, and has location
             available_riders = RiderService._filter_assignable_riders(all_riders)

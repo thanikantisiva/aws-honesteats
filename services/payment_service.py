@@ -6,6 +6,7 @@ from utils.datetime_ist import now_ist_iso
 from botocore.exceptions import ClientError
 from models.payment import Payment
 from utils.dynamodb import dynamodb_client, TABLES
+from utils.dynamodb_helpers import python_to_dynamodb
 from utils.ssm import get_secret
 
 logger = Logger()
@@ -208,14 +209,20 @@ class PaymentService:
                 attr_value = f":{key}"
                 update_expr += f"{attr_name} = {attr_value}, "
                 expr_attr_names[attr_name] = key
-                
-                # Convert value to DynamoDB format
-                if isinstance(value, str):
-                    expr_attr_values[attr_value] = {'S': value}
+
+                # Convert value to DynamoDB format (match OrderService.update_order)
+                if isinstance(value, bool):
+                    expr_attr_values[attr_value] = {'BOOL': value}
                 elif isinstance(value, (int, float)):
                     expr_attr_values[attr_value] = {'N': str(value)}
+                elif isinstance(value, (list, dict)):
+                    expr_attr_values[attr_value] = python_to_dynamodb(value)
                 elif value is None:
                     expr_attr_values[attr_value] = {'NULL': True}
+                elif isinstance(value, str):
+                    expr_attr_values[attr_value] = {'S': value}
+                else:
+                    expr_attr_values[attr_value] = {'S': str(value)}
             
             update_expr = update_expr.rstrip(', ')
             

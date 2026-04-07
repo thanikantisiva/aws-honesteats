@@ -107,8 +107,9 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
       - riderBaseFareApplicableUnderKms < distance <= riderSurgeChargeAfterKms : distance × riderFarePerKm
       - distance > riderSurgeChargeAfterKms : above + surge km × riderSurgePricePerKm
 
-    Free delivery only applies when there is NO surge (distance <= riderSurgeChargeAfterKms)
-    and itemTotal >= freeDeliveryAboveThreshold.
+    Customer pays no delivery fee (isFreeDelivery) when there is NO surge and either:
+      - itemTotal >= freeDeliveryAboveThreshold, or
+      - distanceKm <= riderFreeDeliveryBelowKm (short-trip waiver; set to 0 to disable).
     """
     base_fare_km = config["riderBaseFareApplicableUnderKms"]
     surge_km_threshold = config["riderSurgeChargeAfterKms"]
@@ -129,7 +130,10 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
     # Surge zone blocks free delivery
     surge_active = distance_km > surge_km_threshold
     free_delivery_threshold = config["freeDeliveryAboveThreshold"]
-    is_free_delivery = (not surge_active) and (item_total >= free_delivery_threshold)
+    rider_free_below_km = config["riderFreeDeliveryBelowKm"]
+    within_short_trip_waiver = rider_free_below_km > 0 and distance_km <= rider_free_below_km
+    meets_cart_threshold = item_total >= free_delivery_threshold
+    is_free_delivery = (not surge_active) and (meets_cart_threshold or within_short_trip_waiver)
     delivery_fee_discount = calculated_delivery_fee if is_free_delivery else 0.0
     final_delivery_fee = 0.0 if is_free_delivery else calculated_delivery_fee
 
@@ -142,6 +146,7 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
     logger.info(
         "Free delivery evaluation: "
         f"itemTotal={item_total}, freeDeliveryAboveThreshold={free_delivery_threshold}, "
+        f"riderFreeDeliveryBelowKm={rider_free_below_km}, withinShortTripWaiver={within_short_trip_waiver}, "
         f"surgeActive={surge_active}, isFreeDelivery={is_free_delivery}, "
         f"deliveryFeeDiscount={delivery_fee_discount}"
     )

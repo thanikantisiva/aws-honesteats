@@ -47,7 +47,49 @@ def _rank_riders(riders: List[Tuple[Rider, float]]) -> List[Tuple[Rider, float, 
 
 class OrderAssignmentService:
     """Service for assigning orders to riders"""
-    
+
+    @staticmethod
+    def _mark_order_awaiting_rider_assignment(
+        order_id: str,
+        restaurant_lat: float,
+        restaurant_lng: float,
+    ) -> None:
+        """
+        Move order to AWAITING_RIDER_ASSIGNMENT and enqueue for retry.
+        Raises if the order cannot be updated (so callers are not left thinking it succeeded).
+        """
+        order = OrderService.get_order(order_id)
+        if not order:
+            raise ValueError(f"Order not found: {order_id}")
+
+        attempts = (order.rider_assignment_attempts or 0) + 1
+        OrderService.update_order(order_id, {
+            'status': Order.STATUS_AWAITING_RIDER_ASSIGNMENT,
+            'riderAssignmentAttempts': attempts,
+            'lastAssignmentAttemptAt': datetime.utcnow().isoformat()
+        })
+        logger.info(f"[orderId={order_id}] Status updated to AWAITING_RIDER_ASSIGNMENT (attempt #{attempts})")
+
+        queue_url = os.environ.get('ORDER_ASSIGNMENT_QUEUE_URL')
+        if not queue_url:
+            logger.error(f"[orderId={order_id}] ORDER_ASSIGNMENT_QUEUE_URL not configured")
+            return
+
+        try:
+            sqs = boto3.client('sqs')
+            sqs.send_message(
+                QueueUrl=queue_url,
+                MessageBody=json.dumps({
+                    'orderId': order_id,
+                    'restaurantLat': restaurant_lat,
+                    'restaurantLng': restaurant_lng,
+                    'attemptNumber': attempts
+                })
+            )
+            logger.info(f"[orderId={order_id}] Queued for rider assignment retry")
+        except Exception as e:
+            logger.error(f"[orderId={order_id}] Failed to queue: {str(e)}", exc_info=True)
+
     @staticmethod
     def assign_order_to_rider(order_id: str, restaurant_lat: float, restaurant_lng: float) -> Optional[str]:
         """
@@ -88,45 +130,21 @@ class OrderAssignmentService:
                     if r.rider_id not in rejected_by_riders
                 ]
             logger.info(f"[orderId={order_id}] {len(filtered_riders)} riders after filtering rejected riders")
-            
-            if not available_riders:
-                logger.warning(f"[orderId={order_id}] No available riders found")
-                
-                # Get current order to check assignment attempts
-                order = OrderService.get_order(order_id)
-                attempts = (order.rider_assignment_attempts if order and hasattr(order, 'rider_assignment_attempts') else 0) + 1
-                
-                # Update order status to AWAITING_RIDER_ASSIGNMENT
-                OrderService.update_order(order_id, {
-                    'status': 'AWAITING_RIDER_ASSIGNMENT',
-                    'riderAssignmentAttempts': attempts,
-                    'lastAssignmentAttemptAt': datetime.utcnow().isoformat()
-                })
-                logger.info(f"[orderId={order_id}] Status updated to AWAITING_RIDER_ASSIGNMENT (attempt #{attempts})")
-                
-                # Push to SQS queue for retry
-                try:
-                    sqs = boto3.client('sqs')
-                    queue_url = os.environ.get('ORDER_ASSIGNMENT_QUEUE_URL')
-                    
-                    if queue_url:
-                        sqs.send_message(
-                            QueueUrl=queue_url,
-                            MessageBody=json.dumps({
-                                'orderId': order_id,
-                                'restaurantLat': restaurant_lat,
-                                'restaurantLng': restaurant_lng,
-                                'attemptNumber': attempts
-                            })
-                        )
-                        logger.info(f"[orderId={order_id}] Queued for rider assignment retry")
-                    else:
-                        logger.error(f"[orderId={order_id}] ORDER_ASSIGNMENT_QUEUE_URL not configured")
-                except Exception as e:
-                    logger.error(f"[orderId={order_id}] Failed to queue: {str(e)}")
-                
-                return None
-            
+        except Exception as e:
+            logger.error(
+                f"[orderId={order_id}] Error loading riders or order for assignment: {str(e)}",
+                exc_info=True
+            )
+            return None
+
+        if not available_riders:
+            logger.warning(f"[orderId={order_id}] No available riders found")
+            OrderAssignmentService._mark_order_awaiting_rider_assignment(
+                order_id, restaurant_lat, restaurant_lng
+            )
+            return None
+
+        try:
             # If everyone has rejected, direct-assign to best-scoring from available_riders
             if not filtered_riders and available_riders:
                 ranked = _rank_riders(available_riders)

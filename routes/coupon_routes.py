@@ -14,6 +14,17 @@ def register_coupon_routes(app):
 
     MAX_ITEM_BANNER_TEXT_LENGTH = 20
 
+    def _normalize_optional_string_field(value, field_name: str):
+        """Treat null, empty, and whitespace-only as omitted; require string when value is sent."""
+        if value is None:
+            return None, None
+        if not isinstance(value, str):
+            return None, ({"error": f"{field_name} must be a string or null"}, 400)
+        normalized = value.strip()
+        if not normalized:
+            return None, None
+        return normalized, None
+
     def _normalize_item_banner_text(value):
         if value is None:
             return None, None
@@ -42,8 +53,12 @@ def register_coupon_routes(app):
             start_date = body.get('startDate')
             end_date = body.get('endDate')
             issued_by = body.get('issuedBy')
-            coupon_restaurant = body.get('couponRestaurant')
-            item_id = body.get('itemId')
+            normalized_coupon_restaurant, coupon_restaurant_error = _normalize_optional_string_field(
+                body.get('couponRestaurant'), 'couponRestaurant'
+            )
+            normalized_item_id, item_id_error = _normalize_optional_string_field(
+                body.get('itemId'), 'itemId'
+            )
             item_banner_text, item_banner_error = _normalize_item_banner_text(body.get('itemBannerText'))
             is_once_per_user = body.get('isOncePerUser', False)
             if isinstance(is_once_per_user, str):
@@ -53,22 +68,21 @@ def register_coupon_routes(app):
 
             if not code or not coupon_type or coupon_value is None:
                 return {"error": "couponCode, couponType, couponValue are required"}, 400
+            if coupon_restaurant_error:
+                return coupon_restaurant_error
+            if item_id_error:
+                return item_id_error
             if item_banner_error:
                 return item_banner_error
 
             normalized_issued_by = str(issued_by).strip().upper() if issued_by is not None else None
-            normalized_coupon_restaurant = str(coupon_restaurant).strip() if coupon_restaurant is not None else None
-            normalized_item_id = str(item_id).strip() if item_id is not None else None
-            if normalized_coupon_restaurant == "":
-                normalized_coupon_restaurant = None
-            if normalized_item_id == "":
-                normalized_item_id = None
 
             if normalized_issued_by == 'RESTAURANT' and not normalized_coupon_restaurant:
                 return {"error": "couponRestaurant is required when issuedBy is RESTAURANT"}, 400
             if normalized_item_id and not normalized_coupon_restaurant:
                 return {"error": "couponRestaurant is required when itemId is provided"}, 400
-            if "itemBannerText" in body and not normalized_item_id:
+            # Only non-empty banner text counts as "provided" (null/empty/whitespace = omitted)
+            if item_banner_text and not normalized_item_id:
                 return {"error": "itemId is required when itemBannerText is provided"}, 400
 
             if normalized_coupon_restaurant and normalized_item_id:
@@ -106,7 +120,7 @@ def register_coupon_routes(app):
                 item_updates = {
                     'itemOfferCouponCode': str(code).strip(),
                 }
-                if 'itemBannerText' in body:
+                if item_banner_text:
                     item_updates['topOfferBanner'] = item_banner_text
                 MenuService.update_menu_item(normalized_coupon_restaurant, normalized_item_id, item_updates)
 
@@ -116,7 +130,7 @@ def register_coupon_routes(app):
                 response["couponRestaurant"] = normalized_coupon_restaurant
             if normalized_item_id:
                 response["itemId"] = normalized_item_id
-            if 'itemBannerText' in body:
+            if item_banner_text:
                 response["itemBannerText"] = item_banner_text
             return response, 200
         except Exception as e:
