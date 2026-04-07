@@ -837,6 +837,9 @@ Resources:
                 - Pattern: '{"eventName": ["MODIFY"], "dynamodb": {"NewImage": {"status": {"S": ["PREPARING", "READY_FOR_PICKUP"]}}}}'
       Policies:
         - AWSLambdaBasicExecutionRole
+        # Includes dynamodb:Scan on table + indexes (RiderService._get_all_riders)
+        - DynamoDBReadPolicy:
+            TableName: !Ref RidersTable
         - Statement:
             - Effect: Allow
               Action:
@@ -845,18 +848,8 @@ Resources:
               Resource:
                 - !GetAtt RestaurantsTable.Arn
                 - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
-                - !GetAtt RidersTable.Arn
-                - !Sub '${RidersTable.Arn}/index/GSI1'
-                - !Sub '${RidersTable.Arn}/index/GSI2'
-                - !Sub '${RidersTable.Arn}/index/GSI3'
                 - !GetAtt OrdersTable.Arn
                 - !GetAtt UsersTableV2.Arn
-            # RiderService._get_all_riders / find_available_riders_near uses Scan on base table
-            - Effect: Allow
-              Action:
-                - dynamodb:Scan
-              Resource:
-                - !GetAtt RidersTable.Arn
             - Effect: Allow
               Action:
                 - dynamodb:UpdateItem
@@ -932,6 +925,8 @@ Resources:
             BatchSize: 10
       Policies:
         - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref RidersTable
         - Statement:
             - Effect: Allow
               Action:
@@ -954,16 +949,7 @@ Resources:
               Resource:
                 - !GetAtt RestaurantsTable.Arn
                 - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
-                - !GetAtt RidersTable.Arn
-                - !Sub '${RidersTable.Arn}/index/GSI1'
-                - !Sub '${RidersTable.Arn}/index/GSI2'
-                - !Sub '${RidersTable.Arn}/index/GSI3'
                 - !GetAtt UsersTableV2.Arn
-            - Effect: Allow
-              Action:
-                - dynamodb:Scan
-              Resource:
-                - !GetAtt RidersTable.Arn
             - Effect: Allow
               Action:
                 - dynamodb:UpdateItem
@@ -1015,6 +1001,8 @@ Resources:
       MemorySize: 256
       Policies:
         - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref RidersTable
         - Statement:
             - Effect: Allow
               Action:
@@ -1024,16 +1012,7 @@ Resources:
                 - !GetAtt OrdersTable.Arn
                 - !GetAtt RestaurantsTable.Arn
                 - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
-                - !GetAtt RidersTable.Arn
-                - !Sub '${RidersTable.Arn}/index/GSI1'
-                - !Sub '${RidersTable.Arn}/index/GSI2'
-                - !Sub '${RidersTable.Arn}/index/GSI3'
                 - !GetAtt UsersTableV2.Arn
-            - Effect: Allow
-              Action:
-                - dynamodb:Scan
-              Resource:
-                - !GetAtt RidersTable.Arn
             - Effect: Allow
               Action:
                 - dynamodb:UpdateItem
@@ -1112,6 +1091,8 @@ Resources:
       MemorySize: 256
       Policies:
         - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref RidersTable
         - Statement:
             - Effect: Allow
               Action:
@@ -1121,16 +1102,7 @@ Resources:
                 - !GetAtt OrdersTable.Arn
                 - !GetAtt RestaurantsTable.Arn
                 - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
-                - !GetAtt RidersTable.Arn
-                - !Sub '${RidersTable.Arn}/index/GSI1'
-                - !Sub '${RidersTable.Arn}/index/GSI2'
-                - !Sub '${RidersTable.Arn}/index/GSI3'
                 - !GetAtt UsersTableV2.Arn
-            - Effect: Allow
-              Action:
-                - dynamodb:Scan
-              Resource:
-                - !GetAtt RidersTable.Arn
             - Effect: Allow
               Action:
                 - dynamodb:UpdateItem

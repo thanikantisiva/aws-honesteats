@@ -147,8 +147,15 @@ def register_user_routes(app):
     def register_fcm_token(phone: str):
         """Register or update FCM token for push notifications - creates user if not exists"""
         try:
+            phone = normalize_phone(phone)
+            if not phone:
+                return {"error": "Invalid phone number"}, 400
+
             body = app.current_event.json_body
             fcm_token = body.get('fcmToken')
+            create_role = (body.get("role") or "CUSTOMER").upper()
+            if create_role not in ("CUSTOMER", "RIDER"):
+                return {"error": "Invalid role"}, 400
             
             if not fcm_token:
                 return {"error": "fcmToken is required"}, 400
@@ -168,14 +175,14 @@ def register_user_routes(app):
                         'fcmTokenUpdatedAt': now_ist_iso()
                     })
             else:
-                # User doesn't exist - create CUSTOMER with FCM token
-                logger.info(f"🆕 User not found, creating CUSTOMER with FCM token")
+                # No rows yet: default CUSTOMER; rider apps should send role=RIDER so token is not stored only on CUSTOMER
+                logger.info(f"🆕 User not found, creating {create_role} with FCM token")
                 from models.user import User
                 new_user = User(
                     phone=phone,
                     name='',  # Will be updated during registration
                     email='',
-                    role='CUSTOMER',
+                    role=create_role,
                     is_active=True,
                     fcm_token=fcm_token,
                     fcm_token_updated_at=now_ist_iso()
@@ -195,6 +202,10 @@ def register_user_routes(app):
     def logout_user(phone: str):
         """Logout user by clearing FCM token and setting isActive to false. Optional body: { \"role\": \"RIDER\" } (default CUSTOMER)."""
         try:
+            phone = normalize_phone(phone)
+            if not phone:
+                return {"error": "Invalid phone number"}, 400
+
             body = app.current_event.json_body or {}
             role = (body.get("role") or "CUSTOMER").upper()
             if role not in ("CUSTOMER", "RIDER"):

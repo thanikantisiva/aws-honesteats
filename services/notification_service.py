@@ -3,6 +3,7 @@ import os
 import json
 from typing import Optional
 from datetime import timedelta
+from utils import normalize_phone
 from utils.datetime_ist import now_ist_iso
 from aws_lambda_powertools import Logger
 
@@ -256,7 +257,12 @@ class NotificationService:
         try:
             from utils.dynamodb import dynamodb_client
             
-            logger.info(f"📱 Sending order assignment notification to rider: {rider_mobile}")
+            phone_key = normalize_phone(rider_mobile)
+            if not phone_key:
+                logger.warning(f"Invalid rider phone for assignment notification: {rider_mobile!r}")
+                return False
+
+            logger.info(f"📱 Sending order assignment notification to rider: {phone_key}")
             
             # Get rider's FCM token from UsersTableV2 (composite key: phone + role)
             users_table = os.environ.get('USERS_TABLE_NAME', f'food-delivery-users-{os.environ.get("ENVIRONMENT", "dev")}')
@@ -264,19 +270,19 @@ class NotificationService:
             user_response = dynamodb_client.get_item(
                 TableName=users_table,
                 Key={
-                    'phone': {'S': rider_mobile},
+                    'phone': {'S': phone_key},
                     'role': {'S': 'RIDER'}
                 }
             )
             
             if 'Item' not in user_response:
-                logger.warning(f"Rider not found in users table: {rider_mobile}")
+                logger.warning(f"Rider not found in users table (normalized={phone_key}, raw={rider_mobile!r})")
                 return False
             
             fcm_token = user_response['Item'].get('fcmToken', {}).get('S')
             
             if not fcm_token:
-                logger.warning(f"No FCM token for rider: {rider_mobile}")
+                logger.warning(f"No FCM token for rider: {phone_key}")
                 return False
             
             # Prepare notification
