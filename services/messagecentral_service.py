@@ -2,6 +2,7 @@
 import os
 import time
 import requests
+from urllib.parse import quote
 from aws_lambda_powertools import Logger
 from utils.ssm import get_secret
 
@@ -20,6 +21,10 @@ TEST_PHONE_NUMBERS = {
 
 TEST_OTP = '1234'
 
+# Message Central's token endpoint expects raw @ in email and raw =/+ in base64 keys;
+# default urlencode turns @ -> %40 and = -> %3D, which their server treats as wrong password.
+_TOKEN_QUERY_VALUE_SAFE = "@=+/"
+
 
 class MessageCentralService:
     """Service for sending and verifying OTP via Message Central"""
@@ -33,16 +38,18 @@ class MessageCentralService:
 
     @staticmethod
     def _config():
+        # Strip whitespace — trailing newlines in SSM often cause "password is wrong"
         return {
-            "customer_id": get_secret("MESSAGE_CENTRAL_CUSTOMER_ID", ""),
-            "key": get_secret("MESSAGE_CENTRAL_KEY", ""),
-            "email": get_secret("MESSAGE_CENTRAL_EMAIL", ""),
-            "country": get_secret("MESSAGE_CENTRAL_COUNTRY_CODE", "91")
+            "customer_id": get_secret("MESSAGE_CENTRAL_CUSTOMER_ID", "").strip(),
+            "key": get_secret("MESSAGE_CENTRAL_KEY", "").strip(),
+            "email": get_secret("MESSAGE_CENTRAL_EMAIL", "").strip(),
+            "country": get_secret("MESSAGE_CENTRAL_COUNTRY_CODE", "91").strip() or "91",
         }
 
     @staticmethod
     def _get_token() -> str:
         cfg = MessageCentralService._config()
+        logger.info(f"Message Central config: {cfg}")
         if not cfg["customer_id"] or not cfg["key"] or not cfg["email"]:
             raise Exception("Message Central credentials not configured")
 
@@ -50,13 +57,23 @@ class MessageCentralService:
         if _token_cache["token"] and _token_cache["expires_at"] > now:
             return _token_cache["token"]
 
-        url = (
-            "https://cpaas.messagecentral.com/auth/v1/authentication/token"
-            f"?customerId={cfg['customer_id']}&key={cfg['key']}&scope=NEW&country={cfg['country']}&email={cfg['email']}"
+        token_url = "https://cpaas.messagecentral.com/auth/v1/authentication/token"
+        params = {
+            "customerId": cfg["customer_id"],
+            "key": cfg["key"],
+            "scope": "NEW",
+            "country": cfg["country"],
+            "email": cfg["email"],
+        }
+        query = "&".join(
+            f"{k}={quote(str(v), safe=_TOKEN_QUERY_VALUE_SAFE)}"
+            for k, v in params.items()
         )
-        response = requests.get(url, headers={"accept": "*/*"}, timeout=10)
+        logger.info(f"Message Central token URL: {token_url}?{query}")
+        response = requests.get(f"{token_url}?{query}", headers={"accept": "*/*"}, timeout=10)
+        logger.info(f"Message Central token response: {response.text}")
         data = response.json() if response.content else {}
-
+        logger.info(f"Message Central token data: {data}")
         if response.status_code != 200 or data.get("status") != 200:
             logger.error(f"Message Central token error: {data}")
             raise Exception("Failed to generate Message Central token")
@@ -143,3 +160,8 @@ class MessageCentralService:
             return {"success": False, "error": data.get("message", "Invalid OTP")}
 
         return {"success": True, "message": data.get("message", "OTP verified")}
+
+
+
+# curl -sS \                            'https://cpaas.messagecentral.com/auth/v1/authentication/token?customerId=C-85C3118AA6A340A&key=TW91bmlrYUAx&scope=NEW&country=91&email=tvskumar.1995%40gmail.com' \   -H 'accept: */*'
+# {"status":200,"token":"eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJDLTg1QzMxMThBQTZBMzQwQSIsImlhdCI6MTc3MDk2MDM1MCwiZXhwIjoxOTI4NjQwMzUwfQ.20hdbMLGrKcE2Z08AzUUUhws33cRLJSqhg0KI01RQh3gQlkuU839UkFv6TgtsGxy_BxWUT9-g9ZGhRlVv83h4g"}%

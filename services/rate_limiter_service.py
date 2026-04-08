@@ -8,7 +8,12 @@ from utils.dynamodb import dynamodb_client
 
 logger = Logger(child=True)
 
-RATE_LIMIT_TABLE = os.environ.get('RATE_LIMIT_TABLE', 'rork-honesteats-rate-limits')
+# template.yaml sets RATE_LIMIT_TABLE_NAME (table is rork-honesteats-rate-limits-${Environment})
+RATE_LIMIT_TABLE = (
+    os.environ.get('RATE_LIMIT_TABLE_NAME')
+    or os.environ.get('RATE_LIMIT_TABLE')
+    or 'rork-honesteats-rate-limits'
+)
 OTP_RATE_LIMIT = int(os.environ.get('OTP_RATE_LIMIT', '3'))
 OTP_RATE_WINDOW_HOURS = int(os.environ.get('OTP_RATE_WINDOW_HOURS', '1'))
 TEST_MODE = os.environ.get('TEST_MODE', 'false').lower() == 'true'

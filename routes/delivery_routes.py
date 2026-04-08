@@ -1,6 +1,9 @@
 """Delivery fee calculation routes"""
+from typing import Optional
+
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.coupon_service import CouponService
+from services.restaurant_service import RestaurantService
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.dynamodb_helpers import dynamodb_to_python
 from utils import normalize_phone
@@ -74,9 +77,14 @@ def _build_gst_breakdown(
     }
 
 
-def _build_safe_zero_response(distance_km: float, missing_keys, item_total: float = 0.0):
+def _build_safe_zero_response(
+    distance_km: float,
+    missing_keys,
+    item_total: float = 0.0,
+    distance_source: Optional[str] = None,
+):
     """Return a safe response when config is missing/invalid."""
-    return {
+    out = {
         "deliveryFee": 0.0,
         "riderSettlementAmount": 0.0,
         "platformFee": 0.0,
@@ -97,6 +105,9 @@ def _build_safe_zero_response(distance_km: float, missing_keys, item_total: floa
         "configMissing": True,
         "missingKeys": missing_keys,
     }
+    if distance_source:
+        out["distanceSource"] = distance_source
+    return out
 
 
 def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) -> dict:
@@ -182,25 +193,65 @@ def register_delivery_routes(app):
         """Calculate delivery fee based on distance, items, and total"""
         try:
             body = app.current_event.json_body or {}
-            distance_km = body.get('distanceKm')
             item_total = body.get('itemTotal')
             item_count = body.get('itemCount')  # Accepted for backward compatibility
             coupon_code = body.get('couponCode')
             restaurant_id = body.get('restaurantId')
             mobile_number = normalize_phone(body.get('mobileNumber'))
 
-            if distance_km is None or item_total is None:
+            address_lat = body.get('addressLat')
+            address_lng = body.get('addressLng')
+            restaurant_lat = body.get('restaurantLat')
+            restaurant_lng = body.get('restaurantLng')
+            distance_km_raw = body.get('distanceKm')
+
+            use_coords = all(
+                v is not None
+                for v in (address_lat, address_lng, restaurant_lat, restaurant_lng)
+            )
+
+            if item_total is None:
+                return {"error": "itemTotal is required"}, 400
+            if not use_coords and distance_km_raw is None:
                 return {
-                    "error": "distanceKm and itemTotal are required"
+                    "error": (
+                        "Provide itemTotal and either (addressLat, addressLng, restaurantLat, restaurantLng) "
+                        "or distanceKm"
+                    )
                 }, 400
             if coupon_code and not restaurant_id:
                 return {"error": "restaurantId is required when couponCode is provided"}, 400
 
-            distance_km = float(distance_km)
             item_total = float(item_total)
+
+            if use_coords:
+                try:
+                    alat = float(address_lat)
+                    alng = float(address_lng)
+                    rlat = float(restaurant_lat)
+                    rlng = float(restaurant_lng)
+                except (TypeError, ValueError):
+                    return {"error": "addressLat, addressLng, restaurantLat, restaurantLng must be numeric"}, 400
+
+                # Road distance via Google Directions API (falls back to Haversine in RestaurantService)
+                distance_km = RestaurantService.calculate_road_distance(rlat, rlng, alat, alng)
+                distance_source = "google_directions_or_haversine_fallback"
+                logger.info(
+                    "Delivery fee request (coords): restaurant=(%s,%s) address=(%s,%s) -> distanceKm=%s source=%s",
+                    rlat,
+                    rlng,
+                    alat,
+                    alng,
+                    distance_km,
+                    distance_source,
+                )
+            else:
+                distance_km = float(distance_km_raw)
+                distance_source = "client_supplied_distance"
+
             logger.info(
                 "Delivery fee request received: "
-                f"distanceKm={distance_km}, itemTotal={item_total}, "
+                f"distanceKm={distance_km}, distanceSource={distance_source}, itemTotal={item_total}, "
                 f"itemCount={item_count}, couponCode={coupon_code}, restaurantId={restaurant_id}"
             )
 
@@ -211,7 +262,7 @@ def register_delivery_routes(app):
                     f"missingKeys={missing_keys}"
                 )
                 metrics.add_metric(name="DeliveryFeeConfigMissing", unit="Count", value=1)
-                return _build_safe_zero_response(distance_km, missing_keys, item_total), 200
+                return _build_safe_zero_response(distance_km, missing_keys, item_total, distance_source), 200
 
             logger.info(
                 "Global delivery config loaded: "
@@ -228,6 +279,7 @@ def register_delivery_routes(app):
                 item_total=item_total,
                 config=config
             )
+            result["distanceSource"] = distance_source
 
             # Coupon is informational only: discount is reported but deliveryFee is unchanged.
             coupon_applied = False
@@ -336,7 +388,7 @@ def register_delivery_routes(app):
 
         except ValueError:
             return {
-                "error": "distanceKm and itemTotal must be numeric values"
+                "error": "Numeric fields (itemTotal, coordinates or distanceKm) are invalid"
             }, 400
         except Exception as e:
             logger.error("Error calculating delivery fee", exc_info=True)
