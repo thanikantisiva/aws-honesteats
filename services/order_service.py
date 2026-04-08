@@ -85,7 +85,7 @@ class OrderService:
             raise Exception(f"Failed to list customer orders: {str(e)}")
     
     @staticmethod
-    def list_orders_by_restaurant(restaurant_id: str, status: str = None, limit: int = 20) -> List[Order]:
+    def list_orders_by_restaurant(restaurant_id: str, status: str = None, limit: int = 500) -> List[Order]:
         """List orders by restaurant ID using GSI with optional status filter"""
         try:
             logger.info(f"Listing orders for restaurant={restaurant_id} status={status} limit={limit}")

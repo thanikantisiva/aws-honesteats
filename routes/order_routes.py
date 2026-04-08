@@ -82,7 +82,9 @@ def register_order_routes(app):
             customer_phone = query_params.get('customerPhone')
             restaurant_id = query_params.get('restaurantId')
             rider_id = query_params.get('riderId')
-            limit = int(query_params.get('limit', 20))
+            # Use a high default for restaurant so all orders are returned (today-filter is client-side)
+            default_limit = 500 if restaurant_id else 20
+            limit = int(query_params.get('limit', default_limit))
             
             customer_phone = normalize_phone(customer_phone)
             

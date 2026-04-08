@@ -30,6 +30,7 @@ from routes.coupon_routes import register_coupon_routes
 from routes.rating_routes import register_rating_routes
 from routes.config_routes import register_config_routes
 from routes.food_category_routes import register_food_category_routes
+from routes.restaurant_earnings_routes import register_restaurant_earnings_routes
 
 # Initialize AWS Lambda Power Tools
 logger = Logger(service="rork-honesteats-api")
@@ -72,6 +73,13 @@ GUEST_PUBLIC_POST_PATHS = [
     "/api/v1/delivery/calculate-fee",    # delivery fee estimate (read-only, no data mutation)
 ]
 
+# POST paths matched by suffix (for dynamic-segment routes made temporarily public).
+# Format: path must END WITH one of these strings.
+# TODO: remove settlement entry once restaurant JWT auth is wired up.
+GUEST_PUBLIC_POST_SUFFIXES = [
+    "/earnings/settlement/confirm",
+]
+
 # Retool bypass header and secret value.
 # Rotate by setting RETOOL_BYPASS_VALUE in Lambda environment.
 AUTH_BYPASS_HEADER = "x-retool-header"
@@ -107,6 +115,7 @@ register_coupon_routes(app)
 register_rating_routes(app)
 register_config_routes(app)
 register_food_category_routes(app)
+register_restaurant_earnings_routes(app)
 
 
 @app.get("/health")
@@ -157,6 +166,7 @@ def auth_middleware(handler, event, context):
         path in PUBLIC_ROUTES
         or (method == 'GET' and any(path == p or path.startswith(p + '/') for p in GUEST_PUBLIC_GET_PREFIXES))
         or (method == 'POST' and path in GUEST_PUBLIC_POST_PATHS)
+        or (method == 'POST' and any(path.endswith(s) for s in GUEST_PUBLIC_POST_SUFFIXES))
     )
     headers = event.get('headers', {}) or {}
 

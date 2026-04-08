@@ -73,24 +73,33 @@ class RestaurantEarningsService:
 
     @staticmethod
     def get_earnings_for_date_range(restaurant_id: str, start_date: str, end_date: str) -> List[RestaurantEarnings]:
-        """Get restaurant earnings for a date range"""
+        """Get restaurant earnings for a date range.
+
+        Paginates through all pages using LastEvaluatedKey so no records are
+        silently dropped when the result set exceeds DynamoDB's 1 MB page limit.
+        """
         try:
-            response = dynamodb_client.query(
-                TableName=TABLES['RESTAURANT_EARNINGS'],
-                KeyConditionExpression='restaurantId = :restaurantId AND #date BETWEEN :start AND :end',
-                ExpressionAttributeNames={
-                    '#date': 'date'
-                },
-                ExpressionAttributeValues={
+            query_kwargs = {
+                'TableName': TABLES['RESTAURANT_EARNINGS'],
+                'KeyConditionExpression': 'restaurantId = :restaurantId AND #date BETWEEN :start AND :end',
+                'ExpressionAttributeNames': {'#date': 'date'},
+                'ExpressionAttributeValues': {
                     ':restaurantId': {'S': restaurant_id},
                     ':start': {'S': f'{start_date}#'},
-                    ':end': {'S': f'{end_date}#\uffff'}
-                }
-            )
+                    ':end':   {'S': f'{end_date}#\uffff'},
+                },
+            }
 
             earnings_list = []
-            for item in response.get('Items', []):
-                earnings_list.append(RestaurantEarnings.from_dynamodb_item(item))
+            while True:
+                response = dynamodb_client.query(**query_kwargs)
+                for item in response.get('Items', []):
+                    earnings_list.append(RestaurantEarnings.from_dynamodb_item(item))
+
+                last_key = response.get('LastEvaluatedKey')
+                if not last_key:
+                    break
+                query_kwargs['ExclusiveStartKey'] = last_key
 
             return earnings_list
         except ClientError as e:
@@ -121,20 +130,28 @@ class RestaurantEarningsService:
                 if earning.order_id not in order_ids:
                     continue
 
-                dynamodb_client.update_item(
-                    TableName=TABLES['RESTAURANT_EARNINGS'],
-                    Key={
-                        'restaurantId': {'S': restaurant_id},
-                        'date': {'S': earning.date}
-                    },
-                    UpdateExpression='SET settled = :settled, settledAt = :settledAt, settlementId = :settlementId',
-                    ExpressionAttributeValues={
-                        ':settled': {'BOOL': True},
-                        ':settledAt': {'S': settled_at},
-                        ':settlementId': {'S': settlement_id}
-                    }
-                )
-                updated_order_ids.append(earning.order_id)
+                try:
+                    dynamodb_client.update_item(
+                        TableName=TABLES['RESTAURANT_EARNINGS'],
+                        Key={
+                            'restaurantId': {'S': restaurant_id},
+                            'date': {'S': earning.date}
+                        },
+                        UpdateExpression='SET settled = :settled, settledAt = :settledAt, settlementId = :settlementId',
+                        ConditionExpression='settled = :false',
+                        ExpressionAttributeValues={
+                            ':settled':      {'BOOL': True},
+                            ':settledAt':    {'S': settled_at},
+                            ':settlementId': {'S': settlement_id},
+                            ':false':        {'BOOL': False},
+                        }
+                    )
+                    updated_order_ids.append(earning.order_id)
+                except ClientError as ce:
+                    if ce.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                        # Already settled by a concurrent request — skip safely
+                        continue
+                    raise
 
             return updated_order_ids
         except ClientError as e:

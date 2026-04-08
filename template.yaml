@@ -403,6 +403,7 @@ Resources:
                 - dynamodb:DeleteItem
                 - dynamodb:Query
                 - dynamodb:Scan
+                - dynamodb:BatchGetItem
               Resource:
                 - !GetAtt UsersTableV2.Arn
                 - !Sub '${UsersTableV2.Arn}/index/riderId-index'
