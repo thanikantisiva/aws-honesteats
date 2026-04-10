@@ -9,7 +9,9 @@ from utils.datetime_ist import now_ist_iso
 from aws_lambda_powertools import Logger
 
 ASSIGNMENT_WINDOW_DAYS = 7
-RIDER_LAST_SEEN_STALE_SECONDS = 30
+# A rider's lastSeen heartbeat arrives every 25 s (foreground) or ~15 s (OS background task).
+# Keep the stale window comfortably above both intervals.
+RIDER_LAST_SEEN_STALE_SECONDS = 90
 
 logger = Logger()
 
@@ -214,7 +216,6 @@ class RiderService:
     ) -> Rider:
         """Update rider location and movement data with geohash and GSI fields"""
         try:
-            RiderService._ensure_user_rider_exists(rider_id)
             timestamp = now_ist_iso()
             
             # Calculate geohash at all precision levels
@@ -282,10 +283,12 @@ class RiderService:
                 geohash_p5 = geohash_p7[:5]
                 geohash_p4 = geohash_p7[:4]
                 
+                # When going online, also clear any stale workingOnOrder from previous sessions.
+                # An uninstall/reinstall does not clear DynamoDB; stale entries block assignment.
                 dynamodb_client.update_item(
                     TableName=TABLES['RIDERS'],
                     Key={'riderId': {'S': rider_id}},
-                    UpdateExpression='SET isActive = :active, lastSeen = :lastSeen, lat = :lat, lng = :lng, geohash = :geohash, GSI1PK = :gsi1pk, GSI1SK = :gsi1sk, GSI2PK = :gsi2pk, GSI2SK = :gsi2sk, GSI3PK = :gsi3pk, GSI3SK = :gsi3sk',
+                    UpdateExpression='SET isActive = :active, lastSeen = :lastSeen, lat = :lat, lng = :lng, geohash = :geohash, GSI1PK = :gsi1pk, GSI1SK = :gsi1sk, GSI2PK = :gsi2pk, GSI2SK = :gsi2sk, GSI3PK = :gsi3pk, GSI3SK = :gsi3sk REMOVE workingOnOrder',
                     ExpressionAttributeValues={
                         ':active': {'BOOL': is_active},
                         ':lastSeen': {'S': timestamp},
@@ -300,6 +303,7 @@ class RiderService:
                         ':gsi3sk': {'S': f'RIDER#{rider_id}'}
                     }
                 )
+                logger.info(f"[riderId={rider_id}] Went online — cleared any stale workingOnOrder")
             else:
                 # Just update active status
                 dynamodb_client.update_item(

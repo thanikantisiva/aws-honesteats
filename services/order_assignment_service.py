@@ -195,7 +195,12 @@ class OrderAssignmentService:
                 'offeredAt': datetime.utcnow().isoformat()
             })
             logger.info(f"[orderId={order_id}] Updated to OFFERED_TO_RIDER for rider {nearest_rider.rider_id}")
-            
+
+            # Lock the rider during the acceptance window so concurrent orders
+            # are not offered to the same rider simultaneously.
+            RiderService.set_working_on_order(nearest_rider.rider_id, order_id)
+            RiderService.increment_assignment_count(nearest_rider.rider_id)
+
             # Send notification to rider
             try:
                 # Get order details
@@ -216,7 +221,8 @@ class OrderAssignmentService:
                 scheduler = boto3.client('scheduler')
                 checker_arn = os.environ.get('ORDER_ACCEPT_REJECT_CHECKER_ARN')
                 checker_role_arn = os.environ.get('ORDER_ACCEPT_REJECT_CHECKER_ROLE_ARN')
-                delay_seconds = int(os.environ.get('OFFER_CHECK_DELAY_SECONDS', '90'))
+                # 60 s gives the rider 1 minute to accept before reassignment
+                delay_seconds = int(os.environ.get('OFFER_CHECK_DELAY_SECONDS', '60'))
 
                 if checker_arn and checker_role_arn:
                     run_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
@@ -235,7 +241,7 @@ class OrderAssignmentService:
                         },
                         ActionAfterCompletion="DELETE"
                     )
-                    logger.info(f"[orderId={order_id}] Offer check scheduled at {run_at.isoformat()} name={schedule_name}")
+                    logger.info(f"[orderId={order_id}] Offer check scheduled at {run_at.isoformat()} name={schedule_name} delay={delay_seconds}s")
                 else:
                     logger.error(f"[orderId={order_id}] Order accept/reject checker ARNs not configured")
             except Exception as e:
