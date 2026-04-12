@@ -90,13 +90,20 @@ class NotificationService:
             # Convert data dict values to strings (FCM requirement)
             string_data = {k: str(v) for k, v in data.items()}
             body_text = (body or "").strip()
+            if body_text:
+                string_data["title"] = title
+                string_data["body"] = body_text
             android_channel_id = string_data.get("channelId") or None
 
             # Data-only messages let Notifee handle rendering on both foreground AND
             # background/killed app states, giving consistent sound + action buttons.
-            # order_status and order_assigned both go via this path so the JS handler
+            # order_status, order_assigned, order_accepted go via this path so the JS handler
             # (displayNotificationFromRemoteMessage) always controls the notification.
-            is_data_only = string_data.get("type") in ("order_status", "order_assigned")
+            is_data_only = string_data.get("type") in (
+                "order_status",
+                "order_assigned",
+                "order_accepted",
+            )
 
             # iOS: ensure distinct title and body so notification shows two lines (title bold, body below)
             if body_text:
@@ -302,6 +309,8 @@ class NotificationService:
                 "orderId": order_id,
                 "restaurantName": restaurant_name,
                 "deliveryFee": str(delivery_fee),
+                "title": title,
+                "body": body,
                 "channelId": RIDER_NOTIFICATION_CHANNEL_ID,
                 "sound": RIDER_NOTIFICATION_SOUND,
             }
@@ -323,6 +332,75 @@ class NotificationService:
             
         except Exception as e:
             logger.error(f"Error sending rider notification: {str(e)}", exc_info=True)
+            return False
+
+    @staticmethod
+    def send_rider_order_accepted_notification(
+        rider_mobile: str,
+        order_id: str,
+        restaurant_name: str,
+    ) -> bool:
+        """
+        Notify rider after they accept an offer (RIDER_ASSIGNED).
+        Uses the same FCM channel/sound as order_assigned so the custom ring plays.
+        """
+        try:
+            from utils.dynamodb import dynamodb_client
+
+            phone_key = normalize_phone(rider_mobile)
+            if not phone_key:
+                logger.warning(f"Invalid rider phone for accept notification: {rider_mobile!r}")
+                return False
+
+            logger.info(f"📱 Sending order-accepted confirmation to rider: {phone_key}")
+
+            users_table = os.environ.get(
+                "USERS_TABLE_NAME",
+                f"food-delivery-users-{os.environ.get('ENVIRONMENT', 'dev')}",
+            )
+
+            user_response = dynamodb_client.get_item(
+                TableName=users_table,
+                Key={"phone": {"S": phone_key}, "role": {"S": "RIDER"}},
+            )
+
+            if "Item" not in user_response:
+                logger.warning(
+                    f"Rider not found in users table (normalized={phone_key}, raw={rider_mobile!r})"
+                )
+                return False
+
+            fcm_token = user_response["Item"].get("fcmToken", {}).get("S")
+            if not fcm_token:
+                logger.warning(f"No FCM token for rider: {phone_key}")
+                return False
+
+            title = "Order confirmed"
+            body = f"Head to {restaurant_name} for pickup"
+
+            notification_data = {
+                "type": "order_accepted",
+                "orderId": order_id,
+                "restaurantName": restaurant_name,
+                "title": title,
+                "body": body,
+                "channelId": RIDER_NOTIFICATION_CHANNEL_ID,
+                "sound": RIDER_NOTIFICATION_SOUND,
+            }
+
+            success = NotificationService.send_via_firebase(
+                fcm_token=fcm_token,
+                title=title,
+                body=body,
+                data=notification_data,
+            )
+            if success:
+                logger.info(f"✅ Rider accept notification sent for order {order_id}")
+            else:
+                logger.error(f"❌ Failed to send rider accept notification for {order_id}")
+            return success
+        except Exception as e:
+            logger.error(f"Error sending rider accept notification: {str(e)}", exc_info=True)
             return False
 
     @staticmethod

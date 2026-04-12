@@ -6,6 +6,7 @@ from services.rider_service import RiderService
 from services.earnings_service import EarningsService
 from services.restaurant_earnings_service import RestaurantEarningsService
 from services.restaurant_service import RestaurantService
+from services.notification_service import NotificationService
 from services.address_service import AddressService
 from models.order import Order
 from datetime import datetime
@@ -166,12 +167,21 @@ def register_rider_order_routes(app):
             
             OrderService.update_order(order_id, update_data)
 
-            # NOTE: Do NOT re-send order_assigned notification here.
-            # The assignment Lambda (order_assignment_service) already sent it
-            # when the order was first OFFERED_TO_RIDER. Re-sending here would
-            # cause the rider to receive a duplicate ring notification after
-            # they already accepted.
-            
+            # Confirmation push (type order_accepted, quieter channel) — distinct from
+            # order_assigned ring sent when the offer was first created.
+            if rider and rider.phone:
+                try:
+                    restaurant_name = order.restaurant_name or "Restaurant"
+                    NotificationService.send_rider_order_accepted_notification(
+                        rider_mobile=rider.phone,
+                        order_id=order_id,
+                        restaurant_name=restaurant_name,
+                    )
+                except Exception as notify_err:
+                    logger.warning(
+                        f"[orderId={order_id}] Accept notification failed (non-fatal): {notify_err}"
+                    )
+
             RiderService.increment_assignment_count(rider_id)
 
             logger.info(f"[orderId={order_id}] Accepted by rider {rider_id}")
