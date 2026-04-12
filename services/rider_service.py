@@ -305,16 +305,29 @@ class RiderService:
                 )
                 logger.info(f"[riderId={rider_id}] Went online — cleared any stale workingOnOrder")
             else:
-                # Just update active status
-                dynamodb_client.update_item(
-                    TableName=TABLES['RIDERS'],
-                    Key={'riderId': {'S': rider_id}},
-                    UpdateExpression='SET isActive = :active, lastSeen = :lastSeen',
-                    ExpressionAttributeValues={
-                        ':active': {'BOOL': is_active},
-                        ':lastSeen': {'S': timestamp}
-                    }
-                )
+                # No location provided — split by direction to handle workingOnOrder correctly
+                if is_active:
+                    # Going online without a GPS fix yet: still clear any stale order lock
+                    dynamodb_client.update_item(
+                        TableName=TABLES['RIDERS'],
+                        Key={'riderId': {'S': rider_id}},
+                        UpdateExpression='SET isActive = :active, lastSeen = :lastSeen REMOVE workingOnOrder',
+                        ExpressionAttributeValues={
+                            ':active': {'BOOL': is_active},
+                            ':lastSeen': {'S': timestamp}
+                        }
+                    )
+                    logger.info(f"[riderId={rider_id}] Went online (no GPS) — cleared any stale workingOnOrder")
+                else:
+                    dynamodb_client.update_item(
+                        TableName=TABLES['RIDERS'],
+                        Key={'riderId': {'S': rider_id}},
+                        UpdateExpression='SET isActive = :active, lastSeen = :lastSeen',
+                        ExpressionAttributeValues={
+                            ':active': {'BOOL': is_active},
+                            ':lastSeen': {'S': timestamp}
+                        }
+                    )
             
             return RiderService.get_rider(rider_id)
         except ClientError as e:

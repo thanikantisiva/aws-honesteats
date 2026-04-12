@@ -8,7 +8,7 @@ from utils.datetime_ist import now_ist_iso
 from aws_lambda_powertools import Logger
 
 logger = Logger()
-RIDER_NOTIFICATION_CHANNEL_ID = "rider_orders_ring"
+RIDER_NOTIFICATION_CHANNEL_ID = "rider_orders_ring_v2"
 RIDER_NOTIFICATION_SOUND = "new_order_ring"
 
 # Import Firebase Admin SDK
@@ -92,7 +92,11 @@ class NotificationService:
             body_text = (body or "").strip()
             android_channel_id = string_data.get("channelId") or None
 
-            is_order_status_update = string_data.get("type") == "order_status"
+            # Data-only messages let Notifee handle rendering on both foreground AND
+            # background/killed app states, giving consistent sound + action buttons.
+            # order_status and order_assigned both go via this path so the JS handler
+            # (displayNotificationFromRemoteMessage) always controls the notification.
+            is_data_only = string_data.get("type") in ("order_status", "order_assigned")
 
             # iOS: ensure distinct title and body so notification shows two lines (title bold, body below)
             if body_text:
@@ -120,7 +124,7 @@ class NotificationService:
                     )
                 )
             )
-            if is_order_status_update:
+            if is_data_only:
                 message = messaging.Message(
                     token=fcm_token,
                     data=string_data,
