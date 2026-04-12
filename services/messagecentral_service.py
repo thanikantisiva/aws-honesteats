@@ -28,13 +28,21 @@ _TOKEN_QUERY_VALUE_SAFE = "@=+/"
 
 class MessageCentralService:
     """Service for sending and verifying OTP via Message Central"""
-    
+
+    @staticmethod
+    def _normalize_mobile_number(phone: str) -> str:
+        """Strip +, spaces, country code; Message Central expects 10-digit local number (country in countryCode)."""
+        if not phone:
+            return ""
+        digits = "".join(c for c in str(phone) if c.isdigit())
+        if len(digits) >= 10:
+            return digits[-10:]
+        return digits
+
     @staticmethod
     def _is_test_phone(phone: str) -> bool:
         """Check if phone is a test number"""
-        digits = phone.replace('+', '').replace('-', '').replace(' ', '')
-        last10 = digits[-10:] if len(digits) >= 10 else digits
-        return last10 in TEST_PHONE_NUMBERS
+        return MessageCentralService._normalize_mobile_number(phone) in TEST_PHONE_NUMBERS
 
     @staticmethod
     def _config():
@@ -90,6 +98,10 @@ class MessageCentralService:
     @staticmethod
     def send_otp(phone: str) -> dict:
         """Send OTP to phone via Message Central"""
+        phone = MessageCentralService._normalize_mobile_number(phone)
+        if len(phone) != 10:
+            return {"success": False, "error": "Invalid phone number"}
+
         # Check if test phone - bypass Message Central
         if MessageCentralService._is_test_phone(phone):
             logger.info(f"🧪 Test phone detected: {phone} - Using test OTP: {TEST_OTP}")
