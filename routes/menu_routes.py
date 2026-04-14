@@ -220,3 +220,42 @@ def register_menu_routes(app):
         except Exception as e:
             logger.error("Error deleting menu item", exc_info=True)
             return {"error": "Failed to delete menu item", "message": str(e)}, 500
+
+    @app.post("/api/v1/restaurants/<restaurant_id>/menu/price-hike")
+    @tracer.capture_method
+    def bulk_price_hike(restaurant_id: str):
+        """Increase restaurantPrice of all menu items for a restaurant by a given percentage.
+
+        Body: { "percentage": <float> }  — required, must be > 0 and <= 500.
+        """
+        try:
+            body = app.current_event.json_body or {}
+            percentage = body.get('percentage')
+
+            if percentage is None:
+                return {"error": "percentage is required"}, 400
+
+            try:
+                percentage = float(percentage)
+            except (ValueError, TypeError):
+                return {"error": "percentage must be a valid number"}, 400
+
+            if percentage <= 0:
+                return {"error": "percentage must be greater than 0"}, 400
+            if percentage > 500:
+                return {"error": "percentage cannot exceed 500"}, 400
+
+            logger.info(f"Applying {percentage}% price hike to all menu items for restaurant: {restaurant_id}")
+
+            updated_items = MenuService.bulk_price_hike(restaurant_id, percentage)
+            metrics.add_metric(name="MenuPriceHikeApplied", unit="Count", value=1)
+
+            return {
+                "restaurantId": restaurant_id,
+                "percentage": percentage,
+                "updatedCount": len(updated_items),
+                "items": updated_items
+            }, 200
+        except Exception as e:
+            logger.error("Error applying price hike", exc_info=True)
+            return {"error": "Failed to apply price hike", "message": str(e)}, 500

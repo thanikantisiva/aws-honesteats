@@ -237,3 +237,46 @@ class MenuService:
                 logger.info(f"Incremented orderedCount for restaurantId={restaurant_id} itemId={item_id} by {qty}")
             except ClientError as e:
                 logger.error(f"Failed increment orderedCount for itemId={item_id}: {str(e)}")
+
+    @staticmethod
+    def bulk_price_hike(restaurant_id: str, percentage: float) -> list:
+        """Increase restaurantPrice of all valid menu items for a restaurant by the given percentage.
+
+        Returns a list of dicts with itemId, itemName, oldPrice, newPrice for each updated item.
+        """
+        try:
+            items = MenuService.list_menu_items(restaurant_id)
+            valid_items = [
+                item for item in items
+                if item.item_id and item.restaurant_price is not None and item.restaurant_price > 0
+            ]
+
+            multiplier = 1 + (percentage / 100)
+            results = []
+
+            for item in valid_items:
+                old_price = item.restaurant_price
+                new_price = round(old_price * multiplier, 2)
+
+                dynamodb_client.update_item(
+                    TableName=TABLES['MENU_ITEMS'],
+                    Key={
+                        'PK': {'S': f'RESTAURANT#{restaurant_id}'},
+                        'SK': {'S': f'ITEM#{item.item_id}'}
+                    },
+                    UpdateExpression='SET restaurantPrice = :newPrice',
+                    ExpressionAttributeValues={
+                        ':newPrice': {'N': str(new_price)}
+                    }
+                )
+
+                results.append({
+                    'itemId': item.item_id,
+                    'itemName': item.item_name,
+                    'oldPrice': old_price,
+                    'newPrice': new_price
+                })
+
+            return results
+        except ClientError as e:
+            raise Exception(f"Failed to bulk hike prices: {str(e)}")
