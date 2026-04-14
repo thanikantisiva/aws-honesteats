@@ -60,6 +60,9 @@ def register_coupon_routes(app):
                 body.get('itemId'), 'itemId'
             )
             item_banner_text, item_banner_error = _normalize_item_banner_text(body.get('itemBannerText'))
+            normalized_description, description_error = _normalize_optional_string_field(
+                body.get('description'), 'description'
+            )
             is_once_per_user = body.get('isOncePerUser', False)
             if isinstance(is_once_per_user, str):
                 is_once_per_user = is_once_per_user.strip().lower() in ('true', '1', 'yes')
@@ -74,6 +77,8 @@ def register_coupon_routes(app):
                 return item_id_error
             if item_banner_error:
                 return item_banner_error
+            if description_error:
+                return description_error
 
             normalized_issued_by = str(issued_by).strip().upper() if issued_by is not None else None
 
@@ -110,6 +115,8 @@ def register_coupon_routes(app):
             if normalized_item_id:
                 item['couponItem'] = {'S': normalized_item_id}
             item['isOncePerUser'] = {'BOOL': is_once_per_user}
+            if normalized_description:
+                item['description'] = {'S': normalized_description}
 
             dynamodb_client.put_item(
                 TableName=TABLES['CONFIG'],
@@ -174,3 +181,108 @@ def register_coupon_routes(app):
         except Exception as e:
             logger.error("Error deleting coupon", exc_info=True)
             return {"error": "Failed to delete coupon", "message": str(e)}, 500
+
+    @app.get("/api/v1/coupons/available")
+    @tracer.capture_method
+    def get_available_coupons():
+        """Return all active, eligible coupons for a given restaurant and user."""
+        try:
+            restaurant_id = app.current_event.get_query_string_value('restaurantId')
+            mobile_number = app.current_event.get_query_string_value('mobileNumber')
+
+            # Scan ConfigTable for all COUPON# records (handles DynamoDB pagination)
+            scan_kwargs = {
+                'TableName': TABLES['CONFIG'],
+                'FilterExpression': 'begins_with(partitionkey, :prefix) AND sortKey = :sk',
+                'ExpressionAttributeValues': {
+                    ':prefix': {'S': 'COUPON#'},
+                    ':sk': {'S': 'DETAILS'},
+                },
+            }
+            all_items = []
+            while True:
+                resp = dynamodb_client.scan(**scan_kwargs)
+                all_items.extend(resp.get('Items', []))
+                last_key = resp.get('LastEvaluatedKey')
+                if not last_key:
+                    break
+                scan_kwargs['ExclusiveStartKey'] = last_key
+
+            # Fetch the user's used-coupon set once — avoids N queries for isOncePerUser coupons
+            used_coupon_codes: set = set()
+            if mobile_number:
+                try:
+                    user_resp = dynamodb_client.get_item(
+                        TableName=TABLES['USERS'],
+                        Key={
+                            'phone': {'S': mobile_number},
+                            'role': {'S': 'CUSTOMER'},
+                        },
+                        ProjectionExpression='usedCoupons',
+                    )
+                    used_coupon_codes = set(
+                        user_resp.get('Item', {}).get('usedCoupons', {}).get('SS', [])
+                    )
+                except Exception as e:
+                    logger.error(f"Error fetching usedCoupons for {mobile_number}: {e}")
+
+            eligible = []
+            for item in all_items:
+                # Exclude item-level coupons (tied to a specific menu item, not checkout-level)
+                if item.get('couponItem', {}).get('S'):
+                    continue
+
+                raw_pk = item.get('partitionkey', {}).get('S', '')
+                if not raw_pk.startswith('COUPON#'):
+                    continue
+                coupon_code = raw_pk[len('COUPON#'):]
+                if not coupon_code:
+                    continue
+
+                coupon_type = str(item.get('couponType', {}).get('S', '')).strip().lower()
+                coupon_value_raw = item.get('couponValue', {}).get('N')
+                if not coupon_type or coupon_value_raw is None:
+                    continue
+                try:
+                    coupon_value = float(coupon_value_raw)
+                except (TypeError, ValueError):
+                    continue
+
+                start_date = item.get('startDate', {}).get('S')
+                end_date = item.get('endDate', {}).get('S')
+                is_once_per_user = bool(item.get('isOncePerUser', {}).get('BOOL', False))
+                coupon_restaurant = str(item.get('couponRestaurant', {}).get('S') or '').strip()
+                issued_by = str(item.get('issuedBy', {}).get('S') or '').strip()
+                description = str(item.get('description', {}).get('S') or '').strip() or None
+
+                # Must be within active date window
+                if not CouponService.is_coupon_active(start_date, end_date):
+                    continue
+
+                # Must match this restaurant, or be a global coupon (no restriction)
+                if coupon_restaurant and restaurant_id and coupon_restaurant != str(restaurant_id).strip():
+                    continue
+
+                # Skip if already used by this user (isOncePerUser enforcement)
+                if is_once_per_user and mobile_number and coupon_code in used_coupon_codes:
+                    continue
+
+                entry: dict = {
+                    'couponCode': coupon_code,
+                    'couponType': coupon_type,
+                    'couponValue': coupon_value,
+                    'isOncePerUser': is_once_per_user,
+                }
+                if issued_by:
+                    entry['issuedBy'] = issued_by
+                if end_date:
+                    entry['endDate'] = end_date
+                if description:
+                    entry['description'] = description
+
+                eligible.append(entry)
+
+            return {'coupons': eligible}, 200
+        except Exception as e:
+            logger.error("Error fetching available coupons", exc_info=True)
+            return {'error': 'Failed to fetch coupons', 'message': str(e)}, 500

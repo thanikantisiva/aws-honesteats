@@ -86,6 +86,7 @@ class CouponService:
             "isOncePerUser": item.get("isOncePerUser", {}).get("BOOL", False),
             "couponRestaurant": item.get("couponRestaurant", {}).get("S"),
             "couponItem": item.get("couponItem", {}).get("S"),
+            "description": item.get("description", {}).get("S") or None,
         }
 
     @staticmethod

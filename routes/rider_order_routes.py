@@ -227,6 +227,9 @@ def register_rider_order_routes(app):
                 'status': Order.STATUS_AWAITING_RIDER_ASSIGNMENT
             })
 
+            # Clear the order from rider's workingOnOrder list
+            RiderService.set_working_on_order(rider_id, None)
+
             # Deduct rating for explicit rejection
             RiderService.apply_rejection_penalty(rider_id)
 

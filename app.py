@@ -64,6 +64,7 @@ GUEST_PUBLIC_GET_PREFIXES = [
     "/api/v1/homescreen/images",  # homescreen carousel images (explicit)
     "/api/v1/food-categories/display",
     "/api/v1/config/app-version", # force-update version check (must work without JWT)
+    "/api/v1/coupons/available",  # available coupons list (read-only, no mutation)
 ]
 
 # Specific non-GET endpoints that are safe to call without JWT.
