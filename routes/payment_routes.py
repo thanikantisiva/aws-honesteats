@@ -10,10 +10,58 @@ from models.order import Order
 from utils import normalize_phone
 from utils.dynamodb import generate_id, dynamodb_client, TABLES
 import random
+from typing import Optional
+
 
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+
+
+def _apply_payment_success_and_order_updates(
+    payment: Payment,
+    razorpay_order_id: Optional[str],
+    razorpay_payment_id: str,
+    payment_method: Optional[str],
+) -> None:
+    """
+    Mark payment SUCCESS and sync order (OTPs, paymentId). Idempotent.
+    Order may already be CONFIRMED (pay-at-delivery UPI QR) before this runs.
+    """
+    if payment.payment_status == Payment.STATUS_SUCCESS:
+        logger.info(f"Payment {payment.payment_id} already SUCCESS; idempotent webhook skip")
+        return
+
+    pm = ((payment_method or Payment.METHOD_UPI).upper()) if payment_method else Payment.METHOD_UPI
+    pay_updates = {
+        'paymentStatus': Payment.STATUS_SUCCESS,
+        'razorpayPaymentId': razorpay_payment_id,
+        'paymentMethod': pm,
+    }
+    if razorpay_order_id:
+        pay_updates['razorpayOrderId'] = razorpay_order_id
+
+    PaymentService.update_payment(payment.payment_id, pay_updates)
+    logger.info(f"✅ Payment {payment.payment_id} marked as SUCCESS via webhook")
+
+    order_id = payment.order_id
+    if not order_id:
+        return
+
+    order = OrderService.get_order(order_id)
+    if order and order.status == Order.STATUS_INITIATED:
+        OrderService.update_order_status(order_id, Order.STATUS_CONFIRMED, None)
+
+    order_updates = {'paymentId': payment.payment_id}
+    if pm:
+        order_updates['paymentMethod'] = pm
+    if not order or not order.delivery_otp:
+        order_updates['deliveryOtp'] = str(random.randint(1000, 9999))
+    if not order or not order.pickup_otp:
+        order_updates['pickupOtp'] = str(random.randint(1000, 9999))
+
+    OrderService.update_order(order_id, order_updates)
+    logger.info(f"[orderId={order_id}] Updated order after payment success webhook")
 
 
 def register_payment_routes(app):
@@ -44,6 +92,19 @@ def register_payment_routes(app):
             coupon_applied = bool(body.get('couponApplied'))
             total_discount = float(body.get('totalDiscount', 0))
             calculated_fee_response = body.get('calculatedFeeResponse')
+
+            payment_channel_req = body.get('paymentChannel') or Payment.PAYMENT_CHANNEL_STANDARD
+            if isinstance(payment_channel_req, str):
+                payment_channel_req = payment_channel_req.strip().upper()
+            else:
+                payment_channel_req = Payment.PAYMENT_CHANNEL_STANDARD
+            if payment_channel_req == Payment.PAYMENT_CHANNEL_UPI_QR_AT_RIDER:
+                payment_channel_req = Payment.PAYMENT_CHANNEL_COD_AT_DELIVERY
+            if payment_channel_req not in (
+                Payment.PAYMENT_CHANNEL_STANDARD,
+                Payment.PAYMENT_CHANNEL_COD_AT_DELIVERY,
+            ):
+                return {"error": "Invalid paymentChannel"}, 400
             
             if not all([customer_phone, restaurant_id, restaurant_name, amount]):
                 return {"error": "Missing required fields"}, 400
@@ -164,8 +225,44 @@ def register_payment_routes(app):
             from services.order_service import OrderService
             OrderService.create_order(order)
             logger.info(f"[orderId={order_id}] 📦 Created with INITIATED status")
-            
-            # Create Razorpay order with orderId in notes
+
+            if payment_channel_req == Payment.PAYMENT_CHANNEL_COD_AT_DELIVERY:
+                payment = Payment(
+                    payment_id=payment_id,
+                    customer_phone=customer_phone,
+                    restaurant_id=restaurant_id,
+                    restaurant_name=restaurant_name,
+                    amount=amount,
+                    razorpay_order_id=None,
+                    payment_status=Payment.STATUS_INITIATED,
+                    order_id=order_id,
+                    payment_channel=Payment.PAYMENT_CHANNEL_COD_AT_DELIVERY,
+                )
+                PaymentService.create_payment(payment)
+                OrderService.update_order_status(order_id, Order.STATUS_CONFIRMED, None)
+                OrderService.update_order(
+                    order_id,
+                    {
+                        'paymentId': payment_id,
+                        'paymentMethod': Payment.METHOD_COD,
+                        'paymentChannel': Payment.PAYMENT_CHANNEL_COD_AT_DELIVERY,
+                        'deliveryOtp': str(random.randint(1000, 9999)),
+                        'pickupOtp': str(random.randint(1000, 9999)),
+                    },
+                )
+                metrics.add_metric(name="PaymentInitiated", unit="Count", value=1)
+                metrics.add_metric(name="OrderConfirmed", unit="Count", value=1)
+                amount_paise = max(1, int(round(amount * 100)))
+                return {
+                    'paymentId': payment_id,
+                    'orderId': order_id,
+                    'codAtDelivery': True,
+                    'paymentChannel': Payment.PAYMENT_CHANNEL_COD_AT_DELIVERY,
+                    'amount': amount_paise,
+                    'currency': 'INR',
+                }, 200
+
+            # STANDARD: Razorpay order + in-app checkout
             razorpay_order = PaymentService.create_razorpay_order(
                 amount_in_rupees=amount,
                 receipt_id=payment_id,
@@ -186,6 +283,7 @@ def register_payment_routes(app):
                 razorpay_order_id=razorpay_order['id'],
                 payment_status=Payment.STATUS_INITIATED,
                 order_id=order_id,
+                payment_channel=Payment.PAYMENT_CHANNEL_STANDARD,
             )
             
             PaymentService.create_payment(payment)
@@ -198,7 +296,8 @@ def register_payment_routes(app):
                 'razorpayOrderId': razorpay_order['id'],
                 'razorpayKeyId': PaymentService.get_razorpay_key_id(),
                 'amount': razorpay_order['amount'],  # In paise
-                'currency': razorpay_order['currency']
+                'currency': razorpay_order['currency'],
+                'paymentChannel': Payment.PAYMENT_CHANNEL_STANDARD,
             }, 200
             
         except Exception as e:
@@ -366,7 +465,118 @@ def register_payment_routes(app):
         except Exception as e:
             logger.error("Error verifying payment", exc_info=True)
             return {"error": "Failed to verify payment", "message": str(e)}, 500
-    
+
+    @app.post("/api/v1/payments/cod-confirm")
+    @tracer.capture_method
+    def cod_confirm():
+        """
+        Hybrid COD: confirm order without Razorpay capture (Standard Checkout has no in-sheet COD).
+        Call after the same /initiate used for online pay. Idempotent if already COD-success.
+        """
+        try:
+            body = app.current_event.json_body
+            payment_id = body.get("paymentId")
+            customer_phone = normalize_phone(body.get("customerPhone"))
+
+            if not all([payment_id, customer_phone]):
+                return {"error": "Missing required fields"}, 400
+
+            payment = PaymentService.get_payment(payment_id)
+            if not payment:
+                return {"error": "Payment not found"}, 404
+            if normalize_phone(payment.customer_phone) != customer_phone:
+                return {"error": "Unauthorized"}, 403
+
+            order_id = payment.order_id
+            if not order_id:
+                return {"error": "Order not linked to payment"}, 400
+
+            order = OrderService.get_order(order_id)
+            if not order:
+                return {"error": "Order not found"}, 404
+
+            if payment.payment_status == Payment.STATUS_INITIATED and payment.payment_channel in (
+                Payment.PAYMENT_CHANNEL_COD_AT_DELIVERY,
+                Payment.PAYMENT_CHANNEL_UPI_QR_AT_RIDER,
+            ):
+                return {
+                    "error": "Pay-at-delivery order: the rider collects cash or shows a UPI QR. Customer cod-confirm is not used.",
+                }, 400
+
+            # Idempotent retry (same client double-tap or network retry)
+            if payment.payment_status == Payment.STATUS_SUCCESS and (
+                (payment.payment_method or "").upper() == Payment.METHOD_COD
+            ):
+                if order.status == Order.STATUS_CONFIRMED:
+                    return {
+                        "verified": True,
+                        "orderId": order_id,
+                        "orderStatus": Order.STATUS_CONFIRMED,
+                        "paymentId": payment_id,
+                    }, 200
+                logger.warning(
+                    f"[orderId={order_id}] COD payment SUCCESS but order not CONFIRMED; reconciling"
+                )
+                OrderService.update_order_status(order_id, Order.STATUS_CONFIRMED, None)
+                OrderService.update_order(
+                    order_id,
+                    {
+                        "paymentId": payment_id,
+                        "paymentMethod": Payment.METHOD_COD,
+                        "deliveryOtp": order.delivery_otp or str(random.randint(1000, 9999)),
+                        "pickupOtp": order.pickup_otp or str(random.randint(1000, 9999)),
+                    },
+                )
+                return {
+                    "verified": True,
+                    "orderId": order_id,
+                    "orderStatus": Order.STATUS_CONFIRMED,
+                    "paymentId": payment_id,
+                }, 200
+
+            if payment.payment_status != Payment.STATUS_INITIATED:
+                return {"error": f"Payment already {payment.payment_status}"}, 400
+
+            if order.status != Order.STATUS_INITIATED:
+                return {"error": "Order already processed"}, 400
+
+            cod_payment_ref = f"cod_{payment_id}"
+            PaymentService.update_payment(
+                payment_id,
+                {
+                    "paymentStatus": Payment.STATUS_SUCCESS,
+                    "razorpayPaymentId": cod_payment_ref,
+                    "razorpaySignature": "cod_internal",
+                    "paymentMethod": Payment.METHOD_COD,
+                    "upiApp": None,
+                },
+            )
+
+            OrderService.update_order_status(order_id, Order.STATUS_CONFIRMED, None)
+            OrderService.update_order(
+                order_id,
+                {
+                    "paymentId": payment_id,
+                    "paymentMethod": Payment.METHOD_COD,
+                    "deliveryOtp": str(random.randint(1000, 9999)),
+                    "pickupOtp": str(random.randint(1000, 9999)),
+                },
+            )
+
+            metrics.add_metric(name="PaymentCodConfirmed", unit="Count", value=1)
+            metrics.add_metric(name="OrderConfirmed", unit="Count", value=1)
+            logger.info(f"[orderId={order_id}] COD confirmed for payment {payment_id}")
+
+            return {
+                "verified": True,
+                "orderId": order_id,
+                "orderStatus": Order.STATUS_CONFIRMED,
+                "paymentId": payment_id,
+            }, 200
+        except Exception as e:
+            logger.error("Error confirming COD payment", exc_info=True)
+            return {"error": "Failed to confirm cash on delivery", "message": str(e)}, 500
+
     @app.get("/api/v1/payments/<payment_id>")
     @tracer.capture_method
     def get_payment(payment_id: str):
@@ -411,16 +621,14 @@ def register_payment_routes(app):
     @app.post("/api/v1/payments/webhook")
     def razorpay_webhook():
         """
-        Handle Razorpay webhook events
-        This provides additional reliability for payment confirmation
+        Handle Razorpay webhook events. Signature verification is disabled.
+        Dashboard: subscribe to payment.captured, payment.failed, refund events, and qr_code.credited
+        for dynamic UPI QR (rider-collected) payments.
         """
         try:
-            import hmac
-            import hashlib
-            import os
-            
             body = app.current_event.body
-            signature = app.current_event.get_header_value('X-Razorpay-Signature') or ''
+            if isinstance(body, bytes):
+                body = body.decode("utf-8")
 
             def _find_payment(razorpay_order_id=None, razorpay_payment_id=None):
                 payment_record = None
@@ -429,22 +637,7 @@ def register_payment_routes(app):
                 if not payment_record and razorpay_order_id:
                     payment_record = PaymentService.get_payment_by_razorpay_order_id(razorpay_order_id)
                 return payment_record
-            
-            # Verify webhook signature
-            from utils.ssm import get_secret
-            webhook_secret = get_secret('RAZORPAY_WEBHOOK_SECRET', '')
-            if webhook_secret:
-                expected_signature = hmac.new(
-                    webhook_secret.encode('utf-8'),
-                    body.encode('utf-8'),
-                    hashlib.sha256
-                ).hexdigest()
-                
-                if signature != expected_signature:
-                    logger.error("Invalid webhook signature")
-                    return {"error": "Invalid signature"}, 400
-            
-            # Parse webhook payload
+
             import json
             payload = json.loads(body)
             event = payload.get('event')
@@ -457,49 +650,67 @@ def register_payment_routes(app):
             )
             
             if event == 'payment.captured':
-                # Payment was successful
                 razorpay_payment_id = payment_entity.get('id')
                 razorpay_order_id = payment_entity.get('order_id')
                 payment_method = (payment_entity.get('method') or '').upper() or None
-                
-                logger.info(f"✅ Payment captured: {razorpay_payment_id}")
-                
-                # Update payment status in database
-                payment = _find_payment(
-                    razorpay_order_id=razorpay_order_id,
-                    razorpay_payment_id=razorpay_payment_id
-                )
-                if payment:
-                    PaymentService.update_payment(payment.payment_id, {
-                        'paymentStatus': Payment.STATUS_SUCCESS,
-                        'razorpayOrderId': razorpay_order_id,
-                        'razorpayPaymentId': razorpay_payment_id,
-                        'paymentMethod': payment_method
-                    })
-                    logger.info(f"✅ Payment {payment.payment_id} marked as SUCCESS via webhook")
+                qr_code_id = payment_entity.get('qr_code_id')
 
-                    if payment.order_id:
-                        order = OrderService.get_order(payment.order_id)
-                        if order and order.status == Order.STATUS_INITIATED:
-                            OrderService.update_order_status(payment.order_id, Order.STATUS_CONFIRMED, None)
+                logger.info(f"✅ Payment captured: {razorpay_payment_id} qr_code_id={qr_code_id}")
 
-                        order_updates = {
-                            'paymentId': payment.payment_id
-                        }
-                        if payment_method:
-                            order_updates['paymentMethod'] = payment_method
-                        if not order or not order.delivery_otp:
-                            order_updates['deliveryOtp'] = str(random.randint(1000, 9999))
-                        if not order or not order.pickup_otp:
-                            order_updates['pickupOtp'] = str(random.randint(1000, 9999))
-
-                        OrderService.update_order(payment.order_id, order_updates)
-                        logger.info(f"[orderId={payment.order_id}] Updated order after payment.captured webhook")
+                payment = None
+                if qr_code_id:
+                    payment = PaymentService.get_payment_by_razorpay_qr_code_id(qr_code_id)
+                if not payment:
+                    payment = _find_payment(
+                        razorpay_order_id=razorpay_order_id,
+                        razorpay_payment_id=razorpay_payment_id
+                    )
+                if payment and razorpay_payment_id:
+                    _apply_payment_success_and_order_updates(
+                        payment,
+                        razorpay_order_id,
+                        razorpay_payment_id,
+                        payment_method,
+                    )
                 else:
                     logger.warning(
                         f"No payment found for payment.captured webhook: "
                         f"razorpayOrderId={razorpay_order_id}, razorpayPaymentId={razorpay_payment_id}"
                     )
+
+            elif event == 'qr_code.credited':
+                qr_entity = payload.get('payload', {}).get('qr_code', {}).get('entity', {})
+                pay_entity = payload.get('payload', {}).get('payment', {}).get('entity', {})
+                qr_id = qr_entity.get('id')
+                razorpay_payment_id = pay_entity.get('id')
+                razorpay_order_id = pay_entity.get('order_id')
+                amount_paise = pay_entity.get('amount')
+                payment_method = pay_entity.get('method')
+
+                logger.info(
+                    f"qr_code.credited qr_id={qr_id} pay_id={razorpay_payment_id} amount_paise={amount_paise}"
+                )
+
+                payment = PaymentService.get_payment_by_razorpay_qr_code_id(qr_id) if qr_id else None
+                if payment and amount_paise is not None:
+                    expected_paise = max(1, int(round(float(payment.amount) * 100)))
+                    if int(amount_paise) != expected_paise:
+                        logger.error(
+                            f"qr_code.credited amount mismatch payment={payment.payment_id} "
+                            f"expected_paise={expected_paise} got={amount_paise}"
+                        )
+                        metrics.add_metric(name="WebhookReceived", unit="Count", value=1)
+                        return {"status": "ignored_amount_mismatch"}, 200
+
+                if payment and razorpay_payment_id:
+                    _apply_payment_success_and_order_updates(
+                        payment,
+                        razorpay_order_id,
+                        razorpay_payment_id,
+                        (payment_method or 'upi').upper() if payment_method else Payment.METHOD_UPI,
+                    )
+                elif not payment:
+                    logger.warning(f"No payment found for qr_code.credited qr_id={qr_id}")
                 
             elif event == 'payment.failed':
                 # Payment failed

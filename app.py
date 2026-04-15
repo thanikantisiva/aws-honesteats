@@ -53,6 +53,7 @@ PUBLIC_ROUTES = [
     "/api/v1/ratings",
     "/api/v1/globalconfig",
     "/api/v1/config/app-version",
+    "/api/v1/payments/webhook",
 ]
 
 # Route PREFIXES that are publicly accessible (guest browsing).

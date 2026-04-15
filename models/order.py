@@ -74,6 +74,7 @@ class Order:
         address_id: Optional[str] = None,
         payment_id: Optional[str] = None,
         payment_method: Optional[str] = None,
+        payment_channel: Optional[str] = None,
         rating: Optional[float] = None,
         revenue: Optional[Dict[str, Any]] = None,
         # Rider-specific fields
@@ -119,6 +120,7 @@ class Order:
         self.address_id = address_id
         self.payment_id = payment_id
         self.payment_method = payment_method
+        self.payment_channel = payment_channel
         self.rating = rating
         self.revenue = revenue
         # Rider fields
@@ -184,6 +186,8 @@ class Order:
             result["paymentId"] = self.payment_id
         if self.payment_method:
             result["paymentMethod"] = self.payment_method
+        if self.payment_channel:
+            result["paymentChannel"] = self.payment_channel
         if self.revenue:
             result["revenue"] = self.revenue
         if self.calculated_fee_response:
@@ -272,6 +276,7 @@ class Order:
             address_id=item.get("addressId", {}).get("S") if "addressId" in item else None,
             payment_id=item.get("paymentId", {}).get("S") if "paymentId" in item else None,
             payment_method=item.get("paymentMethod", {}).get("S") if "paymentMethod" in item else None,
+            payment_channel=item.get("paymentChannel", {}).get("S") if "paymentChannel" in item else None,
             rating=float(item.get("rating", {}).get("N")) if "rating" in item else None,
             revenue=dynamodb_to_python(item["revenue"]) if "revenue" in item and "M" in item["revenue"] else (json.loads(item.get("revenue", {}).get("S")) if "revenue" in item else None),
             # Rider fields
@@ -344,6 +349,8 @@ class Order:
             item["paymentId"] = {"S": self.payment_id}
         if self.payment_method:
             item["paymentMethod"] = {"S": self.payment_method}
+        if self.payment_channel:
+            item["paymentChannel"] = {"S": self.payment_channel}
         if self.rating is not None:
             item["rating"] = {"N": str(self.rating)}
         if self.revenue:

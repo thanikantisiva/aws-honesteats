@@ -8,7 +8,9 @@ from services.restaurant_earnings_service import RestaurantEarningsService
 from services.restaurant_service import RestaurantService
 from services.notification_service import NotificationService
 from services.address_service import AddressService
+from services.payment_service import PaymentService
 from models.order import Order
+from models.payment import Payment
 from datetime import datetime
 import random
 from typing import Any, Dict, Optional
@@ -16,6 +18,12 @@ from typing import Any, Dict, Optional
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+
+
+def _effective_payment_status(payment: Payment) -> str:
+    """DynamoDB rows may omit paymentStatus (parsed as ''). Treat as pending for rider COD/UPI flows."""
+    s = (payment.payment_status or "").strip().upper()
+    return s if s else Payment.STATUS_INITIATED
 
 
 def _revenue_final_payout(order: Order, *path: str) -> float:
@@ -34,6 +42,23 @@ def _revenue_final_payout(order: Order, *path: str) -> float:
         return float(node)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _pending_initiated_payment_for_order(order: Order, order_id: str) -> Optional[Payment]:
+    """Prefer the order's paymentId when multiple INITIATED rows exist."""
+    candidates = PaymentService.get_initiated_rider_upi_payments_for_order(order_id)
+    if not candidates:
+        return None
+    pid = order.payment_id
+    if pid:
+        for p in candidates:
+            if p.payment_id == pid:
+                return p
+    if len(candidates) > 1:
+        logger.warning(
+            f"[orderId={order_id}] Multiple INITIATED payments; using {candidates[0].payment_id}"
+        )
+    return candidates[0]
 
 
 def _rider_payout_for_earnings(order: Order) -> float:
@@ -125,6 +150,127 @@ def register_rider_order_routes(app):
         except Exception as e:
             logger.error(f"[riderId={rider_id}] Error getting rider orders", exc_info=True)
             return {"error": "Failed to get orders", "message": str(e)}, 500
+
+    @app.post("/api/v1/riders/<rider_id>/orders/<order_id>/upi-qr")
+    @tracer.capture_method
+    def rider_order_upi_qr(rider_id: str, order_id: str):
+        """
+        Create a new Razorpay dynamic UPI QR each call (~10 min expiry). Pay-at-delivery COD only.
+        Dashboard: enable UPI QR + webhooks (qr_code.credited, payment.captured).
+        """
+        try:
+            order = OrderService.get_order(order_id)
+            if not order:
+                return {"error": "Order not found"}, 404
+            if order.rider_id != rider_id:
+                return {"error": "Order not assigned to this rider"}, 403
+            if (order.payment_method or "").upper() != Payment.METHOD_COD:
+                return {"error": "UPI QR is only for cash on delivery orders"}, 400
+
+            payment = _pending_initiated_payment_for_order(order, order_id)
+            if not payment:
+                return {"error": "No pending payment for this order"}, 400
+
+            close_by_new = PaymentService.default_qr_close_by_epoch()
+            qr_data = PaymentService.create_upi_qr_code(
+                float(payment.amount),
+                payment.payment_id,
+                order_id,
+                close_by_new,
+            )
+            qr_id = qr_data.get("id")
+            image_url = qr_data.get("image_url")
+            cb = int(qr_data.get("close_by") or close_by_new)
+            PaymentService.update_payment(
+                payment.payment_id,
+                {
+                    "razorpayQrCodeId": qr_id,
+                    "qrImageUrl": image_url,
+                    "qrCloseBy": cb,
+                },
+            )
+            metrics.add_metric(name="RiderUpiQrCreated", unit="Count", value=1)
+            return {
+                "paymentId": payment.payment_id,
+                "qrCodeId": qr_id,
+                "imageUrl": image_url,
+                "closeBy": cb,
+                "amount": max(1, int(round(float(payment.amount) * 100))),
+                "amountRupees": float(payment.amount),
+            }, 200
+        except Exception as e:
+            logger.error(
+                f"[orderId={order_id}] rider UPI QR failed for rider {rider_id}", exc_info=True
+            )
+            return {"error": "Failed to create UPI QR", "message": str(e)}, 500
+
+    @app.post("/api/v1/riders/<rider_id>/orders/<order_id>/cash-collected")
+    @tracer.capture_method
+    def rider_order_cash_collected(rider_id: str, order_id: str):
+        """Mark COD order as paid in cash (updates the existing Payment row)."""
+        try:
+            order = OrderService.get_order(order_id)
+            if not order:
+                return {"error": "Order not found"}, 404
+            if order.rider_id != rider_id:
+                return {"error": "Order not assigned to this rider"}, 403
+            if (order.payment_method or "").upper() != Payment.METHOD_COD:
+                return {"error": "Order is not cash on delivery"}, 400
+
+            payment = None
+            if order.payment_id:
+                payment = PaymentService.get_payment(order.payment_id)
+            if not payment or payment.order_id != order_id:
+                payment = _pending_initiated_payment_for_order(order, order_id)
+            if not payment:
+                return {"error": "No payment found for this order"}, 404
+
+            eff = _effective_payment_status(payment)
+            if eff == Payment.STATUS_SUCCESS:
+                pm = (payment.payment_method or "").upper()
+                if pm == Payment.METHOD_UPI:
+                    return {"error": "Payment already completed via UPI"}, 400
+                return {
+                    "verified": True,
+                    "paymentId": payment.payment_id,
+                    "orderId": order_id,
+                }, 200
+
+            if eff != Payment.STATUS_INITIATED:
+                return {
+                    "error": f"Payment cannot be marked cash: status is {eff}",
+                }, 400
+
+            cod_ref = f"cod_{payment.payment_id}"
+            PaymentService.update_payment(
+                payment.payment_id,
+                {
+                    "paymentStatus": Payment.STATUS_SUCCESS,
+                    "razorpayPaymentId": cod_ref,
+                    "razorpaySignature": "cod_internal",
+                    "paymentMethod": Payment.METHOD_COD,
+                    "upiApp": None,
+                    "razorpayQrCodeId": None,
+                    "qrImageUrl": None,
+                    "qrCloseBy": None,
+                },
+            )
+            OrderService.update_order(
+                order_id,
+                {"paymentId": payment.payment_id, "paymentMethod": Payment.METHOD_COD},
+            )
+            metrics.add_metric(name="RiderCashCollected", unit="Count", value=1)
+            logger.info(f"[orderId={order_id}] Cash collected recorded by rider {rider_id} payment={payment.payment_id}")
+            return {
+                "verified": True,
+                "paymentId": payment.payment_id,
+                "orderId": order_id,
+            }, 200
+        except Exception as e:
+            logger.error(
+                f"[orderId={order_id}] rider cash-collected failed for rider {rider_id}", exc_info=True
+            )
+            return {"error": "Failed to record cash payment", "message": str(e)}, 500
     
     @app.post("/api/v1/riders/<rider_id>/orders/<order_id>/accept/<status>")
     @tracer.capture_method

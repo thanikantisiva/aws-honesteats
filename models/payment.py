@@ -17,6 +17,13 @@ class Payment:
     METHOD_CARD = "CARD"
     METHOD_WALLET = "WALLET"
     METHOD_NETBANKING = "NETBANKING"
+    METHOD_COD = "COD"
+
+    # How checkout is completed: in-app Standard vs pay at delivery (cash or rider UPI QR)
+    PAYMENT_CHANNEL_STANDARD = "STANDARD"
+    PAYMENT_CHANNEL_COD_AT_DELIVERY = "COD_AT_DELIVERY"
+    # Legacy stored value; still accepted in queries for existing rows
+    PAYMENT_CHANNEL_UPI_QR_AT_RIDER = "UPI_QR_AT_RIDER"
 
     def __init__(
         self,
@@ -37,7 +44,11 @@ class Payment:
         refund_amount: Optional[float] = None,
         revenue: Optional[dict] = None,
         created_at: Optional[Union[int, str]] = None,
-        updated_at: Optional[Union[int, str]] = None
+        updated_at: Optional[Union[int, str]] = None,
+        payment_channel: Optional[str] = None,
+        razorpay_qr_code_id: Optional[str] = None,
+        qr_image_url: Optional[str] = None,
+        qr_close_by: Optional[int] = None,
     ):
         self.payment_id = payment_id
         self.customer_phone = customer_phone
@@ -55,6 +66,10 @@ class Payment:
         self.error_description = error_description
         self.refund_amount = float(refund_amount) if refund_amount is not None else None
         self.revenue = revenue  # Revenue breakdown for analytics
+        self.payment_channel = payment_channel
+        self.razorpay_qr_code_id = razorpay_qr_code_id
+        self.qr_image_url = qr_image_url
+        self.qr_close_by = qr_close_by
         _now = now_ist_iso()
         self.created_at = created_at if created_at is not None else _now
         self.updated_at = updated_at if updated_at is not None else self.created_at
@@ -78,7 +93,11 @@ class Payment:
             'refundAmount': self.refund_amount,
             'revenue': self.revenue,
             'createdAt': epoch_ms_to_ist_iso(self.created_at) if isinstance(self.created_at, int) else self.created_at,
-            'updatedAt': epoch_ms_to_ist_iso(self.updated_at) if isinstance(self.updated_at, int) else self.updated_at
+            'updatedAt': epoch_ms_to_ist_iso(self.updated_at) if isinstance(self.updated_at, int) else self.updated_at,
+            'paymentChannel': self.payment_channel,
+            'razorpayQrCodeId': self.razorpay_qr_code_id,
+            'qrImageUrl': self.qr_image_url,
+            'qrCloseBy': self.qr_close_by,
         }
     
     def to_dynamodb_item(self) -> dict:
@@ -134,7 +153,15 @@ class Payment:
         if self.revenue:
             from utils.dynamodb_helpers import python_to_dynamodb
             item['revenue'] = python_to_dynamodb(self.revenue)  # Store as Map
-        
+        if self.payment_channel:
+            item['paymentChannel'] = {'S': self.payment_channel}
+        if self.razorpay_qr_code_id:
+            item['razorpayQrCodeId'] = {'S': self.razorpay_qr_code_id}
+        if self.qr_image_url:
+            item['qrImageUrl'] = {'S': self.qr_image_url}
+        if self.qr_close_by is not None:
+            item['qrCloseBy'] = {'N': str(int(self.qr_close_by))}
+
         return item
     
     @staticmethod
@@ -154,6 +181,9 @@ class Payment:
             created_at = now_ist_iso()
 
         updated_at = raw_ua.get('S') if 'S' in raw_ua else (int(float(raw_ua['N'])) if 'N' in raw_ua else created_at)
+        # Legacy or partial rows may omit paymentStatus; avoid KeyError. Empty status must not match STATUS_INITIATED filters.
+        raw_payment_status = item.get('paymentStatus', {}).get('S')
+        payment_status = raw_payment_status if raw_payment_status is not None else ''
         return Payment(
             payment_id=item['paymentId']['S'],
             customer_phone=item['customerPhone']['S'],
@@ -163,7 +193,7 @@ class Payment:
             razorpay_order_id=item.get('razorpayOrderId', {}).get('S'),
             razorpay_payment_id=item.get('razorpayPaymentId', {}).get('S'),
             razorpay_signature=item.get('razorpaySignature', {}).get('S'),
-            payment_status=item['paymentStatus']['S'],
+            payment_status=payment_status,
             payment_method=item.get('paymentMethod', {}).get('S'),
             upi_app=item.get('upiApp', {}).get('S'),
             order_id=item.get('orderId', {}).get('S'),
@@ -171,5 +201,9 @@ class Payment:
             error_description=item.get('errorDescription', {}).get('S'),
             refund_amount=float(item['refundAmount']['N']) if 'refundAmount' in item and 'N' in item['refundAmount'] else None,
             created_at=created_at,
-            updated_at=updated_at
+            updated_at=updated_at,
+            payment_channel=item.get('paymentChannel', {}).get('S'),
+            razorpay_qr_code_id=item.get('razorpayQrCodeId', {}).get('S'),
+            qr_image_url=item.get('qrImageUrl', {}).get('S'),
+            qr_close_by=int(float(item['qrCloseBy']['N'])) if 'qrCloseBy' in item and 'N' in item['qrCloseBy'] else None,
         )

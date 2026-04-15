@@ -1,6 +1,8 @@
 """Payment service for Razorpay integration"""
+import time
 import razorpay
-from typing import Optional, Dict, Any
+import requests
+from typing import Optional, Dict, Any, List
 from aws_lambda_powertools import Logger
 from utils.datetime_ist import now_ist_iso
 from botocore.exceptions import ClientError
@@ -26,6 +28,9 @@ else:
 
 # Initialize Razorpay client
 razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
+# Merchant ops: enable UPI, card, netbanking, wallet (and test/live keys) in Razorpay Dashboard.
+# COD in-app uses Payment.METHOD_COD via /payments/cod-confirm (Standard Checkout has no in-sheet COD).
 
 
 class PaymentService:
@@ -175,6 +180,92 @@ class PaymentService:
         except ClientError as e:
             logger.error(f"Failed to get payment by razorpayPaymentId: {str(e)}")
             raise
+
+    @staticmethod
+    def get_payment_by_razorpay_qr_code_id(qr_code_id: str) -> Optional[Payment]:
+        """Lookup payment by Razorpay dynamic UPI QR id (GSI)."""
+        try:
+            response = dynamodb_client.query(
+                TableName=TABLES['PAYMENTS'],
+                IndexName='razorpayQrCodeId-index',
+                KeyConditionExpression='razorpayQrCodeId = :qid',
+                ExpressionAttributeValues={':qid': {'S': qr_code_id}},
+                Limit=1,
+            )
+            items = response.get('Items', [])
+            if not items:
+                return None
+            return Payment.from_dynamodb_item(items[0])
+        except ClientError as e:
+            logger.error(f"Failed to get payment by razorpayQrCodeId: {str(e)}")
+            raise
+
+    @staticmethod
+    def get_initiated_rider_upi_payments_for_order(order_id: str) -> List[Payment]:
+        """INITIATED payments for this order (rider completes via UPI QR or cash at delivery)."""
+        try:
+            response = dynamodb_client.query(
+                TableName=TABLES['PAYMENTS'],
+                IndexName='orderId-index',
+                KeyConditionExpression='orderId = :oid',
+                ExpressionAttributeValues={':oid': {'S': order_id}},
+            )
+            out: List[Payment] = []
+            for raw in response.get('Items', []):
+                p = Payment.from_dynamodb_item(raw)
+                st = (p.payment_status or "").strip().upper()
+                if st == Payment.STATUS_INITIATED or not st:
+                    out.append(p)
+            return out
+        except ClientError as e:
+            logger.error(f"Failed to query payments by orderId: {str(e)}")
+            raise
+
+    @staticmethod
+    def create_upi_qr_code(
+        amount_rupees: float,
+        payment_id: str,
+        order_id: str,
+        close_by_epoch: int,
+    ) -> Dict[str, Any]:
+        """
+        Create a single-use fixed-amount UPI QR via Razorpay REST API.
+        Amount in rupees is converted to paise. close_by: Unix seconds (2 min–2 h ahead per Razorpay).
+        """
+        paise = max(1, int(round(float(amount_rupees) * 100)))
+        url = 'https://api.razorpay.com/v1/payments/qr_codes'
+        payload: Dict[str, Any] = {
+            'type': 'upi_qr',
+            'usage': 'single_use',
+            'fixed_amount': True,
+            'payment_amount': paise,
+            'description': f'HonestEats order {order_id}',
+            'close_by': int(close_by_epoch),
+            'notes': {
+                'payment_id': payment_id,
+                'order_id': order_id,
+            },
+        }
+        logger.info(
+            f"Creating Razorpay UPI QR order={order_id} payment={payment_id} paise={paise} close_by={close_by_epoch}"
+        )
+        resp = requests.post(
+            url,
+            json=payload,
+            auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+            timeout=45,
+        )
+        if resp.status_code >= 400:
+            logger.error(f"Razorpay QR API HTTP {resp.status_code}: {resp.text}")
+            raise RuntimeError(f"Razorpay QR create failed: {resp.text}")
+        data = resp.json()
+        logger.info(f"Razorpay UPI QR created id={data.get('id')}")
+        return data
+
+    @staticmethod
+    def default_qr_close_by_epoch() -> int:
+        """10 minutes from now (Razorpay single-use QR allows 2 min–2 h)."""
+        return int(time.time()) + (10 * 60)
     
     @staticmethod
     def create_payment(payment: Payment) -> Payment:
@@ -198,42 +289,50 @@ class PaymentService:
         """Update payment record"""
         try:
             updates['updatedAt'] = now_ist_iso()
-            
-            # Build update expression
-            update_expr = "SET "
-            expr_attr_names = {}
-            expr_attr_values = {}
-            
+
+            # None must use REMOVE, not SET NULL — GSI keys (e.g. razorpayQrCodeId) reject NULL.
+            set_parts: List[str] = []
+            remove_names: List[str] = []
+            expr_attr_names: Dict[str, str] = {}
+            expr_attr_values: Dict[str, Any] = {}
+
             for key, value in updates.items():
                 attr_name = f"#{key}"
-                attr_value = f":{key}"
-                update_expr += f"{attr_name} = {attr_value}, "
                 expr_attr_names[attr_name] = key
-
-                # Convert value to DynamoDB format (match OrderService.update_order)
+                if value is None:
+                    remove_names.append(attr_name)
+                    continue
+                attr_value = f":{key}"
+                set_parts.append(f"{attr_name} = {attr_value}")
                 if isinstance(value, bool):
                     expr_attr_values[attr_value] = {'BOOL': value}
                 elif isinstance(value, (int, float)):
                     expr_attr_values[attr_value] = {'N': str(value)}
                 elif isinstance(value, (list, dict)):
                     expr_attr_values[attr_value] = python_to_dynamodb(value)
-                elif value is None:
-                    expr_attr_values[attr_value] = {'NULL': True}
                 elif isinstance(value, str):
                     expr_attr_values[attr_value] = {'S': value}
                 else:
                     expr_attr_values[attr_value] = {'S': str(value)}
-            
-            update_expr = update_expr.rstrip(', ')
-            
-            response = dynamodb_client.update_item(
-                TableName=TABLES['PAYMENTS'],
-                Key={'paymentId': {'S': payment_id}},
-                UpdateExpression=update_expr,
-                ExpressionAttributeNames=expr_attr_names,
-                ExpressionAttributeValues=expr_attr_values,
-                ReturnValues='ALL_NEW'
-            )
+
+            update_parts: List[str] = []
+            if set_parts:
+                update_parts.append('SET ' + ', '.join(set_parts))
+            if remove_names:
+                update_parts.append('REMOVE ' + ', '.join(remove_names))
+            update_expr = ' '.join(update_parts)
+
+            kwargs: Dict[str, Any] = {
+                'TableName': TABLES['PAYMENTS'],
+                'Key': {'paymentId': {'S': payment_id}},
+                'UpdateExpression': update_expr,
+                'ExpressionAttributeNames': expr_attr_names,
+                'ReturnValues': 'ALL_NEW',
+            }
+            if expr_attr_values:
+                kwargs['ExpressionAttributeValues'] = expr_attr_values
+
+            response = dynamodb_client.update_item(**kwargs)
             
             logger.info(f"Payment updated: {payment_id}")
             return Payment.from_dynamodb_item(response['Attributes'])
