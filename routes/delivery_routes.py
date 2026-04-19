@@ -289,7 +289,8 @@ def register_delivery_routes(app):
             )
 
             # Reject the request early if the delivery location is outside the configured radius.
-            if max_radius_km is not None and distance_km > max_radius_km:
+            # Guard: max_radius_km must be > 0 to prevent an accidental zero value blocking all deliveries.
+            if max_radius_km is not None and max_radius_km > 0 and distance_km > max_radius_km:
                 logger.info(
                     f"Delivery radius exceeded: distanceKm={distance_km}, maxDeliveryRadiusKm={max_radius_km}"
                 )
