@@ -25,6 +25,10 @@ REQUIRED_CONFIG_KEYS = [
     "riderSurgeChargeAfterKms",
     "freeDeliveryAboveThreshold",
 ]
+# Optional config keys — absent means feature is disabled / unlimited.
+OPTIONAL_CONFIG_KEYS = [
+    "maxDeliveryRadiusKm",
+]
 
 def _to_float(value):
     """Safely parse numeric values from config payload."""
@@ -62,6 +66,13 @@ def _fetch_global_delivery_config():
 
     if missing_keys:
         return None, missing_keys
+
+    # Parse optional keys — absence is not an error.
+    for key in OPTIONAL_CONFIG_KEYS:
+        parsed = _to_float(config_payload.get(key))
+        if parsed is not None:
+            parsed_config[key] = parsed
+
     return parsed_config, []
 
 
@@ -265,6 +276,7 @@ def register_delivery_routes(app):
                 metrics.add_metric(name="DeliveryFeeConfigMissing", unit="Count", value=1)
                 return _build_safe_zero_response(distance_km, missing_keys, item_total, distance_source), 200
 
+            max_radius_km = config.get("maxDeliveryRadiusKm")  # None → unlimited
             logger.info(
                 "Global delivery config loaded: "
                 f"platformFee={config['platformFee']}, riderBaseFare={config['riderBaseFare']}, "
@@ -272,8 +284,22 @@ def register_delivery_routes(app):
                 f"riderFreeDeliveryBelowKm={config['riderFreeDeliveryBelowKm']}, "
                 f"riderSurgePricePerKm={config['riderSurgePricePerKm']}, "
                 f"riderSurgeChargeAfterKms={config['riderSurgeChargeAfterKms']}, "
-                f"freeDeliveryAboveThreshold={config['freeDeliveryAboveThreshold']}"
+                f"freeDeliveryAboveThreshold={config['freeDeliveryAboveThreshold']}, "
+                f"maxDeliveryRadiusKm={max_radius_km}"
             )
+
+            # Reject the request early if the delivery location is outside the configured radius.
+            if max_radius_km is not None and distance_km > max_radius_km:
+                logger.info(
+                    f"Delivery radius exceeded: distanceKm={distance_km}, maxDeliveryRadiusKm={max_radius_km}"
+                )
+                metrics.add_metric(name="DeliveryRadiusExceeded", unit="Count", value=1)
+                return {
+                    "outsideDeliveryRadius": True,
+                    "maxDeliveryRadiusKm": max_radius_km,
+                    "distance": round(distance_km, 2),
+                    "distanceSource": distance_source,
+                }, 200
 
             result = calculate_delivery_fee(
                 distance_km=distance_km,
@@ -281,6 +307,9 @@ def register_delivery_routes(app):
                 config=config
             )
             result["distanceSource"] = distance_source
+            result["outsideDeliveryRadius"] = False
+            if max_radius_km is not None:
+                result["maxDeliveryRadiusKm"] = max_radius_km
 
             # Coupon is informational only: discount is reported but deliveryFee is unchanged.
             coupon_applied = False
