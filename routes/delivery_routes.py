@@ -21,8 +21,6 @@ REQUIRED_CONFIG_KEYS = [
     "riderBaseFareApplicableUnderKms",
     "riderFarePerKm",
     "riderFreeDeliveryBelowKm",
-    "riderSurgePricePerKm",
-    "riderSurgeChargeAfterKms",
     "freeDeliveryAboveThreshold",
 ]
 # Optional config keys — absent means feature is disabled / unlimited.
@@ -104,7 +102,6 @@ def _build_safe_zero_response(
         "breakdown": {
             "baseFee": 0.0,
             "distanceFee": 0.0,
-            "surgeFee": 0.0,
             "deliveryFeeDiscount": 0.0,
             "couponDiscount": 0.0,
             "totalDiscount": 0.0,
@@ -127,50 +124,41 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
 
     Fare tiers:
       - distance <= riderBaseFareApplicableUnderKms : flat riderBaseFare (minimum charge)
-      - riderBaseFareApplicableUnderKms < distance <= riderSurgeChargeAfterKms : distance × riderFarePerKm
-      - distance > riderSurgeChargeAfterKms : above + surge km × riderSurgePricePerKm
+      - distance > riderBaseFareApplicableUnderKms : distance × riderFarePerKm
 
-    Customer pays no delivery fee (isFreeDelivery) when there is NO surge and either:
+    Customer pays no delivery fee (isFreeDelivery) when either:
       - itemTotal >= freeDeliveryAboveThreshold, or
       - distanceKm <= riderFreeDeliveryBelowKm (short-trip waiver; set to 0 to disable).
     """
     base_fare_km = config["riderBaseFareApplicableUnderKms"]
-    surge_km_threshold = config["riderSurgeChargeAfterKms"]
 
     if distance_km <= base_fare_km:
         base_fee = config["riderBaseFare"]
         distance_fee = 0.0
-        surge_fee = 0.0
     else:
         base_fee = 0.0
-        normal_km = min(distance_km, surge_km_threshold)
-        surge_km = max(0.0, distance_km - surge_km_threshold)
-        distance_fee = normal_km * config["riderFarePerKm"]
-        surge_fee = surge_km * config["riderSurgePricePerKm"]
+        distance_fee = distance_km * config["riderFarePerKm"]
 
-    calculated_delivery_fee = base_fee + distance_fee + surge_fee
+    calculated_delivery_fee = base_fee + distance_fee
 
-    # Surge zone blocks free delivery
-    surge_active = distance_km > surge_km_threshold
     free_delivery_threshold = config["freeDeliveryAboveThreshold"]
     rider_free_below_km = config["riderFreeDeliveryBelowKm"]
     within_short_trip_waiver = rider_free_below_km > 0 and distance_km <= rider_free_below_km
     meets_cart_threshold = item_total >= free_delivery_threshold
-    is_free_delivery = (not surge_active) and (meets_cart_threshold or within_short_trip_waiver)
+    is_free_delivery = meets_cart_threshold or within_short_trip_waiver
     delivery_fee_discount = calculated_delivery_fee if is_free_delivery else 0.0
     final_delivery_fee = 0.0 if is_free_delivery else calculated_delivery_fee
 
     logger.info(
         "Calculated delivery km split: "
         f"distanceKm={distance_km}, baseFareKm={base_fare_km}, "
-        f"surgeKmThreshold={surge_km_threshold}, surgeActive={surge_active}, "
-        f"baseFee={base_fee}, distanceFee={distance_fee}, surgeFee={surge_fee}"
+        f"baseFee={base_fee}, distanceFee={distance_fee}"
     )
     logger.info(
         "Free delivery evaluation: "
         f"itemTotal={item_total}, freeDeliveryAboveThreshold={free_delivery_threshold}, "
         f"riderFreeDeliveryBelowKm={rider_free_below_km}, withinShortTripWaiver={within_short_trip_waiver}, "
-        f"surgeActive={surge_active}, isFreeDelivery={is_free_delivery}, "
+        f"isFreeDelivery={is_free_delivery}, "
         f"deliveryFeeDiscount={delivery_fee_discount}"
     )
 
@@ -185,7 +173,6 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
         "breakdown": {
             "baseFee": round(base_fee, 2),
             "distanceFee": round(distance_fee, 2),
-            "surgeFee": round(surge_fee, 2),
             "deliveryFeeDiscount": round(delivery_fee_discount, 2),
             "couponDiscount": 0.0,
             "totalDiscount": round(delivery_fee_discount, 2),
@@ -282,8 +269,6 @@ def register_delivery_routes(app):
                 f"platformFee={config['platformFee']}, riderBaseFare={config['riderBaseFare']}, "
                 f"riderFarePerKm={config['riderFarePerKm']}, "
                 f"riderFreeDeliveryBelowKm={config['riderFreeDeliveryBelowKm']}, "
-                f"riderSurgePricePerKm={config['riderSurgePricePerKm']}, "
-                f"riderSurgeChargeAfterKms={config['riderSurgeChargeAfterKms']}, "
                 f"freeDeliveryAboveThreshold={config['freeDeliveryAboveThreshold']}, "
                 f"maxDeliveryRadiusKm={max_radius_km}"
             )

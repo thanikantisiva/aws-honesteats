@@ -186,6 +186,13 @@ def _compute_revenue(order) -> tuple[dict, list]:
     fee_dict = fee_resp if isinstance(fee_resp, dict) else {}
     food_commission = round(total_food_commission, 2)
     platformRevenue["foodCommission"] = food_commission
+
+    distance_km = _safe_float(fee_dict.get("distance"))
+    long_distance_bonus = 15.0 if distance_km > 6 else 0.0
+    logger.info(
+        f"Long distance bonus check: distanceKm={distance_km}, "
+        f"longDistanceBonus={long_distance_bonus}"
+    )
     
     platform_fee = 0.0
     if isinstance(fee_resp, dict):
@@ -263,9 +270,18 @@ def _compute_revenue(order) -> tuple[dict, list]:
         + platformRevenue.get("platformFee", 0)
         - platformRevenue.get("deliveryFeeDiscount", 0)
         - platformRevenue.get("couponDiscount", 0)
-        - platformRevenue.get("itemCouponDiscount", 0),
+        - platformRevenue.get("itemCouponDiscount", 0)
+        - long_distance_bonus,
         2,
     )
+
+    rider_settlement = _safe_float(fee_dict.get("riderSettlementAmount"))
+    riderRevenue = {
+        "finalPayout": round(rider_settlement + long_distance_bonus, 2),
+        "riderSettlementAmount": round(rider_settlement, 2),
+    }
+    if long_distance_bonus > 0:
+        riderRevenue["longDistanceBonus"] = long_distance_bonus
 
     gst_data = fee_dict.get("gst", {})
     gst_on_food = round(float(gst_data.get("gstOnFood", 0) or 0), 2)
@@ -288,9 +304,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
         "couponIsOncePerDay": is_once_per_day,
         "restaurantRevenue": restaurantRevenue,
         "platformRevenue": platformRevenue,
-        "riderRevenue": {
-            "finalPayout": fee_dict.get("riderSettlementAmount", 0)
-        },
+        "riderRevenue": riderRevenue,
         "govtRevenue": {
             "gstOnFood": gst_on_food,
             "gstOnDeliveryFee": gst_on_delivery,

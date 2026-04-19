@@ -37,18 +37,28 @@ class EarningsService:
             raise Exception(f"Failed to get earnings: {str(e)}")
     
     @staticmethod
-    def add_delivery(rider_id: str, order_id: str, delivery_fee: float, tip: float = 0.0):
-        """Add a delivery to rider's earnings"""
+    def add_delivery(
+        rider_id: str,
+        order_id: str,
+        delivery_fee: float,
+        tip: float = 0.0,
+        incentives: float = 0.0,
+    ):
+        """Add a delivery to rider's earnings.
+
+        `incentives` rolls up any per-order bonuses (e.g. longDistanceBonus).
+        Total earnings = delivery_fee + tip + incentives.
+        """
         try:
             today = datetime.utcnow().strftime('%Y-%m-%d')
             earnings = RiderEarnings(
                 rider_id=rider_id,
                 date=f"{today}#{order_id}",
                 total_deliveries=1,
-                total_earnings=delivery_fee + tip,
+                total_earnings=delivery_fee + tip + incentives,
                 delivery_fees=delivery_fee,
                 tips=tip,
-                incentives=0.0,
+                incentives=incentives,
                 order_id=order_id,
                 settled=False,
                 settled_at=None
@@ -106,6 +116,7 @@ class EarningsService:
         total_deliveries = sum(e.total_deliveries for e in earnings_list)
         total_earnings = sum(e.total_earnings for e in earnings_list)
         total_tips = sum(e.tips for e in earnings_list)
+        total_incentives = sum(e.incentives for e in earnings_list)
         
         return {
             "period": "week",
@@ -114,6 +125,7 @@ class EarningsService:
             "totalDeliveries": total_deliveries,
             "totalEarnings": total_earnings,
             "totalTips": total_tips,
+            "totalIncentives": total_incentives,
             "dailyBreakdown": [e.to_dict() for e in earnings_list]
         }
     
@@ -131,6 +143,7 @@ class EarningsService:
         total_deliveries = sum(e.total_deliveries for e in earnings_list)
         total_earnings = sum(e.total_earnings for e in earnings_list)
         total_tips = sum(e.tips for e in earnings_list)
+        total_incentives = sum(e.incentives for e in earnings_list)
         
         return {
             "period": "month",
@@ -139,6 +152,7 @@ class EarningsService:
             "totalDeliveries": total_deliveries,
             "totalEarnings": total_earnings,
             "totalTips": total_tips,
+            "totalIncentives": total_incentives,
             "dailyBreakdown": [e.to_dict() for e in earnings_list]
         }
 

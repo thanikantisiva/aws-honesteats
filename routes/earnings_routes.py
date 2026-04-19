@@ -39,6 +39,7 @@ def register_earnings_routes(app):
                     "totalDeliveries": sum(e.total_deliveries for e in today_earnings),
                     "totalEarnings": sum(e.total_earnings for e in today_earnings),
                     "totalTips": sum(e.tips for e in today_earnings),
+                    "totalIncentives": sum(e.incentives for e in today_earnings),
                     "dailyBreakdown": [e.to_dict() for e in today_earnings]
                 }
             elif period == 'week':

@@ -81,6 +81,20 @@ def _rider_payout_for_earnings(order: Order) -> float:
         return 0.0
 
 
+def _rider_earnings_breakdown(order: Order) -> tuple[float, float]:
+    """Return (deliveryFee, incentives) from order.revenue.riderRevenue.
+
+    deliveryFee = riderSettlementAmount (the pure distance-based fee).
+    incentives  = longDistanceBonus + any future bonus fields.
+    Falls back to treating the full payout as delivery fee when the breakdown is missing.
+    """
+    delivery_fee = _revenue_final_payout(order, "riderRevenue", "riderSettlementAmount")
+    incentives = _revenue_final_payout(order, "riderRevenue", "longDistanceBonus")
+    if delivery_fee or incentives:
+        return delivery_fee, incentives
+    return _rider_payout_for_earnings(order), 0.0
+
+
 def register_rider_order_routes(app):
     """Register rider order management routes"""
     
@@ -453,8 +467,14 @@ def register_rider_order_routes(app):
                 RiderService.set_working_on_order(rider_id, None)
                 
                 # Add to rider's earnings (order is an Order model; payouts live under revenue.*)
-                rider_payout = _rider_payout_for_earnings(order)
-                EarningsService.add_delivery(rider_id, order_id, rider_payout, 0.0)
+                delivery_fee_portion, incentives_portion = _rider_earnings_breakdown(order)
+                EarningsService.add_delivery(
+                    rider_id,
+                    order_id,
+                    delivery_fee_portion,
+                    0.0,
+                    incentives_portion,
+                )
 
                 restaurant_payout = _revenue_final_payout(order, "restaurantRevenue", "finalPayout")
                 RestaurantEarningsService.add_order_earning(
