@@ -69,6 +69,24 @@ def register_coupon_routes(app):
             else:
                 is_once_per_user = bool(is_once_per_user)
 
+            is_once_per_day = body.get('isOncePerDay', False)
+            if isinstance(is_once_per_day, str):
+                is_once_per_day = is_once_per_day.strip().lower() in ('true', '1', 'yes')
+            else:
+                is_once_per_day = bool(is_once_per_day)
+
+            coupon_target_raw = str(body.get('couponTarget') or 'delivery').strip().lower()
+            coupon_target = 'order' if coupon_target_raw == 'order' else 'delivery'
+
+            min_order_value = body.get('minOrderValue')
+            if min_order_value is not None:
+                try:
+                    min_order_value = float(min_order_value)
+                    if min_order_value < 0:
+                        return {"error": "minOrderValue must be non-negative"}, 400
+                except (TypeError, ValueError):
+                    return {"error": "minOrderValue must be a number"}, 400
+
             if not code or not coupon_type or coupon_value is None:
                 return {"error": "couponCode, couponType, couponValue are required"}, 400
             if coupon_restaurant_error:
@@ -115,6 +133,10 @@ def register_coupon_routes(app):
             if normalized_item_id:
                 item['couponItem'] = {'S': normalized_item_id}
             item['isOncePerUser'] = {'BOOL': is_once_per_user}
+            item['isOncePerDay'] = {'BOOL': is_once_per_day}
+            item['couponTarget'] = {'S': coupon_target}
+            if min_order_value is not None:
+                item['minOrderValue'] = {'N': str(min_order_value)}
             if normalized_description:
                 item['description'] = {'S': normalized_description}
 
@@ -251,6 +273,10 @@ def register_coupon_routes(app):
                 start_date = item.get('startDate', {}).get('S')
                 end_date = item.get('endDate', {}).get('S')
                 is_once_per_user = bool(item.get('isOncePerUser', {}).get('BOOL', False))
+                is_once_per_day = bool(item.get('isOncePerDay', {}).get('BOOL', False))
+                coupon_target = str(item.get('couponTarget', {}).get('S') or 'delivery').strip().lower()
+                min_order_value_raw = item.get('minOrderValue', {}).get('N')
+                min_order_value = float(min_order_value_raw) if min_order_value_raw else None
                 coupon_restaurant = str(item.get('couponRestaurant', {}).get('S') or '').strip()
                 issued_by = str(item.get('issuedBy', {}).get('S') or '').strip()
                 description = str(item.get('description', {}).get('S') or '').strip() or None
@@ -267,12 +293,35 @@ def register_coupon_routes(app):
                 if is_once_per_user and mobile_number and coupon_code in used_coupon_codes:
                     continue
 
+                # Skip if already used today (isOncePerDay enforcement)
+                if is_once_per_day and mobile_number:
+                    from datetime import datetime, timezone
+                    today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+                    try:
+                        daily_resp = dynamodb_client.get_item(
+                            TableName=TABLES['USERS'],
+                            Key={
+                                'phone': {'S': mobile_number},
+                                'role': {'S': f'DAILY_COUPONS#{today_str}'},
+                            },
+                            ProjectionExpression='usedToday',
+                        )
+                        used_today = set(daily_resp.get('Item', {}).get('usedToday', {}).get('SS', []))
+                        if coupon_code in used_today:
+                            continue
+                    except Exception as e:
+                        logger.error(f'Error checking daily coupon usage for {mobile_number}: {e}')
+
                 entry: dict = {
                     'couponCode': coupon_code,
                     'couponType': coupon_type,
                     'couponValue': coupon_value,
                     'isOncePerUser': is_once_per_user,
+                    'isOncePerDay': is_once_per_day,
+                    'couponTarget': coupon_target,
                 }
+                if min_order_value is not None:
+                    entry['minOrderValue'] = min_order_value
                 if issued_by:
                     entry['issuedBy'] = issued_by
                 if end_date:

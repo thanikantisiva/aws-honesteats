@@ -4,6 +4,7 @@ Computes the revenue breakdown (food commission, platform revenue, restaurant se
 and writes it to both the Order and Payment records.
 """
 import json
+from datetime import datetime, timezone, timedelta
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from config.pricing import calculate_customer_price_from_hike
@@ -207,6 +208,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
     coupon_discount = 0.0
     issued_by = None
     is_once_per_user = False
+    is_once_per_day = False
 
     if isinstance(fee_resp, dict):
         coupon_applied = bool(fee_resp.get("couponApplied"))
@@ -227,6 +229,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
             if coupon_item:
                 issued_by = _normalize_coupon_issuer(coupon_item.get("issuedBy", {}).get("S"))
                 is_once_per_user = coupon_item.get("isOncePerUser", {}).get("BOOL", False)
+                is_once_per_day = coupon_item.get("isOncePerDay", {}).get("BOOL", False)
         except Exception as e:
             logger.warning(f"Failed to look up coupon {coupon_code}: {e}")
 
@@ -282,6 +285,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
         "couponApplied": coupon_applied,
         "couponIssuedBy": issued_by,
         "couponIsOncePerUser": is_once_per_user,
+        "couponIsOncePerDay": is_once_per_day,
         "restaurantRevenue": restaurantRevenue,
         "platformRevenue": platformRevenue,
         "riderRevenue": {
@@ -376,6 +380,38 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                     except Exception as e:
                         logger.error(
                             f"[orderId={order_id}] Failed to record coupon usage "
+                            f"for {order.customer_phone}: {e}"
+                        )
+
+            if revenue.get("couponApplied") and revenue.get("couponIsOncePerDay") and order.customer_phone:
+                used_code = revenue.get("couponCode")
+                if used_code:
+                    try:
+                        today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+                        midnight_today = datetime.now(timezone.utc).replace(
+                            hour=0, minute=0, second=0, microsecond=0
+                        )
+                        ttl_val = int((midnight_today + timedelta(days=2)).timestamp())
+                        dynamodb_client.update_item(
+                            TableName=TABLES["USERS"],
+                            Key={
+                                "phone": {"S": order.customer_phone},
+                                "role": {"S": f"DAILY_COUPONS#{today_str}"},
+                            },
+                            UpdateExpression="ADD usedToday :c SET #ttl = :ttl",
+                            ExpressionAttributeNames={"#ttl": "ttl"},
+                            ExpressionAttributeValues={
+                                ":c": {"SS": [used_code]},
+                                ":ttl": {"N": str(ttl_val)},
+                            },
+                        )
+                        logger.info(
+                            f"[orderId={order_id}] Recorded daily coupon {used_code} "
+                            f"for {order.customer_phone} on {today_str}"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[orderId={order_id}] Failed to record daily coupon usage "
                             f"for {order.customer_phone}: {e}"
                         )
 

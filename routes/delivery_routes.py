@@ -1,4 +1,5 @@
 """Delivery fee calculation routes"""
+from datetime import datetime, timezone
 from typing import Optional
 
 from aws_lambda_powertools import Logger, Tracer, Metrics
@@ -290,6 +291,9 @@ def register_delivery_routes(app):
                         coupon_type = str(coupon.get('couponType') or '').strip().lower()
                         coupon_value = float(coupon.get('couponValue') or 0.0)
                         is_once_per_user = bool(coupon.get('isOncePerUser'))
+                        is_once_per_day = bool(coupon.get('isOncePerDay'))
+                        coupon_target = str(coupon.get('couponTarget') or 'delivery').strip().lower()
+                        min_order_value = coupon.get('minOrderValue')
                         coupon_issued_by = str(coupon.get('issuedBy') or '').strip().upper()
 
                         if not CouponService.is_coupon_active(coupon.get('startDate'), coupon.get('endDate')):
@@ -331,11 +335,49 @@ def register_delivery_routes(app):
                                 except Exception as e:
                                     logger.error(f"Error checking usedCoupons for {mobile_number}: {e}")
 
+                            if is_once_per_day and mobile_number:
+                                try:
+                                    today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+                                    daily_resp = dynamodb_client.get_item(
+                                        TableName=TABLES['USERS'],
+                                        Key={
+                                            'phone': {'S': mobile_number},
+                                            'role': {'S': f'DAILY_COUPONS#{today_str}'},
+                                        },
+                                        ProjectionExpression='usedToday',
+                                    )
+                                    used_today = set(daily_resp.get('Item', {}).get('usedToday', {}).get('SS', []))
+                                    if coupon_code in used_today:
+                                        logger.info(
+                                            "Coupon already used today by customer: "
+                                            f"couponCode={coupon_code}, phone={mobile_number}"
+                                        )
+                                        coupon_applied = False
+                                        result['couponApplied'] = coupon_applied
+                                        result['couponRejectedReason'] = 'already_used_today'
+                                        return result, 200
+                                except Exception as e:
+                                    logger.error(f"Error checking daily coupon usage for {mobile_number}: {e}")
+
+                            # Enforce minimum order value
+                            if min_order_value and item_total < min_order_value:
+                                logger.info(
+                                    "Coupon rejected: item_total below minOrderValue: "
+                                    f"couponCode={coupon_code}, item_total={item_total}, "
+                                    f"minOrderValue={min_order_value}"
+                                )
+                                coupon_applied = False
+                                result['couponApplied'] = coupon_applied
+                                result['couponRejectedReason'] = 'below_min_order'
+                                result['couponMinOrderValue'] = min_order_value
+                                return result, 200
+
                             delivery_fee = result['deliveryFee']
                             coupon_discount = 0.0
 
                             if coupon_type == 'percentage':
-                                coupon_discount = (delivery_fee * coupon_value) / 100.0
+                                base = item_total if coupon_target == 'order' else delivery_fee
+                                coupon_discount = (base * coupon_value) / 100.0
                             elif coupon_type == 'fixed':
                                 coupon_discount = coupon_value
                             else:
