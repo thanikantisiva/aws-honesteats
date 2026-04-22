@@ -301,7 +301,47 @@ def register_delivery_routes(app):
             coupon_applied = False
             if coupon_code:
                 try:
-                    coupon = CouponService.get_coupon(coupon_code)
+                    # Fetch coupon record + user usage records in one BatchGetItem round trip
+                    # instead of 2-3 sequential GetItem calls.
+                    today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+                    _batch_request = {
+                        TABLES['CONFIG']: {
+                            'Keys': [
+                                {
+                                    'partitionkey': {'S': f'COUPON#{coupon_code}'},
+                                    'sortKey': {'S': 'DETAILS'},
+                                }
+                            ]
+                        }
+                    }
+                    if mobile_number:
+                        _batch_request[TABLES['USERS']] = {
+                            'Keys': [
+                                {'phone': {'S': mobile_number}, 'role': {'S': 'CUSTOMER'}},
+                                {'phone': {'S': mobile_number}, 'role': {'S': f'DAILY_COUPONS#{today_str}'}},
+                            ],
+                            'ProjectionExpression': 'usedCoupons, usedToday',
+                        }
+                    _batch_resp = dynamodb_client.batch_get_item(RequestItems=_batch_request)
+                    if _batch_resp.get('UnprocessedKeys'):
+                        logger.warning(
+                            "BatchGetItem returned UnprocessedKeys during coupon validation: "
+                            f"couponCode={coupon_code}. Coupon will not be applied."
+                        )
+                    _responses = _batch_resp.get('Responses', {})
+
+                    # Parse coupon from batch response
+                    _config_items = _responses.get(TABLES['CONFIG'], [])
+                    coupon = CouponService.parse_coupon_item(coupon_code, _config_items[0] if _config_items else None)
+
+                    # Pre-fetched user records keyed by role (only present when mobile_number was sent)
+                    _user_items = {
+                        i.get('role', {}).get('S', ''): i
+                        for i in _responses.get(TABLES['USERS'], [])
+                    }
+                    _customer_item = _user_items.get('CUSTOMER')
+                    _daily_item = _user_items.get(f'DAILY_COUPONS#{today_str}')
+
                     if coupon:
                         coupon_type = str(coupon.get('couponType') or '').strip().lower()
                         coupon_value = float(coupon.get('couponValue') or 0.0)
@@ -328,51 +368,28 @@ def register_delivery_routes(app):
                             return result, 200
                         else:
                             if is_once_per_user and mobile_number:
-                                try:
-                                    user_resp = dynamodb_client.get_item(
-                                        TableName=TABLES['USERS'],
-                                        Key={
-                                            'phone': {'S': mobile_number},
-                                            'role': {'S': 'CUSTOMER'},
-                                        },
-                                        ProjectionExpression='usedCoupons',
+                                used_set = (_customer_item or {}).get('usedCoupons', {}).get('SS', [])
+                                if coupon_code in used_set:
+                                    logger.info(
+                                        "Coupon already used by customer: "
+                                        f"couponCode={coupon_code}, phone={mobile_number}"
                                     )
-                                    used_set = user_resp.get('Item', {}).get('usedCoupons', {}).get('SS', [])
-                                    if coupon_code in used_set:
-                                        logger.info(
-                                            "Coupon already used by customer: "
-                                            f"couponCode={coupon_code}, phone={mobile_number}"
-                                        )
-                                        coupon_applied = False
-                                        result['couponApplied'] = coupon_applied
-                                        result['couponRejectedReason'] = 'already_used'
-                                        return result, 200
-                                except Exception as e:
-                                    logger.error(f"Error checking usedCoupons for {mobile_number}: {e}")
+                                    coupon_applied = False
+                                    result['couponApplied'] = coupon_applied
+                                    result['couponRejectedReason'] = 'already_used'
+                                    return result, 200
 
                             if is_once_per_day and mobile_number:
-                                try:
-                                    today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-                                    daily_resp = dynamodb_client.get_item(
-                                        TableName=TABLES['USERS'],
-                                        Key={
-                                            'phone': {'S': mobile_number},
-                                            'role': {'S': f'DAILY_COUPONS#{today_str}'},
-                                        },
-                                        ProjectionExpression='usedToday',
+                                used_today = set((_daily_item or {}).get('usedToday', {}).get('SS', []))
+                                if coupon_code in used_today:
+                                    logger.info(
+                                        "Coupon already used today by customer: "
+                                        f"couponCode={coupon_code}, phone={mobile_number}"
                                     )
-                                    used_today = set(daily_resp.get('Item', {}).get('usedToday', {}).get('SS', []))
-                                    if coupon_code in used_today:
-                                        logger.info(
-                                            "Coupon already used today by customer: "
-                                            f"couponCode={coupon_code}, phone={mobile_number}"
-                                        )
-                                        coupon_applied = False
-                                        result['couponApplied'] = coupon_applied
-                                        result['couponRejectedReason'] = 'already_used_today'
-                                        return result, 200
-                                except Exception as e:
-                                    logger.error(f"Error checking daily coupon usage for {mobile_number}: {e}")
+                                    coupon_applied = False
+                                    result['couponApplied'] = coupon_applied
+                                    result['couponRejectedReason'] = 'already_used_today'
+                                    return result, 200
 
                             # Enforce minimum order value
                             if min_order_value and item_total < min_order_value:

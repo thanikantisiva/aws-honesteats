@@ -49,20 +49,8 @@ class CouponService:
         return True
 
     @staticmethod
-    def get_coupon(coupon_code: Optional[str]) -> Optional[dict]:
-        """Fetch a coupon record from the config table."""
-        normalized_code = str(coupon_code or "").strip()
-        if not normalized_code:
-            return None
-
-        response = dynamodb_client.get_item(
-            TableName=TABLES["CONFIG"],
-            Key={
-                "partitionkey": {"S": f"COUPON#{normalized_code}"},
-                "sortKey": {"S": "DETAILS"},
-            }
-        )
-        item = response.get("Item")
+    def parse_coupon_item(normalized_code: str, item: Optional[dict]) -> Optional[dict]:
+        """Parse a raw DynamoDB coupon item (typed format from GetItem/BatchGetItem) into a coupon dict."""
         if not item:
             return None
 
@@ -91,6 +79,22 @@ class CouponService:
             "couponItem": item.get("couponItem", {}).get("S"),
             "description": item.get("description", {}).get("S") or None,
         }
+
+    @staticmethod
+    def get_coupon(coupon_code: Optional[str]) -> Optional[dict]:
+        """Fetch a coupon record from the config table."""
+        normalized_code = str(coupon_code or "").strip()
+        if not normalized_code:
+            return None
+
+        response = dynamodb_client.get_item(
+            TableName=TABLES["CONFIG"],
+            Key={
+                "partitionkey": {"S": f"COUPON#{normalized_code}"},
+                "sortKey": {"S": "DETAILS"},
+            }
+        )
+        return CouponService.parse_coupon_item(normalized_code, response.get("Item"))
 
     @staticmethod
     def is_coupon_valid_for_restaurant(coupon: Optional[dict], restaurant_id: Optional[str]) -> bool:
