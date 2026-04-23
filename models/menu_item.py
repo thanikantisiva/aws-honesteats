@@ -1,6 +1,7 @@
 """Menu item model"""
-from typing import Optional, List, Union
+from typing import Any, Dict, List, Optional, Union
 from config.pricing import calculate_customer_price_from_hike
+from utils.dynamodb_helpers import dynamodb_to_python, python_to_dynamodb
 
 
 class MenuItem:
@@ -17,6 +18,50 @@ class MenuItem:
             return [value]
         return []
 
+    @staticmethod
+    def _normalize_add_on_options(value: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """Normalize add-on options to a safe list format."""
+        if not isinstance(value, list):
+            return []
+
+        normalized: List[Dict[str, Any]] = []
+        for option in value:
+            if not isinstance(option, dict):
+                continue
+            name = str(option.get("name", "")).strip()
+            if not name:
+                continue
+            option_id = str(option.get("optionId", "")).strip()
+            if not option_id:
+                option_id = f"addon_{len(normalized) + 1}"
+            extra_price_raw = option.get("extraPrice", 0)
+            try:
+                extra_price = float(extra_price_raw)
+            except (TypeError, ValueError):
+                extra_price = 0.0
+            normalized.append(
+                {
+                    "optionId": option_id,
+                    "name": name,
+                    "extraPrice": extra_price,
+                }
+            )
+        return normalized
+
+    @staticmethod
+    def _to_python_attr(value: Any) -> Any:
+        """Convert DynamoDB-typed attribute or passthrough plain value."""
+        if isinstance(value, dict) and any(k in value for k in ("S", "N", "BOOL", "NULL", "L", "M")):
+            return dynamodb_to_python(value)
+        return value
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     def __init__(
         self,
         restaurant_id: str,
@@ -29,6 +74,7 @@ class MenuItem:
         is_veg: Optional[bool] = None,
         description: Optional[str] = None,
         image: Optional[Union[str, List[str]]] = None,
+        add_on_options: Optional[List[Dict[str, Any]]] = None,
         sub_category: Optional[str] = None,
         ordered_count: int = 0,
         top_offer_banner: Optional[str] = None,
@@ -45,6 +91,7 @@ class MenuItem:
         self.is_veg = is_veg
         self.description = description
         self.image = self._normalize_image_list(image)
+        self.add_on_options = self._normalize_add_on_options(add_on_options)
         self.ordered_count = int(ordered_count or 0)
         self.top_offer_banner = top_offer_banner
         self.item_offer_coupon_code = item_offer_coupon_code
@@ -87,6 +134,7 @@ class MenuItem:
             result["description"] = self.description
         if self.image:
             result["image"] = self.image
+        result["addOnOptions"] = self.add_on_options
         if self.top_offer_banner:
             result["topOfferBanner"] = self.top_offer_banner
         if self.item_offer_coupon_code:
@@ -98,39 +146,47 @@ class MenuItem:
     @classmethod
     def from_dynamodb_item(cls, item: dict) -> "MenuItem":
         """Create MenuItem from DynamoDB item. Reads only restaurantPrice and hikePercentage; does not use price."""
-        pk = item.get("PK", {}).get("S", "")
-        sk = item.get("SK", {}).get("S", "")
+        pk = cls._to_python_attr(item.get("PK", ""))
+        sk = cls._to_python_attr(item.get("SK", ""))
 
-        restaurant_id = pk.replace("RESTAURANT#", "") if pk.startswith("RESTAURANT#") else ""
-        item_id = sk.replace("ITEM#", "") if sk.startswith("ITEM#") else ""
+        restaurant_id = str(pk).replace("RESTAURANT#", "") if isinstance(pk, str) and pk.startswith("RESTAURANT#") else ""
+        item_id = str(sk).replace("ITEM#", "") if isinstance(sk, str) and sk.startswith("ITEM#") else ""
+        if not item_id:
+            item_id = str(cls._to_python_attr(item.get("itemId", "")) or "")
 
-        restaurant_price = float(item.get("restaurantPrice", {}).get("N", "0"))
-        hike_percentage = float(item.get("hikePercentage", {}).get("N", "0")) if "hikePercentage" in item else 0.0
+        restaurant_price = cls._safe_float(cls._to_python_attr(item.get("restaurantPrice", 0)))
+        hike_percentage = cls._safe_float(cls._to_python_attr(item.get("hikePercentage", 0.0)))
 
-        image = None
-        if "image" in item:
-            image_attr = item.get("image", {})
-            if "L" in image_attr:
-                image = [img.get("S", "") for img in image_attr["L"] if img.get("S")]
-            elif "S" in image_attr:
-                image = image_attr.get("S")
+        image = cls._to_python_attr(item.get("image"))
 
-        top_offer_banner = item.get("topOfferBanner", {}).get("S") if "topOfferBanner" in item else None
-        item_offer_coupon_code = item.get("itemOfferCouponCode", {}).get("S") if "itemOfferCouponCode" in item else None
+        top_offer_banner = cls._to_python_attr(item.get("topOfferBanner"))
+        item_offer_coupon_code = cls._to_python_attr(item.get("itemOfferCouponCode"))
+        add_on_options_raw = cls._to_python_attr(item.get("addOnOptions", []))
+        add_on_options = add_on_options_raw if isinstance(add_on_options_raw, list) else []
+
+        item_name = cls._to_python_attr(item.get("itemName", "")) or ""
+        category = cls._to_python_attr(item.get("category"))
+        sub_category = cls._to_python_attr(item.get("subCategory"))
+        is_available_attr = cls._to_python_attr(item.get("isAvailable"))
+        is_available = True if is_available_attr is None else bool(is_available_attr)
+        is_veg = cls._to_python_attr(item.get("isVeg"))
+        description = cls._to_python_attr(item.get("description"))
+        ordered_count = int(cls._safe_float(cls._to_python_attr(item.get("orderedCount", 0)), 0))
 
         return cls(
             restaurant_id=restaurant_id,
             item_id=item_id,
-            item_name=item.get("itemName", {}).get("S", ""),
+            item_name=item_name,
             restaurant_price=restaurant_price,
             hike_percentage=hike_percentage,
-            category=item.get("category", {}).get("S") if "category" in item else None,
-            sub_category=item.get("subCategory", {}).get("S") if "subCategory" in item else None,
-            is_available=item.get("isAvailable", {}).get("BOOL", True) if "isAvailable" in item else True,
-            is_veg=item.get("isVeg", {}).get("BOOL") if "isVeg" in item else None,
-            description=item.get("description", {}).get("S") if "description" in item else None,
+            category=category,
+            sub_category=sub_category,
+            is_available=is_available,
+            is_veg=is_veg,
+            description=description,
             image=image,
-            ordered_count=int(float(item.get("orderedCount", {}).get("N", "0"))) if "orderedCount" in item else 0,
+            add_on_options=add_on_options,
+            ordered_count=ordered_count,
             top_offer_banner=top_offer_banner,
             item_offer_coupon_code=item_offer_coupon_code
         )
@@ -156,6 +212,8 @@ class MenuItem:
             item["description"] = {"S": self.description}
         if self.image:
             item["image"] = {"L": [{"S": img} for img in self.image]}
+        if self.add_on_options:
+            item["addOnOptions"] = python_to_dynamodb(self.add_on_options)
         item["orderedCount"] = {"N": str(self.ordered_count)}
         if self.top_offer_banner:
             item["topOfferBanner"] = {"S": self.top_offer_banner}

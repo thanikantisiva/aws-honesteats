@@ -3,6 +3,7 @@ from typing import List, Optional
 from botocore.exceptions import ClientError
 from models.menu_item import MenuItem
 from utils.dynamodb import dynamodb_client, TABLES
+from utils.dynamodb_helpers import python_to_dynamodb
 from aws_lambda_powertools import Logger
 
 logger = Logger()
@@ -132,6 +133,10 @@ class MenuService:
                 expression_attribute_values[':image'] = {
                     'L': [{'S': img} for img in normalized_images]
                 }
+
+            if 'addOnOptions' in updates:
+                update_expressions.append('addOnOptions = :addOnOptions')
+                expression_attribute_values[':addOnOptions'] = python_to_dynamodb(updates['addOnOptions'])
 
             if 'topOfferBanner' in updates:
                 expression_attribute_names['#topOfferBanner'] = 'topOfferBanner'

@@ -139,6 +139,8 @@ def _compute_revenue(order) -> tuple[dict, list]:
         f"globalDefault={global_default_commission}"
     )
 
+    total_add_on_value = 0.0
+
     for item in (order.items or []):
         item_copy = dict(item)
         item_id = item.get("itemId") or item.get("item_id") or ""
@@ -147,13 +149,14 @@ def _compute_revenue(order) -> tuple[dict, list]:
         except (TypeError, ValueError):
             quantity = 1
         customer_price = _safe_float(item.get("price"))
+        add_on_total = _safe_float(item.get("addOnTotal"))
         stored_discount_amount = max(_safe_float(item.get("itemDiscountAmount")), 0.0)
         gross_price = _get_gross_item_price(item, customer_price, stored_discount_amount)
         item_discount_amount = round(max(gross_price - customer_price, 0.0), 2)
         coupon_issued_by = _normalize_coupon_issuer(item.get("couponIssuedBy"))
 
         commission_pct = _resolve_commission_pct(item_id, restaurant_config, global_default_commission)
-        # Per-unit commission (4 dp), then line total
+        # Commission applies to base price only; add-on revenue goes 100% to restaurant
         item_commission_per_unit = round(customer_price * commission_pct / 100.0, 4)
         item_commission = item_commission_per_unit * quantity
 
@@ -166,8 +169,9 @@ def _compute_revenue(order) -> tuple[dict, list]:
         enriched_items.append(item_copy)
 
         total_food_commission += item_commission
-        total_customer_paid += customer_price * quantity
-        gross_food_value += gross_price * quantity
+        total_customer_paid += (customer_price + add_on_total) * quantity
+        gross_food_value += (gross_price + add_on_total) * quantity
+        total_add_on_value += add_on_total * quantity
         total_item_coupon_discount += item_discount_amount * quantity
 
         if coupon_issued_by == "YUMDUDE":
@@ -176,7 +180,8 @@ def _compute_revenue(order) -> tuple[dict, list]:
             restaurant_item_coupon_discount += item_discount_amount * quantity
 
         logger.info(
-            f"Item {item_id}: grossPrice={gross_price}, customerPrice={customer_price}, qty={quantity}, "
+            f"Item {item_id}: grossPrice={gross_price}, customerPrice={customer_price}, "
+            f"addOnTotal={add_on_total}, qty={quantity}, "
             f"itemDiscountAmount={item_discount_amount}, couponIssuedBy={coupon_issued_by}, "
             f"itemCommissionPercentage={item_copy['itemCommissionPercentage']}, "
             f"itemCommissionAmount={item_copy['itemCommissionAmount']}"
@@ -293,6 +298,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
         "totalCustomerPaid": round(total_customer_paid, 2),
         "customerPaidFoodValue": round(total_customer_paid, 2),
         "grossFoodValue": round(gross_food_value, 2),
+        "totalAddOnValue": round(total_add_on_value, 2),
         "itemCouponDiscountTotal": round(total_item_coupon_discount, 2),
         "itemCouponDiscountByPlatform": round(platform_item_coupon_discount, 2),
         "itemCouponDiscountByRestaurant": round(restaurant_item_coupon_discount, 2),

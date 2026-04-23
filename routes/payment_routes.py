@@ -154,6 +154,12 @@ def register_payment_routes(app):
                     coupon_issued_by = None
                     item_discount_amount = 0.0
                 
+                add_on_total = 0.0
+                try:
+                    add_on_total = float(item.get('addOnTotal', 0) or 0)
+                except (TypeError, ValueError):
+                    add_on_total = 0.0
+
                 enriched_items.append({
                     'itemId': item_id,
                     'name': item.get('name'),
@@ -164,9 +170,11 @@ def register_payment_routes(app):
                     'itemOfferCouponCode': item_offer_coupon_code,
                     'couponIssuedBy': coupon_issued_by,
                     'itemDiscountAmount': item_discount_amount,
+                    'addOns': item.get('addOns', []),
+                    'addOnTotal': add_on_total,
                 })
                 
-                total_customer_amount += customer_price * quantity
+                total_customer_amount += (customer_price + add_on_total) * quantity
             
             # Fetch restaurant location details
             pickup_address = None

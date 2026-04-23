@@ -140,6 +140,7 @@ def register_menu_routes(app):
                 is_available=body.get('isAvailable', True),
                 description=body.get('description'),
                 image=body.get('image'),
+                add_on_options=body.get('addOnOptions', []),
                 top_offer_banner=top_offer_banner,
                 item_offer_coupon_code=item_offer_coupon_code
             )
@@ -186,6 +187,8 @@ def register_menu_routes(app):
                 updates['description'] = body['description']
             if 'image' in body:
                 updates['image'] = body['image']
+            if 'addOnOptions' in body:
+                updates['addOnOptions'] = body['addOnOptions']
             if 'topOfferBanner' in body:
                 top_offer_banner, banner_error = _normalize_top_offer_banner(body.get('topOfferBanner'))
                 if banner_error:
