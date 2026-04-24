@@ -344,6 +344,34 @@ def register_restaurant_routes(app):
         except Exception as e:
             logger.error("Error clearing restaurant FCM token", exc_info=True)
             return {"error": "Failed to clear restaurant FCM token", "message": str(e)}, 500
+
+    @app.get("/api/v1/restaurants/<restaurant_id>/fcm-token-status")
+    @tracer.capture_method
+    def get_restaurant_fcm_token_status(restaurant_id: str):
+        """Check whether the restaurant already has an active FCM token registered.
+        Optionally accepts X-Device-FCM-Token header to also check if this specific
+        device's token is still the active one (used to detect displacement)."""
+        try:
+            _, auth_error = _authorize_restaurant_token(restaurant_id)
+            if auth_error:
+                return auth_error
+
+            restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+            if not restaurant:
+                return {"error": "Restaurant not found"}, 404
+
+            has_active_token = bool(restaurant.fcm_token)
+            response: dict = {"hasActiveToken": has_active_token}
+
+            # If the caller sends its own FCM token, tell it whether it's still active
+            device_token = (app.current_event.get_header_value('X-Device-FCM-Token') or '').strip()
+            if device_token:
+                response['isThisDeviceActive'] = (restaurant.fcm_token == device_token)
+
+            return response, 200
+        except Exception as e:
+            logger.error("Error fetching restaurant FCM token status", exc_info=True)
+            return {"error": "Failed to fetch FCM token status", "message": str(e)}, 500
     
     @app.put("/api/v1/restaurants/<restaurant_id>")
     @tracer.capture_method

@@ -159,11 +159,12 @@ def _generate_xlsx(restaurant_id: str, restaurant_name: str, settlement_id: str,
     ws.row_dimensions[sr].height = 24
 
     summary_rows = [
-        ("Total Orders",                    str(summary['totalOrders'])),
-        ("Total Menu Order Value",           f"\u20b9{summary['totalGMV']:,.2f}"),
-        ("Platform Commission",             f"\u20b9{summary['totalCommission']:,.2f}"),
-        ("Coupon Deductions (Your Share)",  f"\u20b9{summary['totalCouponDeduction']:,.2f}"),
-        ("Net Settlement Amount",           f"\u20b9{summary['netPayable']:,.2f}"),
+        ("Total Orders",                           str(summary['totalOrders'])),
+        ("Total Gross Menu Value",                 f"\u20b9{summary['totalGMV']:,.2f}"),
+        ("Platform Commission",                    f"\u20b9{summary['totalCommission']:,.2f}"),
+        ("Your Coupon Discount (restaurant-issued)", f"\u20b9{summary['totalCouponDeduction']:,.2f}"),
+        ("Your Net Settlement",                    f"\u20b9{summary['netPayable']:,.2f}"),
+        ("Earnings Formula",                       "Gross Menu Value \u2212 Platform Commission \u2212 Your Coupon Discount = Net Settlement"),
     ]
     for offset, (label, value) in enumerate(summary_rows, start=sr + 1):
         is_net = label.startswith("Net")
@@ -180,17 +181,17 @@ def _generate_xlsx(restaurant_id: str, restaurant_name: str, settlement_id: str,
     # ── Orders table ─────────────────────────────────────────────────────────
     tr = sr + len(summary_rows) + 2  # one blank row before table
 
-    headers    = ["#", "Order ID", "Date & Time", "Menu Order Value (₹)",
-                  "Commission (₹)", "Coupon Adj (₹)", "Net Payout (₹)", "Payment"]
-    col_widths = [5, 20, 22, 20, 16, 16, 16, 14]
+    headers    = ["#", "Order ID", "Date & Time", "Gross Menu Value (₹)",
+                  "Platform Commission (₹)", "Your Coupon Discount (₹)", "Your Net Payout (₹)", "Payment"]
+    col_widths = [5, 22, 22, 22, 24, 26, 22, 14]
 
     for ci, (h, w) in enumerate(zip(headers, col_widths), start=1):
         cell = ws.cell(row=tr, column=ci, value=h)
         cell.font  = Font(bold=True, color=WHITE, name="Calibri", size=10)
         cell.fill  = fill(RED); cell.border = border
-        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         ws.column_dimensions[get_column_letter(ci)].width = w
-    ws.row_dimensions[tr].height = 22
+    ws.row_dimensions[tr].height = 36  # taller header to accommodate wrapped text
 
     for row_num, row in enumerate(rows, start=1):
         r        = tr + row_num
