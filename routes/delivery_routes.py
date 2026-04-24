@@ -251,7 +251,8 @@ def register_delivery_routes(app):
             logger.info(
                 "Delivery fee request received: "
                 f"distanceKm={distance_km}, distanceSource={distance_source}, itemTotal={item_total}, "
-                f"itemCount={item_count}, couponCode={coupon_code}, restaurantId={restaurant_id}"
+                f"itemCount={item_count}, couponCode={coupon_code}, restaurantId={restaurant_id}, "
+                f"mobileNumber={mobile_number!r}, mobileNumberPresent={bool(mobile_number)}"
             )
 
             config, missing_keys = _fetch_global_delivery_config()
@@ -315,18 +316,30 @@ def register_delivery_routes(app):
                         }
                     }
                     if mobile_number:
+                        # NOTE: `role` MUST be in the projection — DynamoDB's ProjectionExpression
+                        # does NOT auto-include primary key attributes, and we key the response by
+                        # `role` below to distinguish the CUSTOMER row from the DAILY_COUPONS row.
+                        # `role` is a DynamoDB reserved word, so it must be aliased.
                         _batch_request[TABLES['USERS']] = {
                             'Keys': [
                                 {'phone': {'S': mobile_number}, 'role': {'S': 'CUSTOMER'}},
                                 {'phone': {'S': mobile_number}, 'role': {'S': f'DAILY_COUPONS#{today_str}'}},
                             ],
-                            'ProjectionExpression': 'usedCoupons, usedToday',
+                            'ProjectionExpression': '#r, usedCoupons, usedToday',
+                            'ExpressionAttributeNames': {'#r': 'role'},
                         }
+                    logger.info(
+                        "Coupon BatchGetItem request: "
+                        f"couponCode={coupon_code}, mobileNumber={mobile_number!r}, "
+                        f"todayStr={today_str}, "
+                        f"configTable={TABLES['CONFIG']}, usersTable={TABLES['USERS']}, "
+                        f"usersKeyCount={len(_batch_request.get(TABLES['USERS'], {}).get('Keys', []))}"
+                    )
                     _batch_resp = dynamodb_client.batch_get_item(RequestItems=_batch_request)
                     if _batch_resp.get('UnprocessedKeys'):
                         logger.warning(
                             "BatchGetItem returned UnprocessedKeys during coupon validation: "
-                            f"couponCode={coupon_code}. Coupon will not be applied."
+                            f"couponCode={coupon_code}, unprocessedKeys={_batch_resp.get('UnprocessedKeys')!r}"
                         )
                     _responses = _batch_resp.get('Responses', {})
 
@@ -335,12 +348,27 @@ def register_delivery_routes(app):
                     coupon = CouponService.parse_coupon_item(coupon_code, _config_items[0] if _config_items else None)
 
                     # Pre-fetched user records keyed by role (only present when mobile_number was sent)
+                    _users_response_items = _responses.get(TABLES['USERS'], [])
+                    logger.info(
+                        "Coupon BatchGetItem response (USERS): "
+                        f"couponCode={coupon_code}, returnedItemCount={len(_users_response_items)}, "
+                        f"itemAttributeKeys={[sorted(it.keys()) for it in _users_response_items]}, "
+                        f"rawItems={_users_response_items!r}"
+                    )
                     _user_items = {
                         i.get('role', {}).get('S', ''): i
-                        for i in _responses.get(TABLES['USERS'], [])
+                        for i in _users_response_items
                     }
                     _customer_item = _user_items.get('CUSTOMER')
                     _daily_item = _user_items.get(f'DAILY_COUPONS#{today_str}')
+                    logger.info(
+                        "Coupon user-row bucketing: "
+                        f"couponCode={coupon_code}, bucketedRoleKeys={list(_user_items.keys())}, "
+                        f"customerItemFound={_customer_item is not None}, "
+                        f"dailyItemFound={_daily_item is not None}, "
+                        f"customerItemKeys={sorted(_customer_item.keys()) if _customer_item else None}, "
+                        f"dailyItemKeys={sorted(_daily_item.keys()) if _daily_item else None}"
+                    )
 
                     if coupon:
                         coupon_type = str(coupon.get('couponType') or '').strip().lower()
@@ -350,6 +378,14 @@ def register_delivery_routes(app):
                         coupon_target = str(coupon.get('couponTarget') or 'delivery').strip().lower()
                         min_order_value = coupon.get('minOrderValue')
                         coupon_issued_by = str(coupon.get('issuedBy') or '').strip().upper()
+                        logger.info(
+                            "Coupon parsed from config: "
+                            f"couponCode={coupon_code}, couponType={coupon_type}, couponValue={coupon_value}, "
+                            f"isOncePerUser={is_once_per_user}, isOncePerDay={is_once_per_day}, "
+                            f"couponTarget={coupon_target}, minOrderValue={min_order_value}, "
+                            f"issuedBy={coupon_issued_by}, "
+                            f"couponRestaurant={coupon.get('couponRestaurant')!r}"
+                        )
 
                         if not CouponService.is_coupon_active(coupon.get('startDate'), coupon.get('endDate')):
                             logger.info(
@@ -369,6 +405,14 @@ def register_delivery_routes(app):
                         else:
                             if is_once_per_user and mobile_number:
                                 used_set = (_customer_item or {}).get('usedCoupons', {}).get('SS', [])
+                                logger.info(
+                                    "Once-per-user check evaluating: "
+                                    f"couponCode={coupon_code}, phone={mobile_number}, "
+                                    f"customerItemPresent={_customer_item is not None}, "
+                                    f"usedCouponsRaw={(_customer_item or {}).get('usedCoupons')!r}, "
+                                    f"usedSet={used_set!r}, "
+                                    f"couponInUsedSet={coupon_code in used_set}"
+                                )
                                 if coupon_code in used_set:
                                     logger.info(
                                         "Coupon already used by customer: "
@@ -378,9 +422,23 @@ def register_delivery_routes(app):
                                     result['couponApplied'] = coupon_applied
                                     result['couponRejectedReason'] = 'already_used'
                                     return result, 200
+                            else:
+                                logger.info(
+                                    "Once-per-user check skipped: "
+                                    f"couponCode={coupon_code}, isOncePerUser={is_once_per_user}, "
+                                    f"mobileNumberPresent={bool(mobile_number)}"
+                                )
 
                             if is_once_per_day and mobile_number:
                                 used_today = set((_daily_item or {}).get('usedToday', {}).get('SS', []))
+                                logger.info(
+                                    "Once-per-day check evaluating: "
+                                    f"couponCode={coupon_code}, phone={mobile_number}, "
+                                    f"dailyItemPresent={_daily_item is not None}, "
+                                    f"usedTodayRaw={(_daily_item or {}).get('usedToday')!r}, "
+                                    f"usedTodaySet={used_today!r}, "
+                                    f"couponInUsedToday={coupon_code in used_today}"
+                                )
                                 if coupon_code in used_today:
                                     logger.info(
                                         "Coupon already used today by customer: "
@@ -390,6 +448,12 @@ def register_delivery_routes(app):
                                     result['couponApplied'] = coupon_applied
                                     result['couponRejectedReason'] = 'already_used_today'
                                     return result, 200
+                            else:
+                                logger.info(
+                                    "Once-per-day check skipped: "
+                                    f"couponCode={coupon_code}, isOncePerDay={is_once_per_day}, "
+                                    f"mobileNumberPresent={bool(mobile_number)}"
+                                )
 
                             # Enforce minimum order value
                             if min_order_value and item_total < min_order_value:
