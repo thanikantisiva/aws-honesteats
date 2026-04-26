@@ -159,7 +159,7 @@ class OrderService:
             return orders[:limit]
         except ClientError as e:
             raise Exception(f"Failed to list rider orders: {str(e)}")
-    
+
     @staticmethod
     def get_orders_by_rider(rider_id: str, status: str = None, limit: int = 20) -> List[Order]:
         """Alias for list_orders_by_rider for backward compatibility"""

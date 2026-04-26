@@ -1387,6 +1387,10 @@ Resources:
       AttributeDefinitions:
         - AttributeName: orderId
           AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: createdAtIso
+          AttributeType: S
         - AttributeName: customerPhone
           AttributeType: S
         - AttributeName: customerStatusCreatedAt
@@ -1426,6 +1430,14 @@ Resources:
             - AttributeName: riderId
               KeyType: HASH
             - AttributeName: riderStatusCreatedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: status-createdAtIso-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: createdAtIso
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
