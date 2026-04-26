@@ -165,6 +165,7 @@ def register_payment_routes(app):
                     'name': item.get('name'),
                     'quantity': quantity,
                     'price': customer_price,
+                    'isVeg': menu_item.is_veg,
                     'restaurantPrice': restaurant_price,
                     'hikePercentage': hike_percentage,
                     'itemOfferCouponCode': item_offer_coupon_code,
