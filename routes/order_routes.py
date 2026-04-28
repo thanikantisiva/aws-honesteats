@@ -230,6 +230,8 @@ def register_order_routes(app):
             body = app.current_event.json_body
             status = body.get('status')
             rider_id = body.get('riderId')
+            preparation_time_raw = body.get('preparationTime')
+            preparation_time = int(preparation_time_raw) if preparation_time_raw is not None else None
             
             if not status:
                 return {"error": "Status is required"}, 400
@@ -239,9 +241,9 @@ def register_order_routes(app):
             if status not in valid_statuses:
                 return {"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}, 400
             
-            logger.info(f"[orderId={order_id}] Updating order status to {status} riderId={rider_id}")
+            logger.info(f"[orderId={order_id}] Updating order status to {status} riderId={rider_id} preparationTime={preparation_time}")
             
-            updated_order = OrderService.update_order_status(order_id, status, rider_id)
+            updated_order = OrderService.update_order_status(order_id, status, rider_id, preparation_time)
             metrics.add_metric(name="OrderStatusUpdated", unit="Count", value=1)
             
             return updated_order.to_dict(), 200

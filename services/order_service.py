@@ -257,7 +257,7 @@ class OrderService:
             raise Exception(f"Failed to update order: {str(e)}")
     
     @staticmethod
-    def update_order_status(order_id: str, status: str, rider_id: Optional[str] = None) -> Order:
+    def update_order_status(order_id: str, status: str, rider_id: Optional[str] = None, preparation_time: Optional[int] = None) -> Order:
         """Update order status and regenerate composite keys"""
         try:
             logger.info(f"[orderId={order_id}] update_order_status called status={status} riderId={rider_id}")
@@ -292,6 +292,10 @@ class OrderService:
                 # Update composite key for existing rider
                 update_expressions.append('riderStatusCreatedAt = :risc')
                 expression_attribute_values[':risc'] = {'S': f'{status}#{created_at}'}
+
+            if preparation_time is not None:
+                update_expressions.append('preparationTime = :prepTime')
+                expression_attribute_values[':prepTime'] = {'N': str(preparation_time)}
             
             dynamodb_client.update_item(
                 TableName=TABLES['ORDERS'],

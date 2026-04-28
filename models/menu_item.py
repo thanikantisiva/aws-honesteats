@@ -78,7 +78,8 @@ class MenuItem:
         sub_category: Optional[str] = None,
         ordered_count: int = 0,
         top_offer_banner: Optional[str] = None,
-        item_offer_coupon_code: Optional[str] = None
+        item_offer_coupon_code: Optional[str] = None,
+        shift_timings: Optional[List[Dict[str, Any]]] = None
     ):
         self.restaurant_id = restaurant_id
         self.item_id = item_id
@@ -95,6 +96,7 @@ class MenuItem:
         self.ordered_count = int(ordered_count or 0)
         self.top_offer_banner = top_offer_banner
         self.item_offer_coupon_code = item_offer_coupon_code
+        self.shift_timings = shift_timings or []
 
     @property
     def price(self) -> float:
@@ -139,6 +141,8 @@ class MenuItem:
             result["topOfferBanner"] = self.top_offer_banner
         if self.item_offer_coupon_code:
             result["itemOfferCouponCode"] = self.item_offer_coupon_code
+        if self.shift_timings:
+            result["shiftTimings"] = self.shift_timings
         if original_price is not None and float(original_price) > resolved_price:
             result["originalPrice"] = float(original_price)
         return result
@@ -188,7 +192,8 @@ class MenuItem:
             add_on_options=add_on_options,
             ordered_count=ordered_count,
             top_offer_banner=top_offer_banner,
-            item_offer_coupon_code=item_offer_coupon_code
+            item_offer_coupon_code=item_offer_coupon_code,
+            shift_timings=cls._to_python_attr(item.get("shiftTimings")) if "shiftTimings" in item else []
         )
 
     def to_dynamodb_item(self) -> dict:
@@ -219,4 +224,6 @@ class MenuItem:
             item["topOfferBanner"] = {"S": self.top_offer_banner}
         if self.item_offer_coupon_code:
             item["itemOfferCouponCode"] = {"S": self.item_offer_coupon_code}
+        if self.shift_timings:
+            item["shiftTimings"] = python_to_dynamodb(self.shift_timings)
         return item

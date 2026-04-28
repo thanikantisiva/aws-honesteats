@@ -6,6 +6,7 @@ from services.restaurant_service import RestaurantService
 from models.menu_item import MenuItem
 from utils.dynamodb import generate_id, dynamodb_client, TABLES
 from config.pricing import get_platform_commission
+from utils.shift_utils import validate_shift_timings, is_in_shift, get_next_shift_opens_at
 
 logger = Logger()
 tracer = Tracer()
@@ -36,12 +37,19 @@ def register_menu_routes(app):
         normalized = str(value).strip()
         return normalized or None
 
-    def _serialize_menu_item(menu_item: MenuItem) -> dict:
+    def _serialize_menu_item(menu_item: MenuItem, restaurant_timezone: str = "Asia/Kolkata") -> dict:
         pricing = CouponService.get_menu_item_prices(menu_item)
-        return menu_item.to_dict(
+        result = menu_item.to_dict(
             price=pricing["price"],
             original_price=pricing.get("originalPrice"),
         )
+        # Inject shift availability alongside the manual isAvailable flag
+        shift_available = is_in_shift(menu_item.shift_timings, restaurant_timezone)
+        result["shiftAvailable"] = shift_available
+        result["effectivelyAvailable"] = menu_item.is_available and shift_available
+        if not shift_available:
+            result["nextAvailableAt"] = get_next_shift_opens_at(menu_item.shift_timings, restaurant_timezone)
+        return result
 
     @app.get("/api/v1/restaurants/<restaurant_id>/menu/changed")
     @tracer.capture_method
@@ -76,11 +84,14 @@ def register_menu_routes(app):
             menu_items = MenuService.list_menu_items(restaurant_id)
             # Exclude items without itemId
             valid_items = [item for item in menu_items if item.item_id]
+            # Resolve restaurant timezone once for all items
+            restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+            tz = restaurant.timezone if restaurant else "Asia/Kolkata"
             metrics.add_metric(name="MenuItemsListed", unit="Count", value=1)
             
             return {
                 "restaurantId": restaurant_id,
-                "items": [_serialize_menu_item(item) for item in valid_items],
+                "items": [_serialize_menu_item(item, tz) for item in valid_items],
                 "total": len(valid_items)
             }, 200
         except Exception as e:
@@ -99,7 +110,9 @@ def register_menu_routes(app):
                 return {"error": "Menu item not found"}, 404
             
             metrics.add_metric(name="MenuItemRetrieved", unit="Count", value=1)
-            return _serialize_menu_item(menu_item), 200
+            restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+            tz = restaurant.timezone if restaurant else "Asia/Kolkata"
+            return _serialize_menu_item(menu_item, tz), 200
         except Exception as e:
             logger.error("Error getting menu item", exc_info=True)
             return {"error": "Failed to get menu item", "message": str(e)}, 500
@@ -142,7 +155,8 @@ def register_menu_routes(app):
                 image=body.get('image'),
                 add_on_options=body.get('addOnOptions', []),
                 top_offer_banner=top_offer_banner,
-                item_offer_coupon_code=item_offer_coupon_code
+                item_offer_coupon_code=item_offer_coupon_code,
+                shift_timings=body.get('shiftTimings') or []
             )
             
             created_item = MenuService.create_menu_item(menu_item)
@@ -196,6 +210,15 @@ def register_menu_routes(app):
                 updates['topOfferBanner'] = top_offer_banner
             if 'itemOfferCouponCode' in body:
                 updates['itemOfferCouponCode'] = _normalize_item_offer_coupon_code(body.get('itemOfferCouponCode'))
+            if 'shiftTimings' in body:
+                raw_shifts = body.get('shiftTimings')
+                if raw_shifts is None or raw_shifts == []:
+                    updates['shiftTimings'] = []
+                else:
+                    err = validate_shift_timings(raw_shifts)
+                    if err:
+                        return {"error": err}, 400
+                    updates['shiftTimings'] = raw_shifts
             
             if not updates:
                 return {"error": "No fields to update"}, 400
@@ -223,6 +246,54 @@ def register_menu_routes(app):
         except Exception as e:
             logger.error("Error deleting menu item", exc_info=True)
             return {"error": "Failed to delete menu item", "message": str(e)}, 500
+
+    @app.post("/api/v1/restaurants/<restaurant_id>/menu/category-shifts")
+    @tracer.capture_method
+    def bulk_category_shift_timings(restaurant_id: str):
+        """Apply shiftTimings to all items in a given category in bulk.
+
+        Body: { "category": "<string>", "shiftTimings": [...] }
+        Pass shiftTimings as [] or null to clear restrictions for that category.
+        """
+        try:
+            body = app.current_event.json_body or {}
+            category = str(body.get('category') or '').strip()
+            if not category:
+                return {"error": "category is required"}, 400
+
+            raw_shifts = body.get('shiftTimings')
+            shift_timings: list = []
+            if raw_shifts:
+                err = validate_shift_timings(raw_shifts)
+                if err:
+                    return {"error": err}, 400
+                shift_timings = raw_shifts
+
+            menu_items = MenuService.list_menu_items(restaurant_id)
+            category_lower = category.lower()
+            category_items = [item for item in menu_items if (item.category or '').lower() == category_lower]
+
+            if not category_items:
+                return {"error": f"No items found for category '{category}'"}, 404
+
+            updated = 0
+            for item in category_items:
+                try:
+                    MenuService.update_menu_item(restaurant_id, item.item_id, {"shiftTimings": shift_timings})
+                    updated += 1
+                except Exception:
+                    logger.warning(f"Failed to update shiftTimings for item {item.item_id}", exc_info=True)
+
+            metrics.add_metric(name="CategoryShiftsApplied", unit="Count", value=1)
+            return {
+                "restaurantId": restaurant_id,
+                "category": category,
+                "updatedCount": updated,
+                "shiftTimings": shift_timings
+            }, 200
+        except Exception as e:
+            logger.error("Error applying category shift timings", exc_info=True)
+            return {"error": "Failed to apply category shift timings", "message": str(e)}, 500
 
     @app.post("/api/v1/restaurants/<restaurant_id>/menu/price-hike")
     @tracer.capture_method

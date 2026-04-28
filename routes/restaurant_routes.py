@@ -7,6 +7,7 @@ from utils.geohash import encode as geohash_encode
 from middleware.jwt_auth import generate_token, verify_token
 from utils.ssm import get_secret
 from utils.datetime_ist import now_ist_iso
+from utils.shift_utils import validate_shift_timings, is_in_shift, get_shift_label, get_next_shift_opens_at
 import jwt
 import re
 import secrets
@@ -159,11 +160,25 @@ def register_restaurant_routes(app):
                 return {"error": "Restaurant not found"}, 404
 
             metrics.add_metric(name="RestaurantStatusRetrieved", unit="Count", value=1)
+            shift_open = is_in_shift(restaurant.shift_timings, restaurant.timezone)
+            effectively_open = restaurant.is_open and shift_open
+            closed_reason = None
+            if not restaurant.is_open:
+                closed_reason = "MANUALLY_CLOSED"
+            elif not shift_open:
+                closed_reason = "SHIFT_CLOSED"
             return {
                 "restaurantId": restaurant_id,
                 "isOpen": restaurant.is_open,
+                "shiftOpen": shift_open,
+                "effectivelyOpen": effectively_open,
+                "closedReason": closed_reason,
+                "currentShiftLabel": get_shift_label(restaurant.shift_timings, restaurant.timezone),
+                "nextOpensAt": get_next_shift_opens_at(restaurant.shift_timings, restaurant.timezone) if not shift_open else None,
                 "closesAt": restaurant.closes_at,
-                "opensAt": restaurant.opens_at
+                "opensAt": restaurant.opens_at,
+                "shiftTimings": restaurant.shift_timings,
+                "timezone": restaurant.timezone
             }, 200
         except Exception as e:
             logger.error("Error getting restaurant status", exc_info=True)
@@ -417,6 +432,21 @@ def register_restaurant_routes(app):
                 if prep_time_error:
                     return prep_time_error
                 updates['avgPreparationTime'] = avg_preparation_time
+            if 'shiftTimings' in body:
+                raw_shifts = body.get('shiftTimings')
+                # Allow null/empty to clear shifts
+                if raw_shifts is None or raw_shifts == []:
+                    updates['shiftTimings'] = []
+                else:
+                    err = validate_shift_timings(raw_shifts)
+                    if err:
+                        return {"error": err}, 400
+                    updates['shiftTimings'] = raw_shifts
+            if 'timezone' in body:
+                tz = str(body.get('timezone') or '').strip()
+                if not tz:
+                    return {"error": "timezone must be a non-empty IANA string"}, 400
+                updates['timezone'] = tz
             
             if not updates:
                 return {"error": "No fields to update"}, 400

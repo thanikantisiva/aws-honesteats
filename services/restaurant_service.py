@@ -6,6 +6,7 @@ import requests
 from botocore.exceptions import ClientError
 from models.restaurant import Restaurant
 from utils.dynamodb import dynamodb_client, TABLES
+from utils.dynamodb_helpers import python_to_dynamodb
 from utils.geohash import encode as geohash_encode, get_neighbors, get_precision_for_radius
 from utils.distance import calculate_distance as haversine_distance
 from utils.ssm import get_secret
@@ -522,7 +523,18 @@ class RestaurantService:
                 if updates['fcmTokenUpdatedAt'] is not None:
                     update_expressions.append('#fcmTokenUpdatedAt = :fcmTokenUpdatedAt')
                     expression_attribute_values[':fcmTokenUpdatedAt'] = {'S': str(updates['fcmTokenUpdatedAt'])}
-            
+
+            if 'shiftTimings' in updates:
+                update_expressions.append('#shiftTimings = :shiftTimings')
+                expression_attribute_names['#shiftTimings'] = 'shiftTimings'
+                expression_attribute_values[':shiftTimings'] = python_to_dynamodb(updates['shiftTimings'] or [])
+
+            if 'timezone' in updates:
+                tz_val = str(updates['timezone'] or 'Asia/Kolkata').strip()
+                update_expressions.append('#timezone = :timezone')
+                expression_attribute_names['#timezone'] = 'timezone'
+                expression_attribute_values[':timezone'] = {'S': tz_val}
+
             set_expressions = [expr for expr in update_expressions if expr]
             remove_expressions = []
             if 'fcmToken' in updates and updates['fcmToken'] is None:
@@ -556,6 +568,11 @@ class RestaurantService:
                 ),
                 'ExpressionAttributeNames': expression_attribute_names
             }
+
+            if expression_attribute_names:
+                update_kwargs['ExpressionAttributeNames'] = expression_attribute_names
+            elif 'ExpressionAttributeNames' in update_kwargs:
+                del update_kwargs['ExpressionAttributeNames']
 
             if expression_attribute_values:
                 update_kwargs['ExpressionAttributeValues'] = expression_attribute_values

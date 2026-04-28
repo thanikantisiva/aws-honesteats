@@ -15,15 +15,20 @@ from services.restaurant_service import RestaurantService
 logger = Logger(service="order-assignment-handler")
 
 
-def _resolve_assignment_delay_seconds(restaurant_avg_prep_minutes: Optional[int]) -> int:
-    """Resolve delayed assignment time in seconds minus rider travel/acceptance buffer."""
+def _resolve_assignment_delay_seconds(order_prep_minutes: Optional[int], restaurant_avg_prep_minutes: Optional[int]) -> int:
+    """Resolve delayed assignment time in seconds minus rider travel/acceptance buffer.
+    Order-level preparation_time (set by restaurant at accept) takes priority;
+    restaurant avg_preparation_time is the fallback."""
     default_delay_seconds = int(os.environ.get('ASSIGNMENT_DELAY_SECONDS', '300'))
     assignment_buffer_seconds = int(os.environ.get('ASSIGNMENT_BUFFER_SECONDS', '300'))
 
-    if restaurant_avg_prep_minutes is None:
+    # Order-level prep time set by restaurant at accept takes priority
+    effective_prep_minutes = order_prep_minutes if order_prep_minutes is not None else restaurant_avg_prep_minutes
+
+    if effective_prep_minutes is None:
         base_seconds = default_delay_seconds
     else:
-        base_seconds = int(restaurant_avg_prep_minutes) * 60
+        base_seconds = int(effective_prep_minutes) * 60
 
     # Assign earlier so rider can accept and reach the restaurant before food is ready.
     return max(0, base_seconds - assignment_buffer_seconds)
@@ -100,7 +105,10 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             if new_status == 'PREPARING':
                 # Schedule delayed assignment
                 try:
-                    delay_seconds = _resolve_assignment_delay_seconds(restaurant.avg_preparation_time)
+                    # Get order-level prep time (set by restaurant at accept); fallback to restaurant avg
+                    order_prep_raw = new_image.get('preparationTime', {}).get('N')
+                    order_prep_minutes = int(float(order_prep_raw)) if order_prep_raw else None
+                    delay_seconds = _resolve_assignment_delay_seconds(order_prep_minutes, restaurant.avg_preparation_time)
 
                     if delay_seconds <= 0:
                         logger.info(

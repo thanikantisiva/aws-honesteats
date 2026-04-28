@@ -138,6 +138,11 @@ class MenuService:
                 update_expressions.append('addOnOptions = :addOnOptions')
                 expression_attribute_values[':addOnOptions'] = python_to_dynamodb(updates['addOnOptions'])
 
+            if 'shiftTimings' in updates:
+                update_expressions.append('#shiftTimings = :shiftTimings')
+                expression_attribute_names['#shiftTimings'] = 'shiftTimings'
+                expression_attribute_values[':shiftTimings'] = python_to_dynamodb(updates['shiftTimings'])
+
             if 'topOfferBanner' in updates:
                 expression_attribute_names['#topOfferBanner'] = 'topOfferBanner'
                 if updates['topOfferBanner'] is None:
@@ -178,6 +183,11 @@ class MenuService:
                 ),
                 'ExpressionAttributeNames': expression_attribute_names,
             }
+
+            if expression_attribute_names:
+                update_kwargs['ExpressionAttributeNames'] = expression_attribute_names
+            elif 'ExpressionAttributeNames' in update_kwargs:
+                del update_kwargs['ExpressionAttributeNames']
 
             if expression_attribute_values:
                 update_kwargs['ExpressionAttributeValues'] = expression_attribute_values

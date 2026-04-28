@@ -2,6 +2,7 @@
 from typing import Optional, List, Union
 from utils.geohash import encode as geohash_encode
 from utils.datetime_ist import now_ist_iso
+from utils.dynamodb_helpers import python_to_dynamodb, dynamodb_to_python
 
 
 class Restaurant:
@@ -39,7 +40,9 @@ class Restaurant:
         fcm_token: Optional[str] = None,
         fcm_token_updated_at: Optional[str] = None,
         position: Optional[int] = None,
-        top_offer_banner: Optional[str] = None
+        top_offer_banner: Optional[str] = None,
+        shift_timings: Optional[List[dict]] = None,
+        timezone: Optional[str] = None
     ):
         self.location_id = location_id
         self.restaurant_id = restaurant_id
@@ -64,6 +67,8 @@ class Restaurant:
         self.fcm_token_updated_at = fcm_token_updated_at
         self.position = position
         self.top_offer_banner = top_offer_banner
+        self.shift_timings = shift_timings or []
+        self.timezone = timezone or "Asia/Kolkata"
     
     @property
     def pk(self) -> str:
@@ -136,6 +141,9 @@ class Restaurant:
             result["position"] = self.position
         if self.top_offer_banner:
             result["topOfferBanner"] = self.top_offer_banner
+        if self.shift_timings:
+            result["shiftTimings"] = self.shift_timings
+        result["timezone"] = self.timezone
         return result
     
     @classmethod
@@ -212,7 +220,9 @@ class Restaurant:
             fcm_token=item.get("fcmToken", {}).get("S") if "fcmToken" in item else None,
             fcm_token_updated_at=item.get("fcmTokenUpdatedAt", {}).get("S") if "fcmTokenUpdatedAt" in item else None,
             position=position,
-            top_offer_banner=top_offer_banner
+            top_offer_banner=top_offer_banner,
+            shift_timings=dynamodb_to_python(item["shiftTimings"]) if "shiftTimings" in item else [],
+            timezone=item.get("timezone", {}).get("S", "Asia/Kolkata") if "timezone" in item else "Asia/Kolkata"
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -260,5 +270,8 @@ class Restaurant:
             item["position"] = {"N": str(self.position)}
         if self.top_offer_banner:
             item["topOfferBanner"] = {"S": self.top_offer_banner}
+        if self.shift_timings:
+            item["shiftTimings"] = python_to_dynamodb(self.shift_timings)
+        item["timezone"] = {"S": self.timezone}
 
         return item

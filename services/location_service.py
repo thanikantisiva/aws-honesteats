@@ -145,8 +145,16 @@ class LocationService:
                 types = component.get('types', [])
                 name = component.get('long_name', '')
                 
-                if 'route' in types or 'street_address' in types:
+                if 'street_number' in types:
+                    address_components['street_number'] = name
+                elif 'subpremise' in types:
+                    address_components['subpremise'] = name
+                elif 'premise' in types:
+                    address_components['premise'] = name
+                elif 'route' in types:
                     address_components['road'] = name
+                elif 'neighborhood' in types:
+                    address_components['neighborhood'] = name
                 elif 'sublocality' in types or 'sublocality_level_1' in types:
                     address_components['suburb'] = name
                 elif 'administrative_area_level_2' in types:
@@ -155,50 +163,51 @@ class LocationService:
                     address_components['city'] = name
                 elif 'administrative_area_level_1' in types:
                     address_components['state'] = name
+                elif 'postal_code' in types:
+                    address_components['postal_code'] = name
                 elif 'country' in types:
                     address_components['country'] = name
             
-            # Build address with fallback hierarchy
-            address_parts = []
-            
-            # 1. Road/Street (most specific)
-            if address_components.get('road'):
-                address_parts.append(address_components['road'])
-            
-            # 2. Suburb/Neighborhood
-            if not address_parts and address_components.get('suburb'):
-                address_parts.append(address_components['suburb'])
-            
-            # 3. City district
-            if not address_parts and address_components.get('city_district'):
-                address_parts.append(address_components['city_district'])
-            
-            # 4. City (always include if available)
-            if address_components.get('city'):
-                address_parts.append(address_components['city'])
-            
-            # 5. State/Region
-            if not address_parts and address_components.get('state'):
-                address_parts.append(address_components['state'])
-            
-            # 6. Country (last resort)
-            if not address_parts and address_components.get('country'):
-                address_parts.append(address_components['country'])
-            
-            formatted_address = ', '.join(filter(None, address_parts))
-            
-            # Use Google's formatted_address as fallback
-            if not formatted_address:
-                formatted_address = result.get('formatted_address', '')
-            
-            logger.info(f"Reverse geocoding successful: {formatted_address}")
+            # Build a concise app display address while keeping Google's full address separately.
+            short_address_parts = []
+            line1_parts = [
+                address_components.get('subpremise'),
+                address_components.get('premise'),
+                address_components.get('street_number'),
+                address_components.get('road'),
+            ]
+            line1 = ', '.join([part for part in line1_parts if part])
+            if line1:
+                short_address_parts.append(line1)
+            elif address_components.get('neighborhood'):
+                short_address_parts.append(address_components['neighborhood'])
+            elif address_components.get('suburb'):
+                short_address_parts.append(address_components['suburb'])
+            elif address_components.get('city_district'):
+                short_address_parts.append(address_components['city_district'])
+
+            city_like = (
+                address_components.get('city')
+                or address_components.get('town')
+                or address_components.get('village')
+            )
+            if city_like:
+                short_address_parts.append(city_like)
+
+            short_address = ', '.join([part for part in short_address_parts if part])
+            full_address = result.get('formatted_address', '')
+
+            if not short_address:
+                short_address = full_address
+
+            logger.info(f"Reverse geocoding successful: short='{short_address}', full='{full_address}'")
             
             response_data = {
                 'latitude': latitude,
                 'longitude': longitude,
-                'address': formatted_address,
+                'address': short_address,
                 'components': address_components,
-                'formatted_address': result.get('formatted_address'),
+                'formatted_address': full_address,
                 'place_id': result.get('place_id')
             }
             

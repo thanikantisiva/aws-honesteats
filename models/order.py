@@ -101,7 +101,8 @@ class Order:
         offered_at: Optional[str] = None,
         rejected_by_riders: Optional[List[str]] = None,
         created_at: Optional[Union[int, str]] = None,
-        calculated_fee_response: Optional[Dict[str, Any]] = None
+        calculated_fee_response: Optional[Dict[str, Any]] = None,
+        preparation_time: Optional[int] = None
     ):
         self.order_id = order_id
         self.customer_phone = customer_phone
@@ -146,6 +147,7 @@ class Order:
         self.offered_at = offered_at
         self.rejected_by_riders = rejected_by_riders or []
         self.calculated_fee_response = calculated_fee_response
+        self.preparation_time = preparation_time
         # Store as IST ISO string; support int (legacy) for backward compatibility
         self.created_at = created_at if created_at is not None else now_ist_iso()
 
@@ -233,6 +235,8 @@ class Order:
             result["offeredAt"] = self.offered_at
         if self.rejected_by_riders:
             result["rejectedByRiders"] = self.rejected_by_riders
+        if self.preparation_time is not None:
+            result["preparationTime"] = self.preparation_time
         return result
     
     @classmethod
@@ -303,7 +307,8 @@ class Order:
             offered_at=item.get("offeredAt", {}).get("S") if "offeredAt" in item else None,
             rejected_by_riders=dynamodb_to_python(item["rejectedByRiders"]) if "rejectedByRiders" in item else [],
             created_at=created_at,
-            calculated_fee_response=dynamodb_to_python(item["calculatedFeeResponse"]) if "calculatedFeeResponse" in item and "M" in item["calculatedFeeResponse"] else None
+            calculated_fee_response=dynamodb_to_python(item["calculatedFeeResponse"]) if "calculatedFeeResponse" in item and "M" in item["calculatedFeeResponse"] else None,
+            preparation_time=int(float(item["preparationTime"]["N"])) if "preparationTime" in item else None
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -394,4 +399,6 @@ class Order:
             item["offeredAt"] = {"S": self.offered_at}
         if self.rejected_by_riders:
             item["rejectedByRiders"] = python_to_dynamodb(self.rejected_by_riders)
+        if self.preparation_time is not None:
+            item["preparationTime"] = {"N": str(self.preparation_time)}
         return item
