@@ -541,6 +541,8 @@ class RestaurantService:
                 remove_expressions.append('#fcmToken')
             if 'fcmTokenUpdatedAt' in updates and updates['fcmTokenUpdatedAt'] is None:
                 remove_expressions.append('#fcmTokenUpdatedAt')
+            if 'fcmTokens' in updates and not updates.get('fcmTokens'):
+                remove_expressions.append('#fcmTokens')
             if 'position' in updates and updates['position'] is None:
                 remove_expressions.append('#position')
             if 'topOfferBanner' in updates and updates['topOfferBanner'] is None:
@@ -617,3 +619,68 @@ class RestaurantService:
             return RestaurantService.get_restaurant_by_id(restaurant_id)
         except ClientError as e:
             raise Exception(f"Failed to add restaurant rating: {str(e)}")
+
+    @staticmethod
+    def add_fcm_token(restaurant_id: str, fcm_token: str, updated_at: str) -> Restaurant:
+        """Atomically add an FCM token to restaurant's token set."""
+        restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+        if not restaurant:
+            raise Exception("Restaurant not found")
+
+        dynamodb_client.update_item(
+            TableName=TABLES['RESTAURANTS'],
+            Key={
+                'PK': {'S': restaurant.geohash},
+                'SK': {'S': f"RESTAURANT#{restaurant_id}"}
+            },
+            UpdateExpression='ADD #fcmTokens :tokenSet SET #fcmToken = :fcmToken, #fcmTokenUpdatedAt = :updatedAt',
+            ExpressionAttributeNames={
+                '#fcmTokens': 'fcmTokens',
+                '#fcmToken': 'fcmToken',
+                '#fcmTokenUpdatedAt': 'fcmTokenUpdatedAt'
+            },
+            ExpressionAttributeValues={
+                ':tokenSet': {'SS': [fcm_token]},
+                ':fcmToken': {'S': fcm_token},
+                ':updatedAt': {'S': updated_at}
+            }
+        )
+        return RestaurantService.get_restaurant_by_id(restaurant_id)
+
+    @staticmethod
+    def remove_fcm_token(restaurant_id: str, fcm_token: Optional[str], updated_at: Optional[str]) -> Restaurant:
+        """Remove one device token; optionally clear all when token not provided."""
+        from utils.datetime_ist import now_ist_iso
+        updated_at = updated_at or now_ist_iso()
+        restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+        if not restaurant:
+            raise Exception("Restaurant not found")
+
+        if fcm_token:
+            dynamodb_client.update_item(
+                TableName=TABLES['RESTAURANTS'],
+                Key={
+                    'PK': {'S': restaurant.geohash},
+                    'SK': {'S': f"RESTAURANT#{restaurant_id}"}
+                },
+                UpdateExpression='DELETE #fcmTokens :tokenSet SET #fcmTokenUpdatedAt = :updatedAt',
+                ExpressionAttributeNames={
+                    '#fcmTokens': 'fcmTokens',
+                    '#fcmTokenUpdatedAt': 'fcmTokenUpdatedAt'
+                },
+                ExpressionAttributeValues={
+                    ':tokenSet': {'SS': [fcm_token]},
+                    ':updatedAt': {'S': updated_at}
+                }
+            )
+            latest = RestaurantService.get_restaurant_by_id(restaurant_id)
+            tokens = latest.fcm_tokens or []
+            RestaurantService.update_restaurant(restaurant_id, {'fcmToken': tokens[-1] if tokens else None})
+            return RestaurantService.get_restaurant_by_id(restaurant_id)
+
+        RestaurantService.update_restaurant(restaurant_id, {
+            'fcmToken': None,
+            'fcmTokens': [],
+            'fcmTokenUpdatedAt': updated_at
+        })
+        return RestaurantService.get_restaurant_by_id(restaurant_id)

@@ -38,6 +38,7 @@ class Restaurant:
         opens_at: Optional[str] = None,
         avg_preparation_time: Optional[int] = None,
         fcm_token: Optional[str] = None,
+        fcm_tokens: Optional[List[str]] = None,
         fcm_token_updated_at: Optional[str] = None,
         position: Optional[int] = None,
         top_offer_banner: Optional[str] = None,
@@ -64,6 +65,7 @@ class Restaurant:
         self.opens_at = opens_at
         self.avg_preparation_time = avg_preparation_time
         self.fcm_token = fcm_token
+        self.fcm_tokens = [str(t).strip() for t in (fcm_tokens or []) if str(t).strip()]
         self.fcm_token_updated_at = fcm_token_updated_at
         self.position = position
         self.top_offer_banner = top_offer_banner
@@ -218,6 +220,7 @@ class Restaurant:
             opens_at=item.get("opensAt", {}).get("S") if "opensAt" in item else None,
             avg_preparation_time=avg_preparation_time,
             fcm_token=item.get("fcmToken", {}).get("S") if "fcmToken" in item else None,
+            fcm_tokens=dynamodb_to_python(item["fcmTokens"]) if "fcmTokens" in item else [],
             fcm_token_updated_at=item.get("fcmTokenUpdatedAt", {}).get("S") if "fcmTokenUpdatedAt" in item else None,
             position=position,
             top_offer_banner=top_offer_banner,
@@ -264,6 +267,8 @@ class Restaurant:
             item["avgPreparationTime"] = {"N": str(int(self.avg_preparation_time))}
         if self.fcm_token:
             item["fcmToken"] = {"S": self.fcm_token}
+        if self.fcm_tokens:
+            item["fcmTokens"] = {"SS": self.fcm_tokens}
         if self.fcm_token_updated_at:
             item["fcmTokenUpdatedAt"] = {"S": self.fcm_token_updated_at}
         if self.position is not None:

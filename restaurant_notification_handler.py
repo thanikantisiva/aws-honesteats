@@ -11,6 +11,19 @@ from utils.dynamodb_helpers import dynamodb_to_python
 
 logger = Logger(service="restaurant-notification-handler")
 
+def _is_plausible_fcm_token(token: str) -> bool:
+    token = (token or "").strip()
+    # Keep this intentionally permissive. Firebase send result is the source of truth.
+    return bool(token) and ":" in token
+
+def _mask_token(token: str) -> str:
+    token = (token or "").strip()
+    if not token:
+        return "<empty>"
+    if len(token) <= 12:
+        return f"{token[:4]}...{token[-4:]}"
+    return f"{token[:8]}...{token[-6:]}"
+
 
 def _extract_string_attr(attr) -> str:
     if not attr or not isinstance(attr, dict):
@@ -129,22 +142,83 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                 logger.warning(f"[orderId={order_id}] Restaurant not found: {restaurant_id}")
                 continue
 
-            if not restaurant.fcm_token:
-                logger.info(f"[orderId={order_id}] No mobile FCM token registered for restaurant {restaurant_id}")
+            raw_tokens = list(restaurant.fcm_tokens or [])
+            # Legacy fallback: include singular fcmToken only if not already in the set/list.
+            if restaurant.fcm_token and restaurant.fcm_token not in raw_tokens:
+                raw_tokens.append(restaurant.fcm_token)
+
+            fcm_tokens = []
+            seen_tokens = set()
+            skipped_invalid_format = 0
+            for token in raw_tokens:
+                normalized = (token or "").strip()
+                if _is_plausible_fcm_token(normalized) and normalized not in seen_tokens:
+                    seen_tokens.add(normalized)
+                    fcm_tokens.append(normalized)
+                else:
+                    skipped_invalid_format += 1
+
+            if not fcm_tokens:
+                logger.info(
+                    f"[orderId={order_id}] No valid mobile FCM token registered for restaurant {restaurant_id} "
+                    f"(skippedInvalidFormat={skipped_invalid_format})"
+                )
                 continue
 
-            success = NotificationService.send_restaurant_new_order_notification(
-                fcm_token=restaurant.fcm_token,
-                order_id=order_id,
-                restaurant_name=restaurant_name,
-                customer_phone=customer_phone,
-                item_summary=item_summary,
-                item_count=item_count,
-                amount=amount,
-                created_at=created_at or None
+            logger.info(
+                f"[orderId={order_id}] Found {len(fcm_tokens)} restaurant tokens to notify for restaurantId={restaurant_id} "
+                f"(skippedInvalidFormat={skipped_invalid_format})"
             )
 
-            if success:
+            sent = 0
+            invalid_tokens = []
+            for idx, token in enumerate(fcm_tokens, start=1):
+                masked = _mask_token(token)
+                logger.info(
+                    f"[orderId={order_id}] Attempt {idx}/{len(fcm_tokens)} token={masked}"
+                )
+                result = NotificationService.send_restaurant_new_order_notification_with_result(
+                    fcm_token=token,
+                    order_id=order_id,
+                    restaurant_name=restaurant_name,
+                    customer_phone=customer_phone,
+                    item_summary=item_summary,
+                    item_count=item_count,
+                    amount=amount,
+                    created_at=created_at or None
+                )
+                if result.get("success"):
+                    sent += 1
+                    logger.info(
+                        f"[orderId={order_id}] Attempt {idx} success token={masked}"
+                    )
+                elif result.get("invalidToken"):
+                    invalid_tokens.append(token)
+                    logger.warning(
+                        f"[orderId={order_id}] Attempt {idx} invalid token={masked}"
+                    )
+                else:
+                    logger.warning(
+                        f"[orderId={order_id}] Attempt {idx} failed token={masked} (non-invalid error)"
+                    )
+
+            if invalid_tokens:
+                logger.info(
+                    f"[orderId={order_id}] Cleaning {len(invalid_tokens)} invalid restaurant FCM tokens"
+                )
+                for bad_token in invalid_tokens:
+                    try:
+                        RestaurantService.remove_fcm_token(
+                            restaurant_id=restaurant_id,
+                            fcm_token=bad_token,
+                            updated_at=created_at or None
+                        )
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            f"[orderId={order_id}] Failed removing invalid token: {str(cleanup_err)}"
+                        )
+
+            if sent > 0:
                 processed += 1
             else:
                 errors += 1

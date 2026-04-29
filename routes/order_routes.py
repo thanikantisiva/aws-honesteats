@@ -3,6 +3,7 @@ from aws_lambda_powertools import Logger, Tracer, Metrics
 from utils import normalize_phone
 from utils.datetime_ist import now_ist_iso
 from services.order_service import OrderService
+from services.order_service import OrderStatusConflictError
 from services.user_service import UserService
 from services.restaurant_service import RestaurantService
 from services.address_service import AddressService
@@ -143,6 +144,7 @@ def register_order_routes(app):
         try:
             body = app.current_event.json_body
             customer_phone = normalize_phone(body.get('customerPhone'))
+            receiver_phone = normalize_phone(body.get('receiverPhone')) or customer_phone
             restaurant_id = body.get('restaurantId')
             items = body.get('items', [])
             food_total = body.get('foodTotal', 0)
@@ -191,6 +193,7 @@ def register_order_routes(app):
             order = Order(
                 order_id=generate_id('ORD'),
                 customer_phone=customer_phone,
+                receiver_phone=receiver_phone,
                 restaurant_id=restaurant_id,
                 items=items,
                 food_total=float(food_total),
@@ -230,6 +233,7 @@ def register_order_routes(app):
             body = app.current_event.json_body
             status = body.get('status')
             rider_id = body.get('riderId')
+            expected_current_status = body.get('expectedCurrentStatus')
             preparation_time_raw = body.get('preparationTime')
             preparation_time = int(preparation_time_raw) if preparation_time_raw is not None else None
             
@@ -243,10 +247,25 @@ def register_order_routes(app):
             
             logger.info(f"[orderId={order_id}] Updating order status to {status} riderId={rider_id} preparationTime={preparation_time}")
             
-            updated_order = OrderService.update_order_status(order_id, status, rider_id, preparation_time)
+            updated_order = OrderService.update_order_status(
+                order_id,
+                status,
+                rider_id,
+                preparation_time,
+                expected_current_status
+            )
             metrics.add_metric(name="OrderStatusUpdated", unit="Count", value=1)
             
             return updated_order.to_dict(), 200
+        except OrderStatusConflictError as e:
+            logger.warning(
+                f"[orderId={order_id}] Status conflict for requested transition. Current status={e.current_status}"
+            )
+            return {
+                "error": "Order status conflict",
+                "message": "Order was already updated by another device/user",
+                "currentStatus": e.current_status
+            }, 409
         except Exception as e:
             logger.error(f"[orderId={order_id}] Error updating order status", exc_info=True)
             return {"error": "Failed to update order status", "message": str(e)}, 500

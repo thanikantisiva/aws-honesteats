@@ -59,6 +59,7 @@ class Order:
         self,
         order_id: str,
         customer_phone: str,
+        receiver_phone: Optional[str],
         restaurant_id: str,
         items: List[Dict[str, Any]],
         food_total: float,
@@ -106,6 +107,7 @@ class Order:
     ):
         self.order_id = order_id
         self.customer_phone = customer_phone
+        self.receiver_phone = receiver_phone or customer_phone
         self.restaurant_id = restaurant_id
         self.items = items
         self.food_total = food_total
@@ -163,6 +165,7 @@ class Order:
         result = {
             "orderId": self.order_id,
             "customerPhone": self.customer_phone,
+            "receiverPhone": self.receiver_phone,
             "restaurantId": self.restaurant_id,
             "items": self.items,
             "foodTotal": self.food_total,
@@ -265,6 +268,7 @@ class Order:
         return cls(
             order_id=item.get("orderId", {}).get("S", ""),
             customer_phone=item.get("customerPhone", {}).get("S", ""),
+            receiver_phone=item.get("receiverPhone", {}).get("S", item.get("customerPhone", {}).get("S", "")),
             restaurant_id=item.get("restaurantId", {}).get("S", ""),
             items=items,
             food_total=float(item.get("foodTotal", {}).get("N", "0")),
@@ -326,6 +330,7 @@ class Order:
         item = {
             "orderId": {"S": self.order_id},
             "customerPhone": {"S": self.customer_phone},
+            "receiverPhone": {"S": self.receiver_phone or self.customer_phone},
             "restaurantId": {"S": self.restaurant_id},
             "items": python_to_dynamodb(self.items),  # Store as List of Maps
             "foodTotal": {"N": str(self.food_total)},

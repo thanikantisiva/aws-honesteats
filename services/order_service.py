@@ -7,6 +7,13 @@ from utils.dynamodb import dynamodb_client, TABLES
 
 logger = Logger()
 
+class OrderStatusConflictError(Exception):
+    """Raised when a conditional status update fails due to stale client state."""
+
+    def __init__(self, current_status: str):
+        super().__init__(f"Order status conflict. Current status is {current_status}")
+        self.current_status = current_status
+
 
 class OrderService:
     """Service for order operations"""
@@ -257,7 +264,13 @@ class OrderService:
             raise Exception(f"Failed to update order: {str(e)}")
     
     @staticmethod
-    def update_order_status(order_id: str, status: str, rider_id: Optional[str] = None, preparation_time: Optional[int] = None) -> Order:
+    def update_order_status(
+        order_id: str,
+        status: str,
+        rider_id: Optional[str] = None,
+        preparation_time: Optional[int] = None,
+        expected_current_status: Optional[str] = None
+    ) -> Order:
         """Update order status and regenerate composite keys"""
         try:
             logger.info(f"[orderId={order_id}] update_order_status called status={status} riderId={rider_id}")
@@ -297,13 +310,26 @@ class OrderService:
                 update_expressions.append('preparationTime = :prepTime')
                 expression_attribute_values[':prepTime'] = {'N': str(preparation_time)}
             
-            dynamodb_client.update_item(
-                TableName=TABLES['ORDERS'],
-                Key={'orderId': {'S': order_id}},
-                UpdateExpression=f"SET {', '.join(update_expressions)}",
-                ExpressionAttributeNames=expression_attribute_names,
-                ExpressionAttributeValues=expression_attribute_values
-            )
+            update_params = {
+                'TableName': TABLES['ORDERS'],
+                'Key': {'orderId': {'S': order_id}},
+                'UpdateExpression': f"SET {', '.join(update_expressions)}",
+                'ExpressionAttributeNames': expression_attribute_names,
+                'ExpressionAttributeValues': expression_attribute_values
+            }
+
+            if expected_current_status:
+                update_params['ConditionExpression'] = '#status = :expectedCurrentStatus'
+                expression_attribute_values[':expectedCurrentStatus'] = {'S': expected_current_status}
+
+            try:
+                dynamodb_client.update_item(**update_params)
+            except ClientError as e:
+                if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                    latest_order = OrderService.get_order(order_id)
+                    latest_status = latest_order.status if latest_order else "UNKNOWN"
+                    raise OrderStatusConflictError(latest_status)
+                raise
 
             # Startup-friendly aggregation: keep orderedCount only on menu item row.
             if status == Order.STATUS_DELIVERED and order.status != Order.STATUS_DELIVERED:

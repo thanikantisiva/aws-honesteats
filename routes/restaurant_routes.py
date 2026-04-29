@@ -1,6 +1,7 @@
 """Restaurant routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.restaurant_service import RestaurantService
+from services.notification_service import NotificationService
 from models.restaurant import Restaurant
 from utils.dynamodb import generate_id, dynamodb_client, TABLES
 from utils.geohash import encode as geohash_encode
@@ -321,14 +322,22 @@ def register_restaurant_routes(app):
             if not fcm_token:
                 return {"error": "fcmToken is required"}, 400
 
+            token_check = NotificationService.validate_registration_token(fcm_token)
+            if not token_check.get("valid"):
+                logger.warning(
+                    f"[restaurantId={restaurant_id}] Rejected invalid FCM token at registration "
+                    f"(reason={token_check.get('reason')})"
+                )
+                return {
+                    "error": "Invalid FCM token for this app/environment",
+                    "reason": token_check.get("reason")
+                }, 400
+
             restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
             if not restaurant:
                 return {"error": "Restaurant not found"}, 404
 
-            RestaurantService.update_restaurant(restaurant_id, {
-                'fcmToken': fcm_token,
-                'fcmTokenUpdatedAt': now_ist_iso()
-            })
+            RestaurantService.add_fcm_token(restaurant_id, fcm_token, now_ist_iso())
 
             metrics.add_metric(name="RestaurantFCMTokenRegistered", unit="Count", value=1)
             return {"message": "Restaurant FCM token registered successfully"}, 200
@@ -349,10 +358,9 @@ def register_restaurant_routes(app):
             if not restaurant:
                 return {"error": "Restaurant not found"}, 404
 
-            RestaurantService.update_restaurant(restaurant_id, {
-                'fcmToken': None,
-                'fcmTokenUpdatedAt': None
-            })
+            body = app.current_event.json_body or {}
+            fcm_token = str(body.get('fcmToken') or '').strip()
+            RestaurantService.remove_fcm_token(restaurant_id, fcm_token or None, now_ist_iso())
 
             metrics.add_metric(name="RestaurantFCMTokenCleared", unit="Count", value=1)
             return {"message": "Restaurant FCM token cleared successfully"}, 200
@@ -375,13 +383,17 @@ def register_restaurant_routes(app):
             if not restaurant:
                 return {"error": "Restaurant not found"}, 404
 
-            has_active_token = bool(restaurant.fcm_token)
+            tokens = list(restaurant.fcm_tokens or [])
+            if restaurant.fcm_token and restaurant.fcm_token not in tokens:
+                tokens.append(restaurant.fcm_token)
+            has_active_token = len(tokens) > 0
             response: dict = {"hasActiveToken": has_active_token}
 
             # If the caller sends its own FCM token, tell it whether it's still active
             device_token = (app.current_event.get_header_value('X-Device-FCM-Token') or '').strip()
             if device_token:
-                response['isThisDeviceActive'] = (restaurant.fcm_token == device_token)
+                response['isThisDeviceActive'] = (device_token in tokens)
+            response['activeTokenCount'] = len(tokens)
 
             return response, 200
         except Exception as e:

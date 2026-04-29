@@ -616,6 +616,7 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:Query
+                - dynamodb:UpdateItem
               Resource:
                 - !GetAtt RestaurantsTable.Arn
                 - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'

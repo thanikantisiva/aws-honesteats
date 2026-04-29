@@ -76,6 +76,7 @@ def register_payment_routes(app):
         try:
             body = app.current_event.json_body
             customer_phone = normalize_phone(body.get('customerPhone'))
+            receiver_phone = normalize_phone(body.get('receiverPhone')) or customer_phone
             restaurant_id = body.get('restaurantId')
             restaurant_name = body.get('restaurantName')
             amount = float(body.get('amount', 0))
@@ -108,6 +109,8 @@ def register_payment_routes(app):
             
             if not all([customer_phone, restaurant_id, restaurant_name, amount]):
                 return {"error": "Missing required fields"}, 400
+            if not receiver_phone:
+                return {"error": "receiverPhone is required"}, 400
             
             # Generate IDs
             payment_id = generate_id('PAY')
@@ -211,6 +214,7 @@ def register_payment_routes(app):
             order = Order(
                 order_id=order_id,
                 customer_phone=customer_phone,
+                receiver_phone=receiver_phone,
                 restaurant_id=restaurant_id,
                 items=enriched_items,
                 food_total=round(total_customer_amount, 2),
@@ -338,6 +342,7 @@ def register_payment_routes(app):
             formatted_address = body.get('formattedAddress')
             address_id = body.get('addressId')
             restaurant_image = body.get('restaurantImage')
+            receiver_phone = normalize_phone(body.get('receiverPhone')) or payment.customer_phone
             
             if not all([payment_id, razorpay_order_id, razorpay_payment_id, razorpay_signature]):
                 return {"error": "Missing required fields"}, 400
@@ -431,6 +436,7 @@ def register_payment_routes(app):
                 order = Order(
                     order_id=generate_id('ORD'),
                     customer_phone=payment.customer_phone,
+                    receiver_phone=receiver_phone,
                     restaurant_id=payment.restaurant_id,
                     items=[],
                     food_total=0,

@@ -404,7 +404,26 @@ class NotificationService:
             return False
 
     @staticmethod
-    def send_restaurant_new_order_notification(
+    def is_invalid_fcm_token_error(error: Exception) -> bool:
+        """Best-effort classifier for invalid/unregistered FCM registration tokens."""
+        text = str(error or "").lower()
+        return any(
+            marker in text
+            for marker in [
+                "registration-token-not-registered",
+                "notregistered",
+                "unregistered",
+                "invalid registration token",
+                "invalidargument",
+                "not a valid fcm registration token",
+                "not a valid registration token",
+                "requested entity was not found",
+                "registration token is not a valid",
+            ]
+        )
+
+    @staticmethod
+    def send_restaurant_new_order_notification_with_result(
         fcm_token: str,
         order_id: str,
         restaurant_name: str,
@@ -413,11 +432,11 @@ class NotificationService:
         item_count: int,
         amount: float,
         created_at: Optional[str] = None
-    ) -> bool:
-        """Send a restaurant-side new order notification for the mobile restaurant app."""
+    ) -> dict:
+        """Send restaurant new-order notification and return structured result."""
         if not FIREBASE_AVAILABLE:
             logger.warning("Firebase Admin SDK not available - restaurant notification skipped")
-            return False
+            return {"success": False, "invalidToken": False}
 
         try:
             from firebase_admin import messaging
@@ -426,7 +445,7 @@ class NotificationService:
 
             if not _firebase_initialized:
                 logger.warning("Firebase not initialized - restaurant notification skipped")
-                return False
+                return {"success": False, "invalidToken": False}
 
             item_label = "1 item" if item_count == 1 else f"{item_count} items"
             order_tail = (order_id or "").strip()[-4:] or "----"
@@ -472,7 +491,60 @@ class NotificationService:
             logger.info(f"Sending restaurant notification for orderId={order_id}")
             response = messaging.send(message)
             logger.info(f"Restaurant notification sent successfully: {response}")
-            return True
+            return {"success": True, "invalidToken": False}
         except Exception as e:
+            invalid = NotificationService.is_invalid_fcm_token_error(e)
             logger.error(f"Error sending restaurant notification: {str(e)}", exc_info=True)
-            return False
+            return {"success": False, "invalidToken": invalid}
+
+    @staticmethod
+    def send_restaurant_new_order_notification(
+        fcm_token: str,
+        order_id: str,
+        restaurant_name: str,
+        customer_phone: str,
+        item_summary: str,
+        item_count: int,
+        amount: float,
+        created_at: Optional[str] = None
+    ) -> bool:
+        """Send a restaurant-side new order notification for the mobile restaurant app."""
+        result = NotificationService.send_restaurant_new_order_notification_with_result(
+            fcm_token=fcm_token,
+            order_id=order_id,
+            restaurant_name=restaurant_name,
+            customer_phone=customer_phone,
+            item_summary=item_summary,
+            item_count=item_count,
+            amount=amount,
+            created_at=created_at
+        )
+        return bool(result.get("success"))
+
+    @staticmethod
+    def validate_registration_token(fcm_token: str) -> dict:
+        """
+        Validate an FCM registration token against the configured Firebase project.
+        Uses dry_run so no real notification is delivered.
+        Returns: {"valid": bool, "reason": str}
+        """
+        if not FIREBASE_AVAILABLE:
+            return {"valid": False, "reason": "firebase_admin_unavailable"}
+
+        try:
+            from firebase_admin import messaging
+
+            initialize_firebase()
+            if not _firebase_initialized:
+                return {"valid": False, "reason": "firebase_not_initialized"}
+
+            probe_message = messaging.Message(
+                token=fcm_token,
+                data={"type": "token_probe", "ts": now_ist_iso()}
+            )
+            messaging.send(probe_message, dry_run=True)
+            return {"valid": True, "reason": "ok"}
+        except Exception as e:
+            if NotificationService.is_invalid_fcm_token_error(e):
+                return {"valid": False, "reason": "invalid_token"}
+            return {"valid": False, "reason": "validation_failed"}

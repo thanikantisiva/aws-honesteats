@@ -47,6 +47,19 @@ def dynamodb_to_python(obj):
         return None
     elif "L" in obj:
         return [dynamodb_to_python(item) for item in obj["L"]]
+    elif "SS" in obj:
+        return [str(item) for item in obj["SS"]]
+    elif "NS" in obj:
+        result = []
+        for num in obj["NS"]:
+            try:
+                if "." in num:
+                    result.append(float(num))
+                else:
+                    result.append(int(num))
+            except Exception:
+                result.append(float(num))
+        return result
     elif "M" in obj:
         return {k: dynamodb_to_python(v) for k, v in obj["M"].items()}
     else:
