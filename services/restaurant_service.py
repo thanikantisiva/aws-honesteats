@@ -45,7 +45,7 @@ class RestaurantService:
     @staticmethod
     def calculate_road_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """
-        Calculate road distance using Google Directions API.
+        Calculate road distance using the Google Routes API (computeRoutes).
         Falls back to Haversine when the API call fails or returns no route.
         """
         try:
@@ -54,31 +54,54 @@ class RestaurantService:
                 logger.warning("GOOGLE_MAPS_API_KEY not configured. Falling back to Haversine distance.")
                 return RestaurantService.calculate_distance(lat1, lon1, lat2, lon2)
 
-            response = requests.get(
-                "https://maps.googleapis.com/maps/api/directions/json",
-                params={
-                    "origin": f"{lat1},{lon1}",
-                    "destination": f"{lat2},{lon2}",
-                    "mode": "driving",
-                    "key": api_key,
+            response = requests.post(
+                "https://routes.googleapis.com/directions/v2:computeRoutes",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Goog-Api-Key": api_key,
+                    # Field mask is required; request only what we need to minimise cost.
+                    "X-Goog-FieldMask": "routes.distanceMeters",
+                },
+                json={
+                    "origin": {
+                        "location": {"latLng": {"latitude": lat1, "longitude": lon1}}
+                    },
+                    "destination": {
+                        "location": {"latLng": {"latitude": lat2, "longitude": lon2}}
+                    },
+                    "travelMode": "DRIVE",
+                    "routingPreference": "TRAFFIC_UNAWARE",
+                    # Routes API has no "optimize for distance" flag; instead we request
+                    # alternative routes and pick the one with the smallest distance.
+                    "computeAlternativeRoutes": True,
                 },
                 timeout=10,
             )
             data = response.json() if response.content else {}
-            status = data.get("status")
 
-            if response.status_code == 200 and status == "OK":
+            if response.status_code == 200:
                 routes = data.get("routes") or []
-                if routes and routes[0].get("legs"):
-                    meters = routes[0]["legs"][0]["distance"]["value"]
-                    return round(meters / 1000.0, 3)
+                distances = [r["distanceMeters"] for r in routes if r.get("distanceMeters") is not None]
+                if distances:
+                    distances_km = [round(m / 1000.0, 3) for m in distances]
+                    meters = min(distances)
+                    chosen_km = round(meters / 1000.0, 3)
+                    logger.info(
+                        f"Google Routes API returned {len(distances)} route(s) "
+                        f"from ({lat1},{lon1}) to ({lat2},{lon2}): {distances_km} km. "
+                        f"Picked shortest: {chosen_km} km."
+                    )
+                    return chosen_km
 
+            error_status = (data.get("error") or {}).get("status")
+            error_message = (data.get("error") or {}).get("message")
             logger.warning(
-                f"Google Directions API failed. statusCode={response.status_code}, status={status}. "
+                f"Google Routes API failed. statusCode={response.status_code}, "
+                f"errorStatus={error_status}, errorMessage={error_message}. "
                 "Falling back to Haversine distance."
             )
         except Exception as e:
-            logger.warning(f"Google Directions API error: {str(e)}. Falling back to Haversine distance.")
+            logger.warning(f"Google Routes API error: {str(e)}. Falling back to Haversine distance.")
 
         return RestaurantService.calculate_distance(lat1, lon1, lat2, lon2)
     

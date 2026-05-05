@@ -8,6 +8,7 @@ _ssm_client = boto3.client('ssm')
 _cache = {}
 
 
+
 def _resolve_ssm(value: str) -> str:
     if not value:
         return value
