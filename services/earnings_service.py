@@ -43,6 +43,7 @@ class EarningsService:
         delivery_fee: float,
         tip: float = 0.0,
         incentives: float = 0.0,
+        delivery_duration_minutes: int = 0,
     ):
         """Add a delivery to rider's earnings.
 
@@ -59,6 +60,7 @@ class EarningsService:
                 delivery_fees=delivery_fee,
                 tips=tip,
                 incentives=incentives,
+                delivery_duration_minutes=delivery_duration_minutes,
                 order_id=order_id,
                 settled=False,
                 settled_at=None

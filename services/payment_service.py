@@ -117,6 +117,46 @@ class PaymentService:
         except Exception as e:
             logger.error(f"Error verifying payment: {str(e)}", exc_info=True)
             return False
+
+    @staticmethod
+    def fetch_razorpay_payment_status(razorpay_payment_id: str) -> Dict[str, Any]:
+        """Fetch payment status from Razorpay and normalize to internal terminal states.
+
+        Strict policy:
+          - `captured`             → SUCCESS  (money is in our merchant account)
+          - `failed`               → FAILED   (definitive failure, no point retrying)
+          - everything else        → PENDING  (`created`, `authorized`, `refunded`,
+                                                or any unknown value)
+        Verify-time `refunded` indicates a problem (we should never see a refund
+        before SUCCESS is recorded), and `authorized`/`created` mean the payment
+        has not been captured yet — both are treated as not-success and the verify
+        retry loop will keep polling until either captured/failed or it gives up
+        and marks the payment FAILED.
+        """
+        try:
+            data = razorpay_client.payment.fetch(razorpay_payment_id)
+            rp_status = str(data.get('status') or '').strip().lower()
+            method = (data.get('method') or '').upper() or None
+
+            if rp_status == "captured":
+                normalized = Payment.STATUS_SUCCESS
+            elif rp_status == "failed":
+                normalized = Payment.STATUS_FAILED
+            else:
+                normalized = "PENDING"
+
+            return {
+                "normalizedStatus": normalized,
+                "razorpayStatus": rp_status or None,
+                "method": method,
+                "raw": data,
+            }
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch Razorpay payment status for {razorpay_payment_id}: {str(e)}",
+                exc_info=True,
+            )
+            raise
     
     @staticmethod
     def get_payment(payment_id: str) -> Optional[Payment]:

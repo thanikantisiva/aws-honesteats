@@ -156,8 +156,11 @@ def _compute_revenue(order) -> tuple[dict, list]:
         coupon_issued_by = _normalize_coupon_issuer(item.get("couponIssuedBy"))
 
         commission_pct = _resolve_commission_pct(item_id, restaurant_config, global_default_commission)
-        # Commission applies to base price only; add-on revenue goes 100% to restaurant
-        item_commission_per_unit = round(customer_price * commission_pct / 100.0, 4)
+        # Commission applies to base item price only (add-ons are 100% restaurant revenue).
+        # If YumDude funds the item coupon, commission is on discounted customer price.
+        # Otherwise (restaurant-funded / unknown), commission is on gross item price.
+        commission_base = customer_price if coupon_issued_by == "YUMDUDE" else gross_price
+        item_commission_per_unit = round(commission_base * commission_pct / 100.0, 4)
         item_commission = item_commission_per_unit * quantity
 
         item_copy["itemCommissionPercentage"] = round(commission_pct, 4)
@@ -183,6 +186,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
             f"Item {item_id}: grossPrice={gross_price}, customerPrice={customer_price}, "
             f"addOnTotal={add_on_total}, qty={quantity}, "
             f"itemDiscountAmount={item_discount_amount}, couponIssuedBy={coupon_issued_by}, "
+            f"commissionBase={commission_base}, "
             f"itemCommissionPercentage={item_copy['itemCommissionPercentage']}, "
             f"itemCommissionAmount={item_copy['itemCommissionAmount']}"
         )

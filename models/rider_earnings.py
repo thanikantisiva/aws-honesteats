@@ -16,6 +16,7 @@ class RiderEarnings:
         tips: float = 0.0,
         incentives: float = 0.0,
         online_time_minutes: int = 0,
+        delivery_duration_minutes: int = 0,
         order_id: Optional[str] = None,
         settlement_id: Optional[str] = None,
         settled: bool = False,
@@ -30,6 +31,7 @@ class RiderEarnings:
         self.tips = tips
         self.incentives = incentives
         self.online_time_minutes = online_time_minutes
+        self.delivery_duration_minutes = delivery_duration_minutes
         self.order_id = order_id
         self.settlement_id = settlement_id
         self.settled = settled
@@ -47,6 +49,7 @@ class RiderEarnings:
             "tips": self.tips,
             "incentives": self.incentives,
             "onlineTimeMinutes": self.online_time_minutes,
+            "deliveryDurationMinutes": self.delivery_duration_minutes,
             "orderId": self.order_id,
             "settlementId": self.settlement_id,
             "settled": self.settled,
@@ -66,6 +69,7 @@ class RiderEarnings:
             tips=float(item.get("tips", {}).get("N", "0")),
             incentives=float(item.get("incentives", {}).get("N", "0")),
             online_time_minutes=int(item.get("onlineTimeMinutes", {}).get("N", "0")),
+            delivery_duration_minutes=int(item.get("deliveryDurationMinutes", {}).get("N", "0")),
             order_id=item.get("orderId", {}).get("S") if "orderId" in item else None,
             settlement_id=item.get("settlementId", {}).get("S") if "settlementId" in item else None,
             settled=item.get("settled", {}).get("BOOL", False) if "settled" in item else False,
@@ -84,6 +88,7 @@ class RiderEarnings:
             "tips": {"N": str(self.tips)},
             "incentives": {"N": str(self.incentives)},
             "onlineTimeMinutes": {"N": str(self.online_time_minutes)},
+            "deliveryDurationMinutes": {"N": str(self.delivery_duration_minutes)},
             "createdAt": {"S": self.created_at}
         }
         if self.order_id:

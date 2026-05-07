@@ -11,7 +11,7 @@ from services.address_service import AddressService
 from services.payment_service import PaymentService
 from models.order import Order
 from models.payment import Payment
-from datetime import datetime
+from datetime import datetime, timezone
 import random
 from typing import Any, Dict, Optional
 
@@ -93,6 +93,21 @@ def _rider_earnings_breakdown(order: Order) -> tuple[float, float]:
     if delivery_fee or incentives:
         return delivery_fee, incentives
     return _rider_payout_for_earnings(order), 0.0
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    """Best-effort ISO timestamp parser for order lifecycle fields."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
 
 
 def register_rider_order_routes(app):
@@ -457,15 +472,28 @@ def register_rider_order_routes(app):
             elif new_status == Order.STATUS_DELIVERED:
                 if order.status != Order.STATUS_OUT_FOR_DELIVERY:
                     return {"error": "Order must be OUT_FOR_DELIVERY first"}, 400
-                
+
+                delivered_at = datetime.utcnow()
                 # Mark as delivered (no OTP verification needed)
                 OrderService.update_order(order_id, {
-                    'riderDeliveredAt': datetime.utcnow().isoformat()
+                    'riderDeliveredAt': delivered_at.isoformat()
                 })
-                
+
+                delivery_duration_minutes = 0
+                pickup_at = _parse_iso_datetime(order.rider_pickup_at)
+                if pickup_at:
+                    if pickup_at.tzinfo is not None:
+                        pickup_at = pickup_at.astimezone(timezone.utc).replace(tzinfo=None)
+                    elapsed_seconds = max(0.0, (delivered_at - pickup_at).total_seconds())
+                    delivery_duration_minutes = max(0, round(elapsed_seconds / 60))
+                else:
+                    logger.warning(
+                        f"[orderId={order_id}] Missing/invalid riderPickupAt; storing deliveryDurationMinutes=0"
+                    )
+
                 # Clear rider's working_on_order
                 RiderService.set_working_on_order(rider_id, None)
-                
+
                 # Add to rider's earnings (order is an Order model; payouts live under revenue.*)
                 delivery_fee_portion, incentives_portion = _rider_earnings_breakdown(order)
                 EarningsService.add_delivery(
@@ -474,6 +502,12 @@ def register_rider_order_routes(app):
                     delivery_fee_portion,
                     0.0,
                     incentives_portion,
+                    delivery_duration_minutes=delivery_duration_minutes,
+                )
+                metrics.add_metric(
+                    name="DeliveryDurationMinutes",
+                    unit="Count",
+                    value=delivery_duration_minutes,
                 )
 
                 restaurant_payout = _revenue_final_payout(order, "restaurantRevenue", "finalPayout")

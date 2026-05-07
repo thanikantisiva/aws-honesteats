@@ -10,12 +10,20 @@ from models.order import Order
 from utils import normalize_phone
 from utils.dynamodb import generate_id, dynamodb_client, TABLES
 import random
+import time
 from typing import Optional
 
 
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+# Verify directly hits Razorpay payment.fetch as the source of truth; we no
+# longer wait for the captured webhook. A small retry absorbs the brief
+# `authorized → captured` transition that auto-capture can have for some methods.
+# After all attempts, if Razorpay still has not moved the payment to a terminal
+# state we mark it FAILED rather than leaving it PENDING.
+RAZORPAY_FETCH_MAX_ATTEMPTS = 6
+RAZORPAY_FETCH_RETRY_SECONDS = 2
 
 
 def _apply_payment_success_and_order_updates(
@@ -28,9 +36,11 @@ def _apply_payment_success_and_order_updates(
     Mark payment SUCCESS and sync order (OTPs, paymentId). Idempotent.
     Order may already be CONFIRMED (pay-at-delivery UPI QR) before this runs.
     """
-    if payment.payment_status == Payment.STATUS_SUCCESS:
-        logger.info(f"Payment {payment.payment_id} already SUCCESS; idempotent webhook skip")
-        return
+    already_success = payment.payment_status == Payment.STATUS_SUCCESS
+    if already_success:
+        logger.info(
+            f"Payment {payment.payment_id} already SUCCESS; running idempotent order sync"
+        )
 
     pm = ((payment_method or Payment.METHOD_UPI).upper()) if payment_method else Payment.METHOD_UPI
     pay_updates = {
@@ -41,8 +51,9 @@ def _apply_payment_success_and_order_updates(
     if razorpay_order_id:
         pay_updates['razorpayOrderId'] = razorpay_order_id
 
-    PaymentService.update_payment(payment.payment_id, pay_updates)
-    logger.info(f"✅ Payment {payment.payment_id} marked as SUCCESS via webhook")
+    if not already_success:
+        PaymentService.update_payment(payment.payment_id, pay_updates)
+        logger.info(f"✅ Payment {payment.payment_id} marked as SUCCESS via webhook")
 
     order_id = payment.order_id
     if not order_id:
@@ -64,6 +75,33 @@ def _apply_payment_success_and_order_updates(
     logger.info(f"[orderId={order_id}] Updated order after payment success webhook")
 
 
+def _apply_payment_failed_updates(
+    payment: Payment,
+    razorpay_order_id: Optional[str],
+    razorpay_payment_id: Optional[str],
+    error_code: Optional[str],
+    error_description: Optional[str],
+) -> None:
+    """Mark payment FAILED with guardrails; never downgrade terminal SUCCESS."""
+    if payment.payment_status == Payment.STATUS_SUCCESS:
+        logger.warning(
+            f"[paymentId={payment.payment_id}] Ignoring FAILED transition because payment already SUCCESS"
+        )
+        metrics.add_metric(name="LateFailedWebhookIgnored", unit="Count", value=1)
+        return
+
+    updates = {
+        'paymentStatus': Payment.STATUS_FAILED,
+        'errorCode': error_code,
+        'errorDescription': error_description,
+    }
+    if razorpay_order_id:
+        updates['razorpayOrderId'] = razorpay_order_id
+    if razorpay_payment_id:
+        updates['razorpayPaymentId'] = razorpay_payment_id
+    PaymentService.update_payment(payment.payment_id, updates)
+
+
 def register_payment_routes(app):
     """Register payment routes"""
     
@@ -74,7 +112,7 @@ def register_payment_routes(app):
         Initiate payment - Creates ORDER with INITIATED status, then creates Razorpay order
         """
         try:
-            body = app.current_event.json_body
+            body = app.current_event.json_body or {}
             customer_phone = normalize_phone(body.get('customerPhone'))
             receiver_phone = normalize_phone(body.get('receiverPhone')) or customer_phone
             restaurant_id = body.get('restaurantId')
@@ -325,24 +363,12 @@ def register_payment_routes(app):
         This happens AFTER successful payment
         """
         try:
-            body = app.current_event.json_body
+            body = app.current_event.json_body or {}
             payment_id = body.get('paymentId')
             razorpay_order_id = body.get('razorpayOrderId')
             razorpay_payment_id = body.get('razorpayPaymentId')
             razorpay_signature = body.get('razorpaySignature')
             payment_method = body.get('paymentMethod', 'UNKNOWN')
-            upi_app = body.get('upiApp')
-            
-            # Order details (items, address, fees) from frontend
-            items = body.get('items', [])
-            delivery_fee = float(body.get('deliveryFee', 0))
-            calculated_fee_response = body.get('calculatedFeeResponse')
-            platform_fee = float((calculated_fee_response or {}).get('platformFee', body.get('platformFee', 0)))
-            delivery_address = body.get('deliveryAddress')
-            formatted_address = body.get('formattedAddress')
-            address_id = body.get('addressId')
-            restaurant_image = body.get('restaurantImage')
-            receiver_phone = normalize_phone(body.get('receiverPhone')) or payment.customer_phone
             
             if not all([payment_id, razorpay_order_id, razorpay_payment_id, razorpay_signature]):
                 return {"error": "Missing required fields"}, 400
@@ -354,7 +380,27 @@ def register_payment_routes(app):
             if not payment:
                 return {"error": "Payment not found"}, 404
             
-            if payment.payment_status != Payment.STATUS_INITIATED:
+            if payment.payment_status == Payment.STATUS_SUCCESS:
+                logger.info(
+                    f"[paymentId={payment_id}] Payment already SUCCESS; treating verify as idempotent"
+                )
+                _apply_payment_success_and_order_updates(
+                    payment=payment,
+                    razorpay_order_id=razorpay_order_id,
+                    razorpay_payment_id=razorpay_payment_id,
+                    payment_method=payment_method,
+                )
+                order = OrderService.get_order(payment.order_id) if payment.order_id else None
+                return {
+                    "verified": True,
+                    "orderId": payment.order_id,
+                    "orderStatus": order.status if order else None,
+                    "paymentId": payment_id,
+                }, 200
+
+            if payment.payment_status == Payment.STATUS_FAILED:
+                return {"verified": False, "error": "Payment already FAILED", "paymentId": payment_id}, 400
+            if payment.payment_status not in (Payment.STATUS_INITIATED,):
                 return {"error": f"Payment already {payment.payment_status}"}, 400
             
             # Verify signature with Razorpay
@@ -365,117 +411,90 @@ def register_payment_routes(app):
             )
             
             if not is_valid:
-                # Update payment as failed
-                PaymentService.update_payment(payment_id, {
-                    'paymentStatus': Payment.STATUS_FAILED,
-                    'errorCode': 'SIGNATURE_VERIFICATION_FAILED',
-                    'errorDescription': 'Payment signature verification failed'
-                })
                 metrics.add_metric(name="PaymentFailed", unit="Count", value=1)
                 return {"error": "Payment verification failed", "verified": False}, 400
-            
-            # Update payment as successful
-            PaymentService.update_payment(payment_id, {
-                'paymentStatus': Payment.STATUS_SUCCESS,
-                'razorpayPaymentId': razorpay_payment_id,
-                'razorpaySignature': razorpay_signature,
-                'paymentMethod': payment_method,
-                'upiApp': upi_app
-            })
-            
-            # Get orderId from payment (order was created during initiate)
-            order_id = getattr(payment, 'order_id', None)
-            # Payment verified - Update order status from INITIATED to CONFIRMED
-            logger.info(f"[orderId={order_id}] ✅ Payment verified, updating order status to CONFIRMED")
-            
-            if order_id:
-                # Order already exists with INITIATED status - just update to CONFIRMED
-                logger.info(f"[orderId={order_id}] ✅ Updating to CONFIRMED")
-                updated_order = OrderService.update_order_status(order_id, Order.STATUS_CONFIRMED, None)
-                
-                # Update order with payment details
-                OrderService.update_order(order_id, {
-                    'paymentId': payment_id,
-                    'paymentMethod': payment_method,
-                    'deliveryOtp': str(random.randint(1000, 9999)),
-                    'pickupOtp': str(random.randint(1000, 9999))
-                })
-            else:
-                # Fallback: Create order if it doesn't exist (shouldn't happen with new flow)
-                logger.warning(f"[orderId={order_id}] ⚠️ Order not found in payment, creating new order")
-                
-                # Fetch restaurant location details
-                pickup_address = None
-                pickup_lat = None
-                pickup_lng = None
-                
+
+            metrics.add_metric(name="VerifyProviderCheckStarted", unit="Count", value=1)
+            provider = None
+            terminal = "PENDING"
+            for attempt in range(1, RAZORPAY_FETCH_MAX_ATTEMPTS + 1):
                 try:
-                    restaurant = RestaurantService.get_restaurant_by_id(payment.restaurant_id)
-                    if restaurant:
-                        pickup_address = f"{restaurant.name}, {restaurant.location_id}"
-                        pickup_lat = restaurant.latitude
-                        pickup_lng = restaurant.longitude
-                        logger.info(f"[orderId={order_id}] Fetched restaurant location: {restaurant.name} at ({pickup_lat}, {pickup_lng})")
-                except Exception as e:
-                    logger.error(f"[orderId={order_id}] Failed to fetch restaurant location: {str(e)}")
-                
-                # Fetch delivery address coordinates
-                delivery_lat = None
-                delivery_lng = None
-                
-                if address_id and payment.customer_phone:
-                    try:
-                        address = AddressService.get_address(payment.customer_phone, address_id)
-                        if address:
-                            delivery_lat = address.lat
-                            delivery_lng = address.lng
-                            logger.info(f"[orderId={order_id}] Fetched delivery location from address: ({delivery_lat}, {delivery_lng})")
-                    except Exception as e:
-                        logger.error(f"[orderId={order_id}] Failed to fetch delivery address location: {str(e)}")
-                
-                order = Order(
-                    order_id=generate_id('ORD'),
-                    customer_phone=payment.customer_phone,
-                    receiver_phone=receiver_phone,
-                    restaurant_id=payment.restaurant_id,
-                    items=[],
-                    food_total=0,
-                    delivery_fee=0,
-                    platform_fee=0,
-                    grand_total=payment.amount,
-                    status=Order.STATUS_CONFIRMED,
-                    payment_id=payment_id,
-                    payment_method=payment_method,
-                    restaurant_name=payment.restaurant_name,
-                    restaurant_image=restaurant_image,
-                    delivery_address=delivery_address,
-                    formatted_address=formatted_address,
-                    address_id=address_id,
-                    calculated_fee_response=calculated_fee_response,
-                    pickup_address=pickup_address,
-                    pickup_lat=pickup_lat,
-                    pickup_lng=pickup_lng,
-                    delivery_lat=delivery_lat,
-                    delivery_lng=delivery_lng
+                    provider = PaymentService.fetch_razorpay_payment_status(razorpay_payment_id)
+                except Exception as fetch_err:
+                    logger.error(
+                        f"[paymentId={payment_id}] Razorpay payment.fetch failed on attempt={attempt}: {fetch_err}"
+                    )
+                    metrics.add_metric(name="VerifyProviderFetchError", unit="Count", value=1)
+                    if attempt < RAZORPAY_FETCH_MAX_ATTEMPTS:
+                        time.sleep(RAZORPAY_FETCH_RETRY_SECONDS)
+                        continue
+                    return {"error": "Failed to verify payment with Razorpay", "verified": False}, 502
+
+                terminal = provider.get("normalizedStatus") or "PENDING"
+                logger.info(
+                    f"[paymentId={payment_id}] Razorpay payment.fetch attempt={attempt} "
+                    f"razorpayStatus={provider.get('razorpayStatus')} normalized={terminal}"
                 )
-                updated_order = OrderService.create_order(order)
-                order_id = updated_order.order_id
-            
-            # Link order to payment
-            PaymentService.update_payment(payment_id, {'orderId': order_id})
-            
-            metrics.add_metric(name="PaymentVerified", unit="Count", value=1)
-            metrics.add_metric(name="OrderConfirmed", unit="Count", value=1)
-            
-            logger.info(f"[orderId={order_id}] ✅ Payment verified and order confirmed")
-            
-            # Return order details
+                if terminal in (Payment.STATUS_SUCCESS, Payment.STATUS_FAILED):
+                    break
+                if attempt < RAZORPAY_FETCH_MAX_ATTEMPTS:
+                    time.sleep(RAZORPAY_FETCH_RETRY_SECONDS)
+
+            latest = PaymentService.get_payment(payment_id)
+            if not latest:
+                return {"error": "Payment not found"}, 404
+
+            if terminal == Payment.STATUS_SUCCESS:
+                _apply_payment_success_and_order_updates(
+                    payment=latest,
+                    razorpay_order_id=razorpay_order_id,
+                    razorpay_payment_id=razorpay_payment_id,
+                    payment_method=(provider.get("method") if provider else None) or payment_method,
+                )
+                order = OrderService.get_order(latest.order_id) if latest.order_id else None
+                metrics.add_metric(name="VerifyResolvedByProvider", unit="Count", value=1)
+                return {
+                    "verified": True,
+                    "orderId": latest.order_id,
+                    "orderStatus": order.status if order else None,
+                    "paymentId": payment_id,
+                }, 200
+
+            if terminal == Payment.STATUS_FAILED:
+                _apply_payment_failed_updates(
+                    payment=latest,
+                    razorpay_order_id=razorpay_order_id,
+                    razorpay_payment_id=razorpay_payment_id,
+                    error_code="RAZORPAY_PROVIDER_FAILED",
+                    error_description=f"Provider status={provider.get('razorpayStatus') if provider else 'unknown'}",
+                )
+                metrics.add_metric(name="VerifyResolvedByProvider", unit="Count", value=1)
+                return {"verified": False, "error": "Payment failed", "paymentId": payment_id}, 400
+
+            last_status = provider.get("razorpayStatus") if provider else "unknown"
+            logger.warning(
+                f"[paymentId={payment_id}] Razorpay never reached terminal state after "
+                f"{RAZORPAY_FETCH_MAX_ATTEMPTS} attempts (last razorpayStatus={last_status}); "
+                f"marking payment FAILED"
+            )
+            _apply_payment_failed_updates(
+                payment=latest,
+                razorpay_order_id=razorpay_order_id,
+                razorpay_payment_id=razorpay_payment_id,
+                error_code="VERIFY_TIMEOUT_NOT_CAPTURED",
+                error_description=(
+                    f"Razorpay status='{last_status}' after {RAZORPAY_FETCH_MAX_ATTEMPTS} "
+                    f"payment.fetch attempts ({RAZORPAY_FETCH_RETRY_SECONDS}s apart); "
+                    f"payment never captured"
+                ),
+            )
+            metrics.add_metric(name="VerifyMarkedFailedAfterTimeout", unit="Count", value=1)
             return {
-                'verified': True,
-                'orderId': order_id,
-                'orderStatus': Order.STATUS_CONFIRMED,
-                'paymentId': payment_id
-            }, 200
+                "verified": False,
+                "error": "Payment failed - not captured in time",
+                "paymentId": payment_id,
+                "razorpayStatus": last_status,
+            }, 400
             
         except Exception as e:
             logger.error("Error verifying payment", exc_info=True)
@@ -741,14 +760,14 @@ def register_payment_routes(app):
                     razorpay_payment_id=razorpay_payment_id
                 )
                 if payment:
-                    PaymentService.update_payment(payment.payment_id, {
-                        'paymentStatus': Payment.STATUS_FAILED,
-                        'razorpayOrderId': razorpay_order_id,
-                        'razorpayPaymentId': razorpay_payment_id,
-                        'errorCode': error_code,
-                        'errorDescription': error_description
-                    })
-                    logger.info(f"✅ Payment {payment.payment_id} marked as FAILED via webhook")
+                    _apply_payment_failed_updates(
+                        payment=payment,
+                        razorpay_order_id=razorpay_order_id,
+                        razorpay_payment_id=razorpay_payment_id,
+                        error_code=error_code,
+                        error_description=error_description,
+                    )
+                    logger.info(f"✅ Payment {payment.payment_id} processed for FAILED webhook")
                 else:
                     logger.warning(
                         f"No payment found for payment.failed webhook: "

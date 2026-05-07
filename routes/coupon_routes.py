@@ -253,6 +253,9 @@ def register_coupon_routes(app):
                 # Exclude item-level coupons (tied to a specific menu item, not checkout-level)
                 if item.get('couponItem', {}).get('S'):
                     continue
+                # Exclude coupons whose target is the item itself (item-scoped, not checkout-level)
+                if (item.get('couponTarget', {}).get('S') or '').strip().lower() == 'item':
+                    continue
 
                 raw_pk = item.get('partitionkey', {}).get('S', '')
                 if not raw_pk.startswith('COUPON#'):
