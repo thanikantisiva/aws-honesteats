@@ -101,12 +101,18 @@ class RiderService:
         return assignable_riders
 
     @staticmethod
-    def _ensure_user_rider_exists(rider_id: str):
-        """Ensure rider exists in Users table via riderId-index"""
+    def _get_user_rider_or_raise(rider_id: str):
+        """Fetch the RIDER User row (firstName/lastName/etc.) by riderId. Raises if missing."""
         from services.user_service import UserService
         user = UserService.get_rider_by_rider_id(rider_id)
         if not user:
             raise Exception(f"Rider user not found for riderId: {rider_id}")
+        return user
+
+    @staticmethod
+    def _ensure_user_rider_exists(rider_id: str):
+        """Ensure rider exists in Users table via riderId-index"""
+        RiderService._get_user_rider_or_raise(rider_id)
     
     @staticmethod
     def create_rider(rider: Rider) -> Rider:
@@ -270,10 +276,32 @@ class RiderService:
     
     @staticmethod
     def set_active_status(rider_id: str, is_active: bool, lat: Optional[float] = None, lng: Optional[float] = None) -> Rider:
-        """Toggle rider online/offline status with optional location"""
+        """Toggle rider online/offline status with optional location.
+
+        Also keeps firstName/lastName on the Riders row in sync with the latest
+        values from the Users row, so any rename on the Users side propagates
+        the next time a rider toggles online/offline.
+        """
         try:
-            RiderService._ensure_user_rider_exists(rider_id)
+            user = RiderService._get_user_rider_or_raise(rider_id)
             timestamp = now_ist_iso()
+
+            first_name = (getattr(user, 'first_name', None) or '').strip() or None
+            last_name = (getattr(user, 'last_name', None) or '').strip() or None
+
+            def _name_set_clauses_and_values():
+                """Return (extra_set_clauses, extra_values) for firstName/lastName."""
+                clauses = []
+                values = {}
+                if first_name:
+                    clauses.append('firstName = :firstName')
+                    values[':firstName'] = {'S': first_name}
+                if last_name:
+                    clauses.append('lastName = :lastName')
+                    values[':lastName'] = {'S': last_name}
+                return clauses, values
+
+            name_clauses, name_values = _name_set_clauses_and_values()
             
             # If going online and location provided, update location and geohash
             if is_active and lat is not None and lng is not None:
@@ -282,51 +310,71 @@ class RiderService:
                 geohash_p6 = geohash_p7[:6]
                 geohash_p5 = geohash_p7[:5]
                 geohash_p4 = geohash_p7[:4]
-                
+
+                set_clauses = [
+                    'isActive = :active',
+                    'lastSeen = :lastSeen',
+                    'lat = :lat',
+                    'lng = :lng',
+                    'geohash = :geohash',
+                    'GSI1PK = :gsi1pk', 'GSI1SK = :gsi1sk',
+                    'GSI2PK = :gsi2pk', 'GSI2SK = :gsi2sk',
+                    'GSI3PK = :gsi3pk', 'GSI3SK = :gsi3sk',
+                ] + name_clauses
+
+                values = {
+                    ':active': {'BOOL': is_active},
+                    ':lastSeen': {'S': timestamp},
+                    ':lat': {'N': str(lat)},
+                    ':lng': {'N': str(lng)},
+                    ':geohash': {'S': geohash_p7},
+                    ':gsi1pk': {'S': geohash_p6},
+                    ':gsi1sk': {'S': f'RIDER#{rider_id}'},
+                    ':gsi2pk': {'S': geohash_p5},
+                    ':gsi2sk': {'S': f'RIDER#{rider_id}'},
+                    ':gsi3pk': {'S': geohash_p4},
+                    ':gsi3sk': {'S': f'RIDER#{rider_id}'},
+                }
+                values.update(name_values)
+
                 # When going online, also clear any stale workingOnOrder from previous sessions.
                 # An uninstall/reinstall does not clear DynamoDB; stale entries block assignment.
                 dynamodb_client.update_item(
                     TableName=TABLES['RIDERS'],
                     Key={'riderId': {'S': rider_id}},
-                    UpdateExpression='SET isActive = :active, lastSeen = :lastSeen, lat = :lat, lng = :lng, geohash = :geohash, GSI1PK = :gsi1pk, GSI1SK = :gsi1sk, GSI2PK = :gsi2pk, GSI2SK = :gsi2sk, GSI3PK = :gsi3pk, GSI3SK = :gsi3sk REMOVE workingOnOrder',
-                    ExpressionAttributeValues={
-                        ':active': {'BOOL': is_active},
-                        ':lastSeen': {'S': timestamp},
-                        ':lat': {'N': str(lat)},
-                        ':lng': {'N': str(lng)},
-                        ':geohash': {'S': geohash_p7},
-                        ':gsi1pk': {'S': geohash_p6},
-                        ':gsi1sk': {'S': f'RIDER#{rider_id}'},
-                        ':gsi2pk': {'S': geohash_p5},
-                        ':gsi2sk': {'S': f'RIDER#{rider_id}'},
-                        ':gsi3pk': {'S': geohash_p4},
-                        ':gsi3sk': {'S': f'RIDER#{rider_id}'}
-                    }
+                    UpdateExpression='SET ' + ', '.join(set_clauses) + ' REMOVE workingOnOrder',
+                    ExpressionAttributeValues=values,
                 )
                 logger.info(f"[riderId={rider_id}] Went online — cleared any stale workingOnOrder")
             else:
                 # No location provided — split by direction to handle workingOnOrder correctly
                 if is_active:
+                    set_clauses = ['isActive = :active', 'lastSeen = :lastSeen'] + name_clauses
+                    values = {
+                        ':active': {'BOOL': is_active},
+                        ':lastSeen': {'S': timestamp},
+                    }
+                    values.update(name_values)
                     # Going online without a GPS fix yet: still clear any stale order lock
                     dynamodb_client.update_item(
                         TableName=TABLES['RIDERS'],
                         Key={'riderId': {'S': rider_id}},
-                        UpdateExpression='SET isActive = :active, lastSeen = :lastSeen REMOVE workingOnOrder',
-                        ExpressionAttributeValues={
-                            ':active': {'BOOL': is_active},
-                            ':lastSeen': {'S': timestamp}
-                        }
+                        UpdateExpression='SET ' + ', '.join(set_clauses) + ' REMOVE workingOnOrder',
+                        ExpressionAttributeValues=values,
                     )
                     logger.info(f"[riderId={rider_id}] Went online (no GPS) — cleared any stale workingOnOrder")
                 else:
+                    set_clauses = ['isActive = :active', 'lastSeen = :lastSeen'] + name_clauses
+                    values = {
+                        ':active': {'BOOL': is_active},
+                        ':lastSeen': {'S': timestamp},
+                    }
+                    values.update(name_values)
                     dynamodb_client.update_item(
                         TableName=TABLES['RIDERS'],
                         Key={'riderId': {'S': rider_id}},
-                        UpdateExpression='SET isActive = :active, lastSeen = :lastSeen',
-                        ExpressionAttributeValues={
-                            ':active': {'BOOL': is_active},
-                            ':lastSeen': {'S': timestamp}
-                        }
+                        UpdateExpression='SET ' + ', '.join(set_clauses),
+                        ExpressionAttributeValues=values,
                     )
             
             return RiderService.get_rider(rider_id)

@@ -23,7 +23,9 @@ class Rider:
         last_seen: Optional[str] = None,
         geohash: Optional[str] = None,
         orders_assigned_last_7d: int = 0,
-        assignment_window_start: Optional[str] = None
+        assignment_window_start: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
     ):
         self.rider_id = rider_id
         self.phone = phone
@@ -39,6 +41,8 @@ class Rider:
         self.last_seen = last_seen or now_ist_iso()
         self.orders_assigned_last_7d = orders_assigned_last_7d or 0
         self.assignment_window_start = assignment_window_start
+        self.first_name = (first_name or "").strip() or None
+        self.last_name = (last_name or "").strip() or None
         
         # Auto-generate geohash if lat/lng provided
         if geohash:
@@ -110,6 +114,10 @@ class Rider:
             result["ordersAssignedLast7d"] = self.orders_assigned_last_7d
         if self.assignment_window_start:
             result["assignmentWindowStart"] = self.assignment_window_start
+        if self.first_name:
+            result["firstName"] = self.first_name
+        if self.last_name:
+            result["lastName"] = self.last_name
         return result
     
     @classmethod
@@ -134,7 +142,9 @@ class Rider:
             last_seen=item.get("lastSeen", {}).get("S", ""),
             geohash=item.get("geohash", {}).get("S") if "geohash" in item else None,
             orders_assigned_last_7d=int(float(item.get("ordersAssignedLast7d", {}).get("N", "0"))) if "ordersAssignedLast7d" in item else 0,
-            assignment_window_start=item.get("assignmentWindowStart", {}).get("S") if "assignmentWindowStart" in item else None
+            assignment_window_start=item.get("assignmentWindowStart", {}).get("S") if "assignmentWindowStart" in item else None,
+            first_name=item.get("firstName", {}).get("S") if "firstName" in item else None,
+            last_name=item.get("lastName", {}).get("S") if "lastName" in item else None,
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -164,6 +174,10 @@ class Rider:
             item["ordersAssignedLast7d"] = {"N": str(self.orders_assigned_last_7d)}
         if self.assignment_window_start:
             item["assignmentWindowStart"] = {"S": self.assignment_window_start}
+        if self.first_name:
+            item["firstName"] = {"S": self.first_name}
+        if self.last_name:
+            item["lastName"] = {"S": self.last_name}
         
         # Add geohash fields for spatial indexing
         if self.geohash:

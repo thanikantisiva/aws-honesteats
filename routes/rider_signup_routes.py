@@ -268,7 +268,9 @@ def register_rider_signup_routes(app):
                 lng=None,
                 speed=0.0,
                 heading=0.0,
-                working_on_order=None
+                working_on_order=None,
+                first_name=body['firstName'],
+                last_name=body['lastName'],
             )
             
             created_rider = RiderService.create_rider(rider)

@@ -68,7 +68,9 @@ def register_rider_routes(app):
                 lng=body.get('lng'),
                 speed=body.get('speed', 0.0),
                 heading=body.get('heading', 0.0),
-                working_on_order=None
+                working_on_order=None,
+                first_name=body.get('firstName'),
+                last_name=body.get('lastName'),
             )
             
             created_rider = RiderService.create_rider(rider)
