@@ -133,8 +133,13 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
     """Calculate delivery fee using dynamic global config.
 
     Two independent fare schedules are supported:
-      - rider settlement (always): flat `riderBaseFare` for short trips, then
-        `distance × riderFarePerKm` once past `riderBaseFareApplicableUnderKms`.
+      - rider settlement (always):
+          * short zone : flat `riderBaseFare` (covers up to base_fare_km)
+          * long  zone : `riderBaseFare + (distance − base_fare_km) × riderFarePerKm`
+            i.e. base fare covers the first base_fare_km and only the *extra*
+            kilometres are charged at the per-km rate. This guarantees the rider
+            never earns less than `riderBaseFare` and the curve is monotonic
+            across the boundary.
       - customer-facing bill:
           * short zone : flat `customerViewBaseRiderFarePerKm` (collected as-is,
             NOT multiplied by distance — name is historical)
@@ -173,8 +178,12 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
     else:
         customer_base_fee = 0.0
         customer_distance_fee = distance_km * customer_per_km
-        rider_base_fee = 0.0
-        rider_distance_fee = distance_km * rider_per_km
+        # Rider: base fare covers the first base_fare_km; only the extra distance
+        # is charged at the per-km rate. Guarantees rider settlement is monotonic
+        # across the base_fare_km boundary (was previously a small drop just
+        # past the threshold when riderBaseFare > base_fare_km × riderFarePerKm).
+        rider_base_fee = rider_base
+        rider_distance_fee = (distance_km - base_fare_km) * rider_per_km
 
     customer_calculated_fee = customer_base_fee + customer_distance_fee
     rider_calculated_fee = rider_base_fee + rider_distance_fee
