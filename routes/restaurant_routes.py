@@ -101,18 +101,27 @@ def register_restaurant_routes(app):
                 distance_km = round(r.distance, 2) if hasattr(r, 'distance') else None
                 restaurant_dict['distance'] = distance_km
                 
-                # Calculate delivery time: (distance / 35 km/hr) + 15 mins prep time
+                # Prep time comes from the restaurant's `avgPreparationTime` (DB field);
+                # falls back to 25 min when the restaurant hasn't configured one.
+                prep_time_mins = (
+                    int(r.avg_preparation_time)
+                    if getattr(r, 'avg_preparation_time', None) is not None
+                    else 25
+                )
+                # Calculate delivery time: (distance / 15 km/hr) × 60 + prep_time
                 if distance_km:
-                    travel_time_hours = distance_km / 35.0  # Speed: 35 km/hr
-                    travel_time_mins = travel_time_hours * 60
-                    total_time_mins = int(travel_time_mins + 15)  # Add 15 mins for food prep
+                    travel_time_mins = (distance_km / 15.0) * 60  # Avg bike speed: 15 km/hr
+                    total_time_mins = int(travel_time_mins + prep_time_mins)
                     restaurant_dict['deliveryTimeMinutes'] = total_time_mins
-                    
+
                     # Calculate delivery fee: ₹12 per km, minimum ₹60
                     delivery_fee = max(60, int(distance_km * 12))
                     restaurant_dict['deliveryFee'] = delivery_fee
-                    
-                    logger.info(f"   {r.name}: {distance_km}km → {total_time_mins}mins, ₹{delivery_fee} delivery")
+
+                    logger.info(
+                        f"   {r.name}: {distance_km}km, prep={prep_time_mins}mins "
+                        f"→ {total_time_mins}mins, ₹{delivery_fee} delivery"
+                    )
                 else:
                     restaurant_dict['deliveryTimeMinutes'] = None
                     restaurant_dict['deliveryFee'] = 60  # Default minimum

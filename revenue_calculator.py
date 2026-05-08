@@ -250,10 +250,24 @@ def _compute_revenue(order) -> tuple[dict, list]:
             logger.warning(f"Failed to look up coupon {coupon_code}: {e}")
 
 
-    if fee_dict.get("breakdown", {}).get("deliveryFeeDiscount", 0) > 0:
-        dfd = fee_dict.get("breakdown", {}).get("deliveryFeeDiscount", 0)
-        total_platform_revenue = round(total_platform_revenue - dfd, 2)
-        platformRevenue["deliveryFeeDiscount"] = dfd
+    # Customer-side delivery-fee waiver (shown to the customer as a "discount").
+    # Tracked here for analytics; it is NOT what the platform actually pays out.
+    # The real platform outflow on delivery is captured by riderDeliverySubsidy
+    # below, which covers BOTH the free-delivery waiver and the rider/customer
+    # per-km rate gap in a single number.
+    delivery_fee_discount_raw = fee_dict.get("breakdown", {}).get("deliveryFeeDiscount", 0)
+    if delivery_fee_discount_raw and delivery_fee_discount_raw > 0:
+        platformRevenue["deliveryFeeDiscount"] = round(delivery_fee_discount_raw, 2)
+
+    # Rider delivery subsidy = (what we pay the rider) − (what the customer paid
+    # us for delivery). When > 0, the platform is funding the gap out of pocket;
+    # when 0, the customer fully covered the rider's earnings.
+    rider_settlement = _safe_float(fee_dict.get("riderSettlementAmount"))
+    customer_delivery_fee = _safe_float(fee_dict.get("deliveryFee"))
+    rider_delivery_subsidy = round(max(rider_settlement - customer_delivery_fee, 0.0), 2)
+    if rider_delivery_subsidy > 0:
+        total_platform_revenue = round(total_platform_revenue - rider_delivery_subsidy, 2)
+        platformRevenue["riderDeliverySubsidy"] = rider_delivery_subsidy
 
     if coupon_applied and coupon_discount > 0:
         if issued_by == "YUMDUDE":
@@ -277,14 +291,13 @@ def _compute_revenue(order) -> tuple[dict, list]:
     platformRevenue["finalPayout"] = round(
         platformRevenue.get("foodCommission", 0)
         + platformRevenue.get("platformFee", 0)
-        - platformRevenue.get("deliveryFeeDiscount", 0)
+        - platformRevenue.get("riderDeliverySubsidy", 0)
         - platformRevenue.get("couponDiscount", 0)
         - platformRevenue.get("itemCouponDiscount", 0)
         - long_distance_bonus,
         2,
     )
 
-    rider_settlement = _safe_float(fee_dict.get("riderSettlementAmount"))
     riderRevenue = {
         "finalPayout": round(rider_settlement + long_distance_bonus, 2),
         "riderSettlementAmount": round(rider_settlement, 2),
