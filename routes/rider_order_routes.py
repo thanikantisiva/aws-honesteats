@@ -110,6 +110,23 @@ def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _earnings_date_for_order(order: Order) -> str:
+    """Stable YYYY-MM-DD key for an order's rider-earnings row.
+
+    Pins the SK to rider_pickup_at when available so the cash-collected
+    safety-net write and the DELIVERED finalize write target the same
+    DynamoDB row — instead of creating two earnings rows for the same
+    order when the two events straddle UTC midnight (≈ 5:30 AM IST).
+    Falls back to today UTC.
+    """
+    pickup_at = _parse_iso_datetime(getattr(order, 'rider_pickup_at', None))
+    if pickup_at:
+        if pickup_at.tzinfo is not None:
+            pickup_at = pickup_at.astimezone(timezone.utc).replace(tzinfo=None)
+        return pickup_at.strftime('%Y-%m-%d')
+    return datetime.utcnow().strftime('%Y-%m-%d')
+
+
 def register_rider_order_routes(app):
     """Register rider order management routes"""
     
@@ -289,6 +306,36 @@ def register_rider_order_routes(app):
                 {"paymentId": payment.payment_id, "paymentMethod": Payment.METHOD_COD},
             )
             metrics.add_metric(name="RiderCashCollected", unit="Count", value=1)
+
+            # Safety-net rider-earnings write. Cash is in the rider's pocket
+            # NOW; if anything goes sideways between this call and the eventual
+            # DELIVERED transition (rider closes app, OTP retry fails, lambda
+            # times out), we still have an earnings row tracking the payout.
+            # delivery_duration_minutes=0 here is a placeholder — the DELIVERED
+            # handler runs later, derives the correct value, and overwrites
+            # this same row (date_override pins both writes to the same SK).
+            try:
+                delivery_fee_portion, incentives_portion = _rider_earnings_breakdown(order)
+                EarningsService.add_delivery(
+                    rider_id,
+                    order_id,
+                    delivery_fee_portion,
+                    0.0,
+                    incentives_portion,
+                    delivery_duration_minutes=0,
+                    date_override=_earnings_date_for_order(order),
+                )
+                metrics.add_metric(name="RiderEarningsRecordedAtCashCollected", unit="Count", value=1)
+            except Exception:
+                # Don't fail the cash-collected response — money was collected
+                # successfully and Payment is already SUCCESS. The DELIVERED
+                # handler will retry the earnings write.
+                logger.error(
+                    f"[orderId={order_id}] Failed to record rider earnings at cash-collected; "
+                    f"will retry at DELIVERED transition",
+                    exc_info=True,
+                )
+
             logger.info(f"[orderId={order_id}] Cash collected recorded by rider {rider_id} payment={payment.payment_id}")
             return {
                 "verified": True,
@@ -494,7 +541,10 @@ def register_rider_order_routes(app):
                 # Clear rider's working_on_order
                 RiderService.set_working_on_order(rider_id, None)
 
-                # Add to rider's earnings (order is an Order model; payouts live under revenue.*)
+                # Add to rider's earnings (order is an Order model; payouts live under revenue.*).
+                # date_override pins this to the same SK the cash-collected safety net uses,
+                # so this PUT overwrites that row with the correct delivery_duration_minutes
+                # rather than creating a duplicate (relevant when COD).
                 delivery_fee_portion, incentives_portion = _rider_earnings_breakdown(order)
                 EarningsService.add_delivery(
                     rider_id,
@@ -503,6 +553,7 @@ def register_rider_order_routes(app):
                     0.0,
                     incentives_portion,
                     delivery_duration_minutes=delivery_duration_minutes,
+                    date_override=_earnings_date_for_order(order),
                 )
                 metrics.add_metric(
                     name="DeliveryDurationMinutes",

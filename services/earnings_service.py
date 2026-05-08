@@ -44,17 +44,23 @@ class EarningsService:
         tip: float = 0.0,
         incentives: float = 0.0,
         delivery_duration_minutes: int = 0,
+        date_override: Optional[str] = None,
     ):
         """Add a delivery to rider's earnings.
 
         `incentives` rolls up any per-order bonuses (e.g. longDistanceBonus).
         Total earnings = delivery_fee + tip + incentives.
+
+        `date_override` (YYYY-MM-DD) pins the sort-key prefix so multiple
+        call sites for the same order (e.g. cash-collected safety net +
+        DELIVERED finalize) overwrite the same row instead of creating
+        duplicates across a UTC midnight boundary. Defaults to today UTC.
         """
         try:
-            today = datetime.utcnow().strftime('%Y-%m-%d')
+            date_str = date_override or datetime.utcnow().strftime('%Y-%m-%d')
             earnings = RiderEarnings(
                 rider_id=rider_id,
-                date=f"{today}#{order_id}",
+                date=f"{date_str}#{order_id}",
                 total_deliveries=1,
                 total_earnings=delivery_fee + tip + incentives,
                 delivery_fees=delivery_fee,
