@@ -119,15 +119,25 @@ class NotificationService:
                     ios_alert_title = "Order Update"
                     ios_alert_body = title
 
-            # Send both Android and APNS config so FCM delivers correctly to iOS or Android
+            # Send both Android and APNS config so FCM delivers correctly to iOS or Android.
+            # iOS receives a visible-alert APNs payload regardless of `is_data_only` so the
+            # system renders the notification in foreground/background/killed without
+            # depending on the JS background handler (which today only logs).
+            # `apns-push-type: alert` is required by APNs HTTP/2 for visible alerts.
+            # `mutable_content=True` allows future Notification Service Extensions to enrich
+            # the payload (e.g. attach images) without another backend deploy.
             logger.info("📱 Sending FCM message (Android + APNS config)")
             apns_config = messaging.APNSConfig(
-                headers={'apns-priority': '10'},
+                headers={
+                    'apns-priority': '10',
+                    'apns-push-type': 'alert',
+                },
                 payload=messaging.APNSPayload(
                     aps=messaging.Aps(
                         alert=messaging.ApsAlert(title=ios_alert_title, body=ios_alert_body),
                         sound='default',
-                        badge=1
+                        badge=1,
+                        mutable_content=True,
                     )
                 )
             )

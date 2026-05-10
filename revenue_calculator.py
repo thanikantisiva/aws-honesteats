@@ -126,6 +126,12 @@ def _compute_revenue(order) -> tuple[dict, list]:
     total_item_coupon_discount = 0.0
     platform_item_coupon_discount = 0.0
     restaurant_item_coupon_discount = 0.0
+    # Sum of per-unit restaurantPrice × quantity across all items. Used to cap
+    # restaurant payout: anything the hike model would route to restaurant beyond
+    # this is the platform's share of the markup (see post-loop cap below).
+    # Items without a restaurantPrice fall back to gross_price so they remain
+    # uncapped (we have no "owed amount" to compare against).
+    total_items_restaurant_price = 0.0
     restaurantRevenue = {}
     platformRevenue = {}
     enriched_items: list = []
@@ -151,9 +157,15 @@ def _compute_revenue(order) -> tuple[dict, list]:
         customer_price = _safe_float(item.get("price"))
         add_on_total = _safe_float(item.get("addOnTotal"))
         stored_discount_amount = max(_safe_float(item.get("itemDiscountAmount")), 0.0)
+        restaurant_price = _safe_float(item.get("restaurantPrice"))
         gross_price = _get_gross_item_price(item, customer_price, stored_discount_amount)
         item_discount_amount = round(max(gross_price - customer_price, 0.0), 2)
         coupon_issued_by = _normalize_coupon_issuer(item.get("couponIssuedBy"))
+        # Cap basis for restaurant payout: when restaurantPrice is set the
+        # restaurant is owed exactly that per unit. Without a restaurantPrice
+        # (legacy items) fall back to gross_price so the cap is a no-op.
+        item_restaurant_owed = restaurant_price if restaurant_price > 0 else gross_price
+        total_items_restaurant_price += item_restaurant_owed * quantity
 
         commission_pct = _resolve_commission_pct(item_id, restaurant_config, global_default_commission)
         # Commission applies to base item price only (add-ons are 100% restaurant revenue).
@@ -218,7 +230,26 @@ def _compute_revenue(order) -> tuple[dict, list]:
     restaurant_settlement = round(gross_food_value - food_commission, 2)
     restaurantRevenue["revenue"] = restaurant_settlement
 
-    
+    # Cap restaurant payout at sum(items.restaurantPrice * qty) + add-on totals.
+    # When (1 + hikePercentage/100) × (1 - commissionPercentage/100) > 1 the
+    # current settlement leaves the restaurant overpaid relative to its agreed
+    # restaurantPrice; that overpayment is the platform's share of the markup
+    # and is moved to platformRevenue.excessFromRestaurantRevenue. Add-ons stay
+    # with the restaurant in full (existing semantics: add-ons are 100% restaurant).
+    restaurant_owed_total = round(total_items_restaurant_price + total_add_on_value, 2)
+    if restaurant_settlement > restaurant_owed_total:
+        excess_from_restaurant = round(restaurant_settlement - restaurant_owed_total, 2)
+        logger.info(
+            f"Restaurant payout capped at restaurantPrice + addOns: "
+            f"settlementBeforeCap={restaurant_settlement}, "
+            f"restaurantOwed={restaurant_owed_total}, "
+            f"excessTransferredToPlatform={excess_from_restaurant}"
+        )
+        restaurant_settlement = restaurant_owed_total
+        restaurantRevenue["revenue"] = restaurant_settlement
+        platformRevenue["excessFromRestaurantRevenue"] = excess_from_restaurant
+        total_platform_revenue = round(total_platform_revenue + excess_from_restaurant, 2)
+
     coupon_code = None
     coupon_applied = False
     coupon_discount = 0.0
@@ -291,6 +322,7 @@ def _compute_revenue(order) -> tuple[dict, list]:
     platformRevenue["finalPayout"] = round(
         platformRevenue.get("foodCommission", 0)
         + platformRevenue.get("platformFee", 0)
+        + platformRevenue.get("excessFromRestaurantRevenue", 0)
         - platformRevenue.get("riderDeliverySubsidy", 0)
         - platformRevenue.get("couponDiscount", 0)
         - platformRevenue.get("itemCouponDiscount", 0)

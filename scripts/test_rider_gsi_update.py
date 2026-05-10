@@ -53,16 +53,12 @@ def go_online_with_location():
     """Simulate rider going online - should update GSI fields"""
     print(f"\n2️⃣ Simulating rider going ONLINE with location ({TEST_LAT}, {TEST_LNG})")
     
-    # Calculate geohash at all precisions
+    # Calculate geohash. GSI3 partitions on the 2-char prefix.
     geohash_p7 = geohash_encode(TEST_LAT, TEST_LNG, precision=7)
-    geohash_p6 = geohash_p7[:6]
-    geohash_p5 = geohash_p7[:5]
-    geohash_p4 = geohash_p7[:4]
-    
+    geohash_p2 = geohash_p7[:2]
+
     print(f"   📍 Geohash P7: {geohash_p7}")
-    print(f"   📍 Geohash P6: {geohash_p6}")
-    print(f"   📍 Geohash P5: {geohash_p5}")
-    print(f"   📍 Geohash P4: {geohash_p4}")
+    print(f"   📍 Geohash P2: {geohash_p2}")
     
     try:
         timestamp = datetime.utcnow().isoformat()
@@ -70,18 +66,14 @@ def go_online_with_location():
         dynamodb_client.update_item(
             TableName=RIDERS_TABLE,
             Key={'riderId': {'S': TEST_RIDER_ID}},
-            UpdateExpression='SET isActive = :active, lastSeen = :lastSeen, lat = :lat, lng = :lng, geohash = :geohash, GSI1PK = :gsi1pk, GSI1SK = :gsi1sk, GSI2PK = :gsi2pk, GSI2SK = :gsi2sk, GSI3PK = :gsi3pk, GSI3SK = :gsi3sk',
+            UpdateExpression='SET isActive = :active, lastSeen = :lastSeen, lat = :lat, lng = :lng, geohash = :geohash, GSI3PK = :gsi3pk, GSI3SK = :gsi3sk',
             ExpressionAttributeValues={
                 ':active': {'BOOL': True},
                 ':lastSeen': {'S': timestamp},
                 ':lat': {'N': str(TEST_LAT)},
                 ':lng': {'N': str(TEST_LNG)},
                 ':geohash': {'S': geohash_p7},
-                ':gsi1pk': {'S': geohash_p6},
-                ':gsi1sk': {'S': f'RIDER#{TEST_RIDER_ID}'},
-                ':gsi2pk': {'S': geohash_p5},
-                ':gsi2sk': {'S': f'RIDER#{TEST_RIDER_ID}'},
-                ':gsi3pk': {'S': geohash_p4},
+                ':gsi3pk': {'S': geohash_p2},
                 ':gsi3sk': {'S': f'RIDER#{TEST_RIDER_ID}'}
             }
         )
@@ -117,10 +109,6 @@ def verify_gsi_fields():
             'lat': item.get('lat', {}).get('N'),
             'lng': item.get('lng', {}).get('N'),
             'geohash': item.get('geohash', {}).get('S'),
-            'GSI1PK': item.get('GSI1PK', {}).get('S'),
-            'GSI1SK': item.get('GSI1SK', {}).get('S'),
-            'GSI2PK': item.get('GSI2PK', {}).get('S'),
-            'GSI2SK': item.get('GSI2SK', {}).get('S'),
             'GSI3PK': item.get('GSI3PK', {}).get('S'),
             'GSI3SK': item.get('GSI3SK', {}).get('S')
         }
@@ -141,38 +129,37 @@ def verify_gsi_fields():
 
 
 def test_gsi_query():
-    """Test querying by GSI"""
+    """Test querying by GSI3 (the only spatial GSI on the riders table)"""
     print(f"\n4️⃣ Testing GSI queries")
-    
-    geohash_p5 = geohash_encode(TEST_LAT, TEST_LNG, precision=5)
-    print(f"   Querying GSI2 for geohash: {geohash_p5}")
-    
+
+    geohash_p2 = geohash_encode(TEST_LAT, TEST_LNG, precision=2)
+    print(f"   Querying GSI3 for geohash: {geohash_p2}")
+
     try:
         response = dynamodb_client.query(
             TableName=RIDERS_TABLE,
-            IndexName='GSI2',
-            KeyConditionExpression='GSI2PK = :pk',
+            IndexName='GSI3',
+            KeyConditionExpression='GSI3PK = :pk',
             ExpressionAttributeValues={
-                ':pk': {'S': geohash_p5}
+                ':pk': {'S': geohash_p2}
             }
         )
-        
+
         count = len(response.get('Items', []))
-        print(f"   ✅ Found {count} rider(s) in GSI2 query")
-        
-        # Check if our test rider is in results
+        print(f"   ✅ Found {count} rider(s) in GSI3 query")
+
         found_test_rider = any(
-            item.get('riderId', {}).get('S') == TEST_RIDER_ID 
+            item.get('riderId', {}).get('S') == TEST_RIDER_ID
             for item in response.get('Items', [])
         )
-        
+
         if found_test_rider:
-            print(f"   ✅ Test rider found in GSI2 query results")
+            print(f"   ✅ Test rider found in GSI3 query results")
         else:
-            print(f"   ❌ Test rider NOT found in GSI2 query results")
-        
+            print(f"   ❌ Test rider NOT found in GSI3 query results")
+
         return found_test_rider
-        
+
     except Exception as e:
         print(f"   ❌ Error: {e}")
         return False

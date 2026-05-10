@@ -13,6 +13,12 @@ ASSIGNMENT_WINDOW_DAYS = 7
 # Keep the stale window comfortably above both intervals.
 RIDER_LAST_SEEN_STALE_SECONDS = 90
 
+# GSI3 on the riders table is keyed by a 2-char geohash prefix. This produces ~1250 km cells,
+# which collapses every rider in a single deployment region into one partition that we can
+# Query (instead of Scan) when looking for assignment candidates. If the deployment expands
+# to neighbouring regions whose 2-char prefix differs, each region keeps its own partition.
+GSI3_GEOHASH_PRECISION = 2
+
 logger = Logger()
 
 
@@ -224,17 +230,15 @@ class RiderService:
         try:
             timestamp = now_ist_iso()
             
-            # Calculate geohash at all precision levels
+            # Geohash for GSI3 partition (rider assignment query)
             geohash_p7 = geohash_encode(lat, lng, precision=7)
-            geohash_p6 = geohash_p7[:6]
-            geohash_p5 = geohash_p7[:5]
-            geohash_p4 = geohash_p7[:4]
-            
+            geohash_p2 = geohash_p7[:GSI3_GEOHASH_PRECISION]
+
             # Update rider location in riders table
             dynamodb_client.update_item(
                 TableName=TABLES['RIDERS'],
                 Key={'riderId': {'S': rider_id}},
-                UpdateExpression='SET lat = :lat, lng = :lng, speed = :speed, heading = :heading, #timestamp = :timestamp, lastSeen = :lastSeen, geohash = :geohash, GSI1PK = :gsi1pk, GSI1SK = :gsi1sk, GSI2PK = :gsi2pk, GSI2SK = :gsi2sk, GSI3PK = :gsi3pk, GSI3SK = :gsi3sk',
+                UpdateExpression='SET lat = :lat, lng = :lng, speed = :speed, heading = :heading, #timestamp = :timestamp, lastSeen = :lastSeen, geohash = :geohash, GSI3PK = :gsi3pk, GSI3SK = :gsi3sk',
                 ExpressionAttributeNames={
                     '#timestamp': 'timestamp'
                 },
@@ -246,11 +250,7 @@ class RiderService:
                     ':timestamp': {'S': timestamp},
                     ':lastSeen': {'S': timestamp},
                     ':geohash': {'S': geohash_p7},
-                    ':gsi1pk': {'S': geohash_p6},
-                    ':gsi1sk': {'S': f'RIDER#{rider_id}'},
-                    ':gsi2pk': {'S': geohash_p5},
-                    ':gsi2sk': {'S': f'RIDER#{rider_id}'},
-                    ':gsi3pk': {'S': geohash_p4},
+                    ':gsi3pk': {'S': geohash_p2},
                     ':gsi3sk': {'S': f'RIDER#{rider_id}'}
                 }
             )
@@ -305,11 +305,9 @@ class RiderService:
             
             # If going online and location provided, update location and geohash
             if is_active and lat is not None and lng is not None:
-                # Calculate geohash at all precision levels
+                # Geohash for GSI3 partition (rider assignment query)
                 geohash_p7 = geohash_encode(lat, lng, precision=7)
-                geohash_p6 = geohash_p7[:6]
-                geohash_p5 = geohash_p7[:5]
-                geohash_p4 = geohash_p7[:4]
+                geohash_p2 = geohash_p7[:GSI3_GEOHASH_PRECISION]
 
                 set_clauses = [
                     'isActive = :active',
@@ -317,8 +315,6 @@ class RiderService:
                     'lat = :lat',
                     'lng = :lng',
                     'geohash = :geohash',
-                    'GSI1PK = :gsi1pk', 'GSI1SK = :gsi1sk',
-                    'GSI2PK = :gsi2pk', 'GSI2SK = :gsi2sk',
                     'GSI3PK = :gsi3pk', 'GSI3SK = :gsi3sk',
                 ] + name_clauses
 
@@ -328,11 +324,7 @@ class RiderService:
                     ':lat': {'N': str(lat)},
                     ':lng': {'N': str(lng)},
                     ':geohash': {'S': geohash_p7},
-                    ':gsi1pk': {'S': geohash_p6},
-                    ':gsi1sk': {'S': f'RIDER#{rider_id}'},
-                    ':gsi2pk': {'S': geohash_p5},
-                    ':gsi2sk': {'S': f'RIDER#{rider_id}'},
-                    ':gsi3pk': {'S': geohash_p4},
+                    ':gsi3pk': {'S': geohash_p2},
                     ':gsi3sk': {'S': f'RIDER#{rider_id}'},
                 }
                 values.update(name_values)
@@ -518,15 +510,20 @@ class RiderService:
             return None
 
     @staticmethod
-    def _get_all_riders() -> List[Rider]:
-        """Paginated scan of all riders (single-town deployment)."""
+    def _query_riders_by_gsi3(geohash_prefix: str) -> List[Rider]:
+        """Paginated Query on the riders GSI3 partition (geohash precision 2)."""
         riders: List[Rider] = []
         last_evaluated_key = None
         while True:
-            kwargs = {'TableName': TABLES['RIDERS']}
+            kwargs = {
+                'TableName': TABLES['RIDERS'],
+                'IndexName': 'GSI3',
+                'KeyConditionExpression': 'GSI3PK = :pk',
+                'ExpressionAttributeValues': {':pk': {'S': geohash_prefix}},
+            }
             if last_evaluated_key:
                 kwargs['ExclusiveStartKey'] = last_evaluated_key
-            response = dynamodb_client.scan(**kwargs)
+            response = dynamodb_client.query(**kwargs)
             for item in response.get('Items', []):
                 riders.append(Rider.from_dynamodb_item(item))
             last_evaluated_key = response.get('LastEvaluatedKey')
@@ -539,69 +536,34 @@ class RiderService:
         """
         Find available online riders within radius.
 
-        Loads all riders from the table (single-town scale), then filters by assignability and distance.
+        Queries GSI3 (2-char geohash prefix) to fetch all riders in the deployment region —
+        this avoids a table Scan. Riders are then filtered by assignability and distance.
 
         Returns: List of (Rider, distance_km) tuples sorted by distance
         """
         try:
             from utils.distance import calculate_distance
 
-            logger.info("Loading all riders from DB (single-town)")
-            all_riders = RiderService._get_all_riders()
-            logger.info(f"Found {len(all_riders)} riders in table")
-            
-            # Filter: active, recently seen, not working on order, and has location
+            geohash_prefix = geohash_encode(lat, lng, precision=GSI3_GEOHASH_PRECISION)
+            logger.info(f"Querying riders via GSI3 partition '{geohash_prefix}' (precision {GSI3_GEOHASH_PRECISION})")
+            all_riders = RiderService._query_riders_by_gsi3(geohash_prefix)
+            logger.info(f"GSI3 returned {len(all_riders)} riders")
+
             available_riders = RiderService._filter_assignable_riders(all_riders)
-            
-            logger.info(f"Found {len(available_riders)} available riders")
-            
-            # Calculate distances and filter by radius
-            nearby_riders = []
+            logger.info(f"{len(available_riders)} riders pass assignability filter")
+
+            nearby_riders: List[Tuple[Rider, float]] = []
             for rider in available_riders:
                 distance = calculate_distance(lat, lng, rider.lat, rider.lng)
                 if distance <= radius_km:
                     nearby_riders.append((rider, distance))
-            
-            # Sort by distance (closest first)
+
             nearby_riders.sort(key=lambda x: x[1])
-            
-            logger.info(f"Found {len(nearby_riders)} riders within {radius_km}km")
-            
-            return nearby_riders
-        except Exception as e:
-            logger.error(f"Error finding nearby riders: {str(e)}", exc_info=True)
-            # Fallback to old scan method if geohash query fails
-            logger.warn("Falling back to table scan")
-            return RiderService._find_available_riders_scan(lat, lng, radius_km)
-    
-    @staticmethod
-    def _find_available_riders_scan(lat: float, lng: float, radius_km: float = 5) -> List[Tuple[Rider, float]]:
-        """Fallback: Find available riders using table scan (slower)"""
-        try:
-            from utils.distance import calculate_distance
-            
-            response = dynamodb_client.scan(
-                TableName=TABLES['RIDERS'],
-                FilterExpression='isActive = :active AND (attribute_not_exists(workingOnOrder) OR size(workingOnOrder) = :zero)',
-                ExpressionAttributeValues={
-                    ':active': {'BOOL': True},
-                    ':zero': {'N': '0'}
-                }
-            )
-            
-            nearby_riders = []
-            for item in response.get('Items', []):
-                rider = Rider.from_dynamodb_item(item)
-                if not RiderService._filter_assignable_riders([rider]):
-                    continue
-                if rider.lat is not None and rider.lng is not None:
-                    distance = calculate_distance(lat, lng, rider.lat, rider.lng)
-                    if distance <= radius_km:
-                        nearby_riders.append((rider, distance))
-            
-            # Sort by distance
-            nearby_riders.sort(key=lambda x: x[1])
-            
+            logger.info(f"{len(nearby_riders)} riders within {radius_km}km")
             return nearby_riders
         except ClientError as e:
+            logger.error(f"GSI3 query failed: {str(e)}", exc_info=True)
             raise Exception(f"Failed to find nearby riders: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error finding nearby riders: {str(e)}", exc_info=True)
+            raise

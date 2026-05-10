@@ -24,18 +24,14 @@ REQUIRED_CONFIG_KEYS = [
     "freeDeliveryAboveThreshold",
 ]
 # Optional config keys — absent means feature is disabled / unlimited.
-# Customer-facing pricing overrides (decoupled from rider settlement):
-#   * `customerViewBaseRiderFarePerKm` — flat fee charged to the customer in the
-#     short-trip zone (distance ≤ riderBaseFareApplicableUnderKms). Despite the
-#     `PerKm` suffix this is NOT multiplied by distance; it is collected as-is.
-#   * `customerViewRiderFarePerKm`     — per-km rate charged to the customer in
-#     the long-trip zone (distance > riderBaseFareApplicableUnderKms).
-# When either key is absent the customer side falls back to the rider equivalent
-# for that zone, so behaviour stays identical to before these keys existed.
+# Customer-facing pricing override (decoupled from rider settlement):
+#   * `customerViewRiderFarePerKm` — per-km rate charged to the customer for
+#     the entire trip. The customer is billed `distance × customerViewRiderFarePerKm`
+#     irrespective of distance (no flat short-zone component). When the key is
+#     absent the customer side falls back to `riderFarePerKm`.
 OPTIONAL_CONFIG_KEYS = [
     "maxDeliveryRadiusKm",
     "customerViewRiderFarePerKm",
-    "customerViewBaseRiderFarePerKm",
 ]
 
 def _to_float(value):
@@ -140,13 +136,11 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
             kilometres are charged at the per-km rate. This guarantees the rider
             never earns less than `riderBaseFare` and the curve is monotonic
             across the boundary.
-      - customer-facing bill:
-          * short zone : flat `customerViewBaseRiderFarePerKm` (collected as-is,
-            NOT multiplied by distance — name is historical)
-          * long  zone : `distance × customerViewRiderFarePerKm`
-        Each customer key falls back to the rider equivalent when unset
-        (long zone → `riderFarePerKm`; short zone → flat `riderBaseFare`),
-        so absent keys preserve pre-existing behaviour.
+      - customer-facing bill (single, distance-only formula):
+          * `distance × customerViewRiderFarePerKm` for ALL distances. There is
+            no flat short-zone component on the customer side — the customer
+            always pays the per-km rate × distance. When `customerViewRiderFarePerKm`
+            is absent the customer rate falls back to `riderFarePerKm`.
 
     Customer pays no delivery fee (isFreeDelivery) when either:
       - itemTotal >= freeDeliveryAboveThreshold, or
@@ -159,25 +153,14 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
     rider_per_km = config["riderFarePerKm"]
     rider_base = config["riderBaseFare"]
     customer_per_km = config.get("customerViewRiderFarePerKm", rider_per_km)
-    # Flat fee for the short-trip zone (despite the `PerKm` suffix in the key
-    # name, this is collected as-is and NOT multiplied by distance).
-    customer_short_zone_flat_fee = config.get("customerViewBaseRiderFarePerKm")  # None → fall back to riderBaseFare
+
+    customer_base_fee = 0.0
+    customer_distance_fee = distance_km * customer_per_km
 
     if distance_km <= base_fare_km:
-        # Rider always gets the flat base fare in this zone.
         rider_base_fee = rider_base
         rider_distance_fee = 0.0
-        # Customer also pays a flat fee in this zone — either the override or
-        # the rider's base fare as a fallback.
-        customer_base_fee = (
-            customer_short_zone_flat_fee
-            if customer_short_zone_flat_fee is not None
-            else rider_base
-        )
-        customer_distance_fee = 0.0
     else:
-        customer_base_fee = 0.0
-        customer_distance_fee = distance_km * customer_per_km
         # Rider: base fare covers the first base_fare_km; only the extra distance
         # is charged at the per-km rate. Guarantees rider settlement is monotonic
         # across the base_fare_km boundary (was previously a small drop just
@@ -200,7 +183,7 @@ def calculate_delivery_fee(distance_km: float, item_total: float, config: dict) 
     logger.info(
         "Calculated delivery km split: "
         f"distanceKm={distance_km}, baseFareKm={base_fare_km}, "
-        f"customerShortZoneFlatFee={customer_short_zone_flat_fee}, customerPerKm={customer_per_km}, "
+        f"customerPerKm={customer_per_km}, "
         f"customerBaseFee={customer_base_fee}, customerDistanceFee={customer_distance_fee}, "
         f"riderBase={rider_base}, riderPerKm={rider_per_km}, "
         f"riderBaseFee={rider_base_fee}, riderDistanceFee={rider_distance_fee}, "
@@ -321,13 +304,10 @@ def register_delivery_routes(app):
 
             max_radius_km = config.get("maxDeliveryRadiusKm")  # None → unlimited
             customer_per_km_cfg = config.get("customerViewRiderFarePerKm")  # None → falls back to riderFarePerKm
-            # Flat customer fee for the short-trip zone (collected as-is, not per-km).
-            customer_short_zone_flat_fee_cfg = config.get("customerViewBaseRiderFarePerKm")  # None → falls back to flat riderBaseFare
             logger.info(
                 "Global delivery config loaded: "
                 f"platformFee={config['platformFee']}, riderBaseFare={config['riderBaseFare']}, "
                 f"riderFarePerKm={config['riderFarePerKm']}, "
-                f"customerViewBaseRiderFarePerKm={customer_short_zone_flat_fee_cfg}, "
                 f"customerViewRiderFarePerKm={customer_per_km_cfg}, "
                 f"riderFreeDeliveryBelowKm={config['riderFreeDeliveryBelowKm']}, "
                 f"freeDeliveryAboveThreshold={config['freeDeliveryAboveThreshold']}, "

@@ -65,13 +65,11 @@ def create_test_rider():
     rider_lng = RESTAURANT_LNG
     
     geohash_p7 = geohash_encode(rider_lat, rider_lng, 7)
-    geohash_p6 = geohash_p7[:6]
-    geohash_p5 = geohash_p7[:5]
-    geohash_p4 = geohash_p7[:4]
-    
+    geohash_p2 = geohash_p7[:2]
+
     print(f"   📍 Rider location: ({rider_lat}, {rider_lng})")
     print(f"   📍 Geohash: {geohash_p7}")
-    
+
     item = {
         'riderId': {'S': TEST_RIDER_ID},
         'phone': {'S': TEST_RIDER_PHONE},
@@ -81,11 +79,7 @@ def create_test_rider():
         'speed': {'N': '0'},
         'heading': {'N': '0'},
         'geohash': {'S': geohash_p7},
-        'GSI1PK': {'S': geohash_p6},
-        'GSI1SK': {'S': f'RIDER#{TEST_RIDER_ID}'},
-        'GSI2PK': {'S': geohash_p5},
-        'GSI2SK': {'S': f'RIDER#{TEST_RIDER_ID}'},
-        'GSI3PK': {'S': geohash_p4},
+        'GSI3PK': {'S': geohash_p2},
         'GSI3SK': {'S': f'RIDER#{TEST_RIDER_ID}'},
         'timestamp': {'S': now_ist_iso()},
         'lastSeen': {'S': now_ist_iso()}

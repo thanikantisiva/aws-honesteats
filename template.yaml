@@ -426,8 +426,6 @@ Resources:
                 - !Sub '${OrdersTable.Arn}/index/restaurantId-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/riderId-statusCreatedAt-index'
                 - !Sub '${RidersTable.Arn}/index/phone-index'
-                - !Sub '${RidersTable.Arn}/index/GSI1'
-                - !Sub '${RidersTable.Arn}/index/GSI2'
                 - !Sub '${RidersTable.Arn}/index/GSI3'
                 - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
                 - !Sub '${RestaurantsTable.Arn}/index/GSI1'
@@ -842,7 +840,8 @@ Resources:
                 - Pattern: '{"eventName": ["MODIFY"], "dynamodb": {"NewImage": {"status": {"S": ["PREPARING", "READY_FOR_PICKUP"]}}}}'
       Policies:
         - AWSLambdaBasicExecutionRole
-        # Includes dynamodb:Scan on table + indexes (RiderService._get_all_riders)
+        # Read-only access to RidersTable + GSIs. Assignment now Queries GSI3
+        # (2-char geohash partition) instead of scanning the table.
         - DynamoDBReadPolicy:
             TableName: !Ref RidersTable
         - Statement:
@@ -1065,7 +1064,11 @@ Resources:
       Runtime: python3.11
       Architectures:
         - x86_64
-      Timeout: 60
+      # Sized for ~4000 sequential FCM sends. At ~100-150 ms per send_via_firebase
+      # call (FCM round-trip + occasional retry), 4000 tokens ≈ 400-600 s; 600 s
+      # leaves comfortable headroom for slow-tail latencies, GSI pagination, and
+      # the one-time Firebase Admin SDK init.
+      Timeout: 600
       MemorySize: 256
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1077,10 +1080,18 @@ Resources:
                 - ssm:GetParametersByPath
               Resource:
                 - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rork-honesteats/${Environment}/*'
+            # Resolve recipients from UsersTableV2 by 2-char geohash partition.
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !Sub '${UsersTableV2.Arn}/index/geohash-index'
       Environment:
         Variables:
           FIREBASE_PROJECT_ID: appnearbites-85b8c
           NOTIFICATION_SERVICE: FIREBASE
+          USERS_TABLE_NAME: !Ref UsersTableV2
+          ENVIRONMENT: !Ref Environment
 
   # ---------------- ORDER ASSIGNMENT DELAY HANDLER ----------------
   OrderAssignmentDelayFunction:
@@ -1174,8 +1185,6 @@ Resources:
                   - !GetAtt RidersTable.Arn
                   - !GetAtt RestaurantsTable.Arn
                   - !GetAtt UsersTableV2.Arn
-                  - !Sub '${RidersTable.Arn}/index/GSI1'
-                  - !Sub '${RidersTable.Arn}/index/GSI2'
                   - !Sub '${RidersTable.Arn}/index/GSI3'
                   - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'
               - Effect: Allow
@@ -1456,14 +1465,6 @@ Resources:
           AttributeType: S
         - AttributeName: phone
           AttributeType: S
-        - AttributeName: GSI1PK
-          AttributeType: S
-        - AttributeName: GSI1SK
-          AttributeType: S
-        - AttributeName: GSI2PK
-          AttributeType: S
-        - AttributeName: GSI2SK
-          AttributeType: S
         - AttributeName: GSI3PK
           AttributeType: S
         - AttributeName: GSI3SK
@@ -1476,22 +1477,6 @@ Resources:
           KeySchema:
             - AttributeName: phone
               KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-        - IndexName: GSI1
-          KeySchema:
-            - AttributeName: GSI1PK
-              KeyType: HASH
-            - AttributeName: GSI1SK
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
-        - IndexName: GSI2
-          KeySchema:
-            - AttributeName: GSI2PK
-              KeyType: HASH
-            - AttributeName: GSI2SK
-              KeyType: RANGE
           Projection:
             ProjectionType: ALL
         - IndexName: GSI3

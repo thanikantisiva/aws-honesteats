@@ -52,41 +52,25 @@ class Rider:
         else:
             self.geohash = None
             
-        # Multi-precision geohash for different query ranges
+        # Multi-precision geohash. Only the 2-char prefix is indexed (GSI3) for the
+        # rider-assignment query. The longer prefixes are derived attributes kept on
+        # the Rider object for logging / future use, not written to DynamoDB.
         if self.geohash:
-            self.geohash_6 = self.geohash[:6]  # ~610m cells
-            self.geohash_5 = self.geohash[:5]  # ~2.4km cells
-            self.geohash_4 = self.geohash[:4]  # ~20km cells
+            self.geohash_4 = self.geohash[:4]  # ~20km cells (kept for legacy callers)
+            self.geohash_2 = self.geohash[:2]  # ~1250km cells (GSI3 partition)
         else:
-            self.geohash_6 = None
-            self.geohash_5 = None
             self.geohash_4 = None
-    
-    @property
-    def gsi1pk(self) -> Optional[str]:
-        """Get GSI1 partition key - geohash precision 6"""
-        return self.geohash_6
-    
-    @property
-    def gsi1sk(self) -> str:
-        """Get GSI1 sort key"""
-        return f"RIDER#{self.rider_id}"
-    
-    @property
-    def gsi2pk(self) -> Optional[str]:
-        """Get GSI2 partition key - geohash precision 5"""
-        return self.geohash_5
-    
-    @property
-    def gsi2sk(self) -> str:
-        """Get GSI2 sort key"""
-        return f"RIDER#{self.rider_id}"
+            self.geohash_2 = None
     
     @property
     def gsi3pk(self) -> Optional[str]:
-        """Get GSI3 partition key - geohash precision 4"""
-        return self.geohash_4
-    
+        """Get GSI3 partition key - geohash precision 2.
+
+        Acts as a single-partition index of all riders within a deployment region,
+        so the rider-assignment path can use Query (not Scan) to fan out candidates.
+        """
+        return self.geohash_2
+
     @property
     def gsi3sk(self) -> str:
         """Get GSI3 sort key"""
@@ -179,15 +163,10 @@ class Rider:
         if self.last_name:
             item["lastName"] = {"S": self.last_name}
         
-        # Add geohash fields for spatial indexing
+        # Add geohash fields for spatial indexing (only GSI3 is indexed)
         if self.geohash:
             item["geohash"] = {"S": self.geohash}
-            # Add GSI fields for multi-precision geohash queries
-            item["GSI1PK"] = {"S": self.gsi1pk}  # Precision 6
-            item["GSI1SK"] = {"S": self.gsi1sk}
-            item["GSI2PK"] = {"S": self.gsi2pk}  # Precision 5
-            item["GSI2SK"] = {"S": self.gsi2sk}
-            item["GSI3PK"] = {"S": self.gsi3pk}  # Precision 4
+            item["GSI3PK"] = {"S": self.gsi3pk}  # Precision 2
             item["GSI3SK"] = {"S": self.gsi3sk}
-            
+
         return item
