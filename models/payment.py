@@ -18,6 +18,10 @@ class Payment:
     METHOD_WALLET = "WALLET"
     METHOD_NETBANKING = "NETBANKING"
     METHOD_COD = "COD"
+    # Sodexo meal cards via Razorpay Optimizer (PayU provider). The Razorpay
+    # `payment.fetch` API returns method="sodexo" for these; we uppercase
+    # in the verify/webhook handlers so the persisted value matches.
+    METHOD_SODEXO = "SODEXO"
 
     # How checkout is completed: in-app Standard vs pay at delivery (cash or rider UPI QR)
     PAYMENT_CHANNEL_STANDARD = "STANDARD"
