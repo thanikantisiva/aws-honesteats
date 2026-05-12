@@ -1,4 +1,5 @@
 """Order service"""
+from datetime import datetime
 from typing import List, Optional
 from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
@@ -17,6 +18,23 @@ class OrderStatusConflictError(Exception):
 
 class OrderService:
     """Service for order operations"""
+
+    @staticmethod
+    def _normalize_range_bound(value: str, end_of_day: bool = False) -> str:
+        """Normalize YYYY-MM-DD or ISO-like values for lexicographic createdAt filtering."""
+        raw = str(value or "").strip()
+        if not raw:
+            raise ValueError("Date value is required")
+        if len(raw) == 10:
+            suffix = "T23:59:59+05:30" if end_of_day else "T00:00:00+05:30"
+            return f"{raw}{suffix}"
+        if raw.endswith("Z"):
+            raw = f"{raw[:-1]}+00:00"
+        parsed = datetime.fromisoformat(raw)
+        normalized = parsed.isoformat()
+        if len(normalized) == 19:
+            normalized = f"{normalized}+05:30"
+        return normalized
     
     @staticmethod
     def get_order(order_id: str) -> Optional[Order]:
@@ -93,36 +111,64 @@ class OrderService:
     
     @staticmethod
     def list_orders_by_restaurant(restaurant_id: str, status: str = None, limit: int = 500) -> List[Order]:
-        """List orders by restaurant ID using GSI with optional status filter"""
+        """List orders by restaurant ID.
+        With status filter: uses GSI (restaurantId-statusCreatedAt-index) for efficient lookup.
+        Without status filter: uses a table scan so that orders missing the composite sort key
+        attribute (e.g. older orders) are still returned.
+        """
         try:
             logger.info(f"Listing orders for restaurant={restaurant_id} status={status} limit={limit}")
-            query_params = {
-                'TableName': TABLES['ORDERS'],
-                'IndexName': 'restaurantId-statusCreatedAt-index',
-                'ScanIndexForward': False,
-            }
-            if status:
-                query_params['KeyConditionExpression'] = 'restaurantId = :restaurantId AND begins_with(restaurantStatusCreatedAt, :statusPrefix)'
-                query_params['ExpressionAttributeValues'] = {
-                    ':restaurantId': {'S': restaurant_id},
-                    ':statusPrefix': {'S': f'{status}#'}
-                }
-            else:
-                query_params['KeyConditionExpression'] = 'restaurantId = :restaurantId'
-                query_params['ExpressionAttributeValues'] = {
-                    ':restaurantId': {'S': restaurant_id}
-                }
 
-            orders = []
-            while True:
-                response = dynamodb_client.query(**query_params)
-                for item in response.get('Items', []):
-                    orders.append(Order.from_dynamodb_item(item))
-                    if len(orders) >= limit:
+            if status:
+                # Status-filtered path — GSI is efficient here
+                query_params = {
+                    'TableName': TABLES['ORDERS'],
+                    'IndexName': 'restaurantId-statusCreatedAt-index',
+                    'ScanIndexForward': False,
+                    'KeyConditionExpression': 'restaurantId = :restaurantId AND begins_with(restaurantStatusCreatedAt, :statusPrefix)',
+                    'ExpressionAttributeValues': {
+                        ':restaurantId': {'S': restaurant_id},
+                        ':statusPrefix': {'S': f'{status}#'},
+                    },
+                }
+                orders = []
+                while True:
+                    response = dynamodb_client.query(**query_params)
+                    for item in response.get('Items', []):
+                        orders.append(Order.from_dynamodb_item(item))
+                        if len(orders) >= limit:
+                            break
+                    if len(orders) >= limit or 'LastEvaluatedKey' not in response:
                         break
-                if len(orders) >= limit or 'LastEvaluatedKey' not in response:
-                    break
-                query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                    query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+            else:
+                # No-status path — scan so that ALL orders are returned regardless of
+                # whether the composite sort key attribute exists on the item.
+                scan_params = {
+                    'TableName': TABLES['ORDERS'],
+                    'FilterExpression': 'restaurantId = :restaurantId',
+                    'ExpressionAttributeValues': {
+                        ':restaurantId': {'S': restaurant_id},
+                    },
+                }
+                orders = []
+                while True:
+                    response = dynamodb_client.scan(**scan_params)
+                    for item in response.get('Items', []):
+                        orders.append(Order.from_dynamodb_item(item))
+                    if 'LastEvaluatedKey' not in response or len(orders) >= limit:
+                        break
+                    scan_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+                # Sort newest-first (mirrors GSI ScanIndexForward=False behaviour)
+                def _sort_key(o: 'Order') -> str:
+                    ca = o.created_at
+                    if isinstance(ca, int):
+                        from utils.datetime_ist import epoch_ms_to_ist_iso
+                        return epoch_ms_to_ist_iso(ca)
+                    return str(ca or '')
+
+                orders.sort(key=_sort_key, reverse=True)
 
             logger.info(f"Listed {len(orders)} orders for restaurant={restaurant_id}")
             return orders[:limit]
@@ -171,6 +217,81 @@ class OrderService:
     def get_orders_by_rider(rider_id: str, status: str = None, limit: int = 20) -> List[Order]:
         """Alias for list_orders_by_rider for backward compatibility"""
         return OrderService.list_orders_by_rider(rider_id, status, limit)
+
+    @staticmethod
+    def list_orders_by_date_range(
+        start_date: str,
+        end_date: str,
+        status: str = None,
+        limit: int = 500,
+    ) -> List[Order]:
+        """List orders created within a date range.
+
+        - With `status`: query `status-createdAtIso-index` efficiently.
+        - Without `status`: scan on `createdAt BETWEEN :start AND :end`.
+        """
+        try:
+            start_bound = OrderService._normalize_range_bound(start_date, end_of_day=False)
+            end_bound = OrderService._normalize_range_bound(end_date, end_of_day=True)
+            logger.info(
+                f"Listing orders by date range start={start_bound} end={end_bound} status={status} limit={limit}"
+            )
+
+            orders: List[Order] = []
+            if status:
+                query_params = {
+                    "TableName": TABLES["ORDERS"],
+                    "IndexName": "status-createdAtIso-index",
+                    "ScanIndexForward": False,
+                    "KeyConditionExpression": "#status = :status AND createdAt BETWEEN :start AND :end",
+                    "ExpressionAttributeNames": {
+                        "#status": "status",
+                    },
+                    "ExpressionAttributeValues": {
+                        ":status": {"S": status},
+                        ":start": {"S": start_bound},
+                        ":end": {"S": end_bound},
+                    },
+                }
+                while True:
+                    response = dynamodb_client.query(**query_params)
+                    for item in response.get("Items", []):
+                        orders.append(Order.from_dynamodb_item(item))
+                        if len(orders) >= limit:
+                            break
+                    if len(orders) >= limit or "LastEvaluatedKey" not in response:
+                        break
+                    query_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+            else:
+                scan_params = {
+                    "TableName": TABLES["ORDERS"],
+                    "FilterExpression": "createdAt BETWEEN :start AND :end",
+                    "ExpressionAttributeValues": {
+                        ":start": {"S": start_bound},
+                        ":end": {"S": end_bound},
+                    },
+                }
+                while True:
+                    response = dynamodb_client.scan(**scan_params)
+                    for item in response.get("Items", []):
+                        orders.append(Order.from_dynamodb_item(item))
+                        if len(orders) >= limit:
+                            break
+                    if len(orders) >= limit or "LastEvaluatedKey" not in response:
+                        break
+                    scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+                def _sort_key(order: "Order") -> str:
+                    return str(order.to_dict().get("createdAt") or "")
+
+                orders.sort(key=_sort_key, reverse=True)
+
+            logger.info(f"Listed {len(orders)} orders for date range")
+            return orders[:limit]
+        except ValueError as e:
+            raise Exception(f"Invalid date range: {str(e)}")
+        except ClientError as e:
+            raise Exception(f"Failed to list orders by date range: {str(e)}")
     
     @staticmethod
     def update_order(order_id: str, updates: dict) -> Order:

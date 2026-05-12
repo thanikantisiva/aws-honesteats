@@ -11,6 +11,16 @@ metrics = Metrics()
 
 def register_earnings_routes(app):
     """Register rider earnings routes"""
+
+    def _append_bonus_state(rider_id: str, payload: dict) -> dict:
+        bonus_state = EarningsService.get_bonus_progress(rider_id)
+        if bonus_state.get("campaign"):
+            payload["bonusCampaign"] = bonus_state.get("campaign")
+            payload["bonusProgress"] = bonus_state.get("progress")
+        else:
+            payload["bonusCampaign"] = None
+            payload["bonusProgress"] = None
+        return payload
     
     @app.get("/api/v1/riders/<rider_id>/earnings")
     @tracer.capture_method
@@ -34,14 +44,10 @@ def register_earnings_routes(app):
                     today,
                     today
                 )
-                result = {
+                result = EarningsService.summarize_earnings(today_earnings)
+                result.update({
                     "period": "today",
-                    "totalDeliveries": sum(e.total_deliveries for e in today_earnings),
-                    "totalEarnings": sum(e.total_earnings for e in today_earnings),
-                    "totalTips": sum(e.tips for e in today_earnings),
-                    "totalIncentives": sum(e.incentives for e in today_earnings),
-                    "dailyBreakdown": [e.to_dict() for e in today_earnings]
-                }
+                })
             elif period == 'week':
                 result = EarningsService.get_weekly_earnings(rider_id)
             elif period == 'month':
@@ -51,7 +57,7 @@ def register_earnings_routes(app):
             
             metrics.add_metric(name="RiderEarningsRetrieved", unit="Count", value=1)
             
-            return result, 200
+            return _append_bonus_state(rider_id, result), 200
             
         except Exception as e:
             logger.error("Error getting rider earnings", exc_info=True)
@@ -79,22 +85,37 @@ def register_earnings_routes(app):
             
             earnings_list = EarningsService.get_earnings_for_date_range(rider_id, start_date, end_date)
             
-            total_deliveries = sum(e.total_deliveries for e in earnings_list)
-            total_earnings = sum(e.total_earnings for e in earnings_list)
+            summary = EarningsService.summarize_earnings(earnings_list)
             
             metrics.add_metric(name="RiderEarningsHistoryRetrieved", unit="Count", value=1)
             
-            return {
+            return _append_bonus_state(rider_id, {
                 "startDate": start_date,
                 "endDate": end_date,
-                "totalDeliveries": total_deliveries,
-                "totalEarnings": total_earnings,
-                "history": [e.to_dict() for e in earnings_list]
-            }, 200
+                "totalDeliveries": summary["totalDeliveries"],
+                "totalEarnings": summary["totalEarnings"],
+                "totalTips": summary["totalTips"],
+                "totalIncentives": summary["totalIncentives"],
+                "totalBonusEarnings": summary["totalBonusEarnings"],
+                "deliveryEarnings": summary["deliveryEarnings"],
+                "history": summary["dailyBreakdown"],
+            }), 200
             
         except Exception as e:
             logger.error("Error getting earnings history", exc_info=True)
             return {"error": "Failed to get earnings history", "message": str(e)}, 500
+
+    @app.get("/api/v1/riders/<rider_id>/bonus-progress")
+    @tracer.capture_method
+    def get_bonus_progress(rider_id: str):
+        """Get current rider bonus campaign details and progress."""
+        try:
+            logger.info(f"Getting bonus progress for rider: {rider_id}")
+            metrics.add_metric(name="RiderBonusProgressRetrieved", unit="Count", value=1)
+            return EarningsService.get_bonus_progress(rider_id), 200
+        except Exception as e:
+            logger.error("Error getting rider bonus progress", exc_info=True)
+            return {"error": "Failed to get bonus progress", "message": str(e)}, 500
 
     @app.post("/api/v1/riders/<rider_id>/earnings/settle")
     @tracer.capture_method

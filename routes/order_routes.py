@@ -18,6 +18,31 @@ metrics = Metrics()
 
 def register_order_routes(app):
     """Register order routes"""
+
+    def _enrich_orders_with_rider_details(orders):
+        enriched_orders = []
+        for order in orders:
+            order_dict = order.to_dict()
+
+            if order.rider_id:
+                try:
+                    from services.rider_service import RiderService
+
+                    rider = RiderService.get_rider(order.rider_id)
+                    if rider:
+                        order_dict['riderRating'] = float(rider.rating) if rider.rating is not None else 0.0
+                        order_dict['riderRatedCount'] = int(rider.rated_count) if rider.rated_count is not None else 0
+                        rider_user = UserService.get_user_by_role(rider.phone, "RIDER")
+                        if rider_user:
+                            order_dict['riderName'] = f"{rider_user.first_name} {rider_user.last_name}"
+                            order_dict['riderPhone'] = rider.phone
+                            logger.info(f"[orderId={order.order_id}] Enriched with rider: {order_dict['riderName']}")
+                except Exception as e:
+                    logger.error(f"[orderId={order.order_id}] Failed to fetch rider {order.rider_id}: {str(e)}")
+
+            enriched_orders.append(order_dict)
+
+        return enriched_orders
     
     @app.get("/api/v1/orders/<order_id>")
     @tracer.capture_method
@@ -83,8 +108,10 @@ def register_order_routes(app):
             customer_phone = query_params.get('customerPhone')
             restaurant_id = query_params.get('restaurantId')
             rider_id = query_params.get('riderId')
+            start_date = query_params.get('startDate')
+            end_date = query_params.get('endDate')
             # Use a high default for restaurant so all orders are returned (today-filter is client-side)
-            default_limit = 500 if restaurant_id else 20
+            default_limit = 500 if (restaurant_id or start_date or end_date) else 20
             limit = int(query_params.get('limit', default_limit))
             
             customer_phone = normalize_phone(customer_phone)
@@ -92,7 +119,10 @@ def register_order_routes(app):
             # Optional status filter
             status_filter = query_params.get('status')
             
-            logger.info(f"Listing orders - customer: {customer_phone}, restaurant: {restaurant_id}, rider: {rider_id}, status: {status_filter}")
+            logger.info(
+                f"Listing orders - customer: {customer_phone}, restaurant: {restaurant_id}, rider: {rider_id}, "
+                f"startDate: {start_date}, endDate: {end_date}, status: {status_filter}"
+            )
             logger.info(f"Query params received: {query_params}")
             
             if customer_phone:
@@ -101,32 +131,17 @@ def register_order_routes(app):
                 orders = OrderService.list_orders_by_restaurant(restaurant_id, status=status_filter, limit=limit)
             elif rider_id:
                 orders = OrderService.list_orders_by_rider(rider_id, status=status_filter, limit=limit)
+            elif start_date and end_date:
+                orders = OrderService.list_orders_by_date_range(
+                    start_date,
+                    end_date,
+                    status=status_filter,
+                    limit=limit,
+                )
             else:
-                return {"error": "Must provide customerPhone, restaurantId, or riderId"}, 400
-            
-            # Enrich orders with rider details
-            enriched_orders = []
-            for order in orders:
-                order_dict = order.to_dict()
-                
-                # Fetch rider data if order has a rider assigned
-                if order.rider_id:
-                    try:
-                        # First get rider to get phone number
-                        from services.rider_service import RiderService
-                        rider = RiderService.get_rider(order.rider_id)
-                        if rider:
-                            order_dict['riderRating'] = float(rider.rating) if rider.rating is not None else 0.0
-                            order_dict['riderRatedCount'] = int(rider.rated_count) if rider.rated_count is not None else 0
-                            rider_user = UserService.get_user_by_role(rider.phone, "RIDER")
-                            if rider_user:
-                                order_dict['riderName'] = f"{rider_user.first_name} {rider_user.last_name}"
-                                order_dict['riderPhone'] = rider.phone
-                                logger.info(f"[orderId={order.order_id}] Enriched with rider: {order_dict['riderName']}")
-                    except Exception as e:
-                        logger.error(f"[orderId={order.order_id}] Failed to fetch rider {order.rider_id}: {str(e)}")
-                
-                enriched_orders.append(order_dict)
+                return {"error": "Must provide customerPhone, restaurantId, riderId, or startDate and endDate"}, 400
+
+            enriched_orders = _enrich_orders_with_rider_details(orders)
             
             metrics.add_metric(name="OrdersListed", unit="Count", value=1)
             return {
@@ -136,6 +151,41 @@ def register_order_routes(app):
         except Exception as e:
             logger.error("Error listing orders", exc_info=True)
             return {"error": "Failed to list orders", "message": str(e)}, 500
+
+    @app.post("/api/v1/orders/date-range")
+    @tracer.capture_method
+    @require_auth(app)
+    def list_orders_by_date_range():
+        """List orders by createdAt date range using request body."""
+        try:
+            body = app.current_event.json_body or {}
+            start_date = body.get('startDate')
+            end_date = body.get('endDate')
+            status_filter = body.get('status')
+            limit = int(body.get('limit', 500))
+
+            if not start_date or not end_date:
+                return {"error": "startDate and endDate required"}, 400
+
+            orders = OrderService.list_orders_by_date_range(
+                start_date,
+                end_date,
+                status=status_filter,
+                limit=limit,
+            )
+            enriched_orders = _enrich_orders_with_rider_details(orders)
+
+            metrics.add_metric(name="OrdersListedByDateRange", unit="Count", value=1)
+            return {
+                "orders": enriched_orders,
+                "total": len(enriched_orders),
+                "startDate": start_date,
+                "endDate": end_date,
+                "status": status_filter,
+            }, 200
+        except Exception as e:
+            logger.error("Error listing orders by date range", exc_info=True)
+            return {"error": "Failed to list orders by date range", "message": str(e)}, 500
     
     @app.post("/api/v1/orders")
     @tracer.capture_method

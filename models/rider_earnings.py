@@ -21,7 +21,13 @@ class RiderEarnings:
         settlement_id: Optional[str] = None,
         settled: bool = False,
         settled_at: Optional[str] = None,
-        created_at: Optional[str] = None
+        created_at: Optional[str] = None,
+        entry_type: Optional[str] = None,
+        bonus_type: Optional[str] = None,
+        milestone_stops: Optional[int] = None,
+        campaign_start_date: Optional[str] = None,
+        campaign_end_date: Optional[str] = None,
+        bonus_label: Optional[str] = None,
     ):
         self.rider_id = rider_id
         self.date = date
@@ -37,6 +43,12 @@ class RiderEarnings:
         self.settled = settled
         self.settled_at = settled_at
         self.created_at = created_at or now_ist_iso()
+        self.entry_type = entry_type
+        self.bonus_type = bonus_type
+        self.milestone_stops = milestone_stops
+        self.campaign_start_date = campaign_start_date
+        self.campaign_end_date = campaign_end_date
+        self.bonus_label = bonus_label
     
     def to_dict(self) -> dict:
         """Convert to dictionary"""
@@ -54,7 +66,13 @@ class RiderEarnings:
             "settlementId": self.settlement_id,
             "settled": self.settled,
             "settledAt": self.settled_at,
-            "createdAt": self.created_at
+            "createdAt": self.created_at,
+            "entryType": self.entry_type,
+            "bonusType": self.bonus_type,
+            "milestoneStops": self.milestone_stops,
+            "campaignStartDate": self.campaign_start_date,
+            "campaignEndDate": self.campaign_end_date,
+            "bonusLabel": self.bonus_label,
         }
     
     @classmethod
@@ -74,7 +92,13 @@ class RiderEarnings:
             settlement_id=item.get("settlementId", {}).get("S") if "settlementId" in item else None,
             settled=item.get("settled", {}).get("BOOL", False) if "settled" in item else False,
             settled_at=item.get("settledAt", {}).get("S") if "settledAt" in item else None,
-            created_at=item.get("createdAt", {}).get("S", "")
+            created_at=item.get("createdAt", {}).get("S", ""),
+            entry_type=item.get("entryType", {}).get("S") if "entryType" in item else None,
+            bonus_type=item.get("bonusType", {}).get("S") if "bonusType" in item else None,
+            milestone_stops=int(item.get("milestoneStops", {}).get("N", "0")) if "milestoneStops" in item else None,
+            campaign_start_date=item.get("campaignStartDate", {}).get("S") if "campaignStartDate" in item else None,
+            campaign_end_date=item.get("campaignEndDate", {}).get("S") if "campaignEndDate" in item else None,
+            bonus_label=item.get("bonusLabel", {}).get("S") if "bonusLabel" in item else None,
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -95,6 +119,18 @@ class RiderEarnings:
             item["orderId"] = {"S": self.order_id}
         if self.settlement_id:
             item["settlementId"] = {"S": self.settlement_id}
+        if self.entry_type:
+            item["entryType"] = {"S": self.entry_type}
+        if self.bonus_type:
+            item["bonusType"] = {"S": self.bonus_type}
+        if self.milestone_stops is not None:
+            item["milestoneStops"] = {"N": str(self.milestone_stops)}
+        if self.campaign_start_date:
+            item["campaignStartDate"] = {"S": self.campaign_start_date}
+        if self.campaign_end_date:
+            item["campaignEndDate"] = {"S": self.campaign_end_date}
+        if self.bonus_label:
+            item["bonusLabel"] = {"S": self.bonus_label}
         item["settled"] = {"BOOL": self.settled}
         if self.settled_at:
             item["settledAt"] = {"S": self.settled_at}

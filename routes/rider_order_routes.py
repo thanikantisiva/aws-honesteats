@@ -555,6 +555,17 @@ def register_rider_order_routes(app):
                     delivery_duration_minutes=delivery_duration_minutes,
                     date_override=_earnings_date_for_order(order),
                 )
+                try:
+                    bonus_credits = EarningsService.apply_milestone_bonuses(rider_id)
+                    if bonus_credits:
+                        logger.info(
+                            f"[orderId={order_id}] Credited milestone bonuses for rider {rider_id}: {bonus_credits}"
+                        )
+                except Exception as bonus_err:
+                    # Bonus crediting must never block delivery completion.
+                    logger.warning(
+                        f"[orderId={order_id}] Milestone bonus credit failed (non-fatal): {bonus_err}"
+                    )
                 metrics.add_metric(
                     name="DeliveryDurationMinutes",
                     unit="Count",
