@@ -6,6 +6,7 @@ import json
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from services.notification_service import NotificationService
+from services.ntfy_service import publish_new_order_alert
 from services.restaurant_service import RestaurantService
 from utils.dynamodb_helpers import dynamodb_to_python
 
@@ -132,6 +133,19 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                 amount = float(amount_raw or "0")
             except Exception:
                 amount = 0.0
+
+            # Best-effort ntfy.sh push for operators (prod only; no-op elsewhere).
+            # Fires for every new CONFIRMED order regardless of whether the
+            # restaurant has FCM tokens registered, so it must run before any
+            # token-related early-return below.
+            try:
+                publish_new_order_alert(
+                    order_id=order_id,
+                    restaurant_name=restaurant_name,
+                    amount=amount,
+                )
+            except Exception as ntfy_err:  # noqa: BLE001
+                logger.warning(f"[orderId={order_id}] ntfy alert failed: {ntfy_err}")
 
             if not restaurant_id:
                 logger.warning(f"[orderId={order_id}] Missing restaurantId, skipping")

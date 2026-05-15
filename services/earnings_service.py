@@ -1,13 +1,20 @@
-"""Earnings service for rider earnings tracking."""
+
+from typing import Dict, List, Optional
+from botocore.exceptions import ClientError
+from models.rider_earnings import RiderEarnings
+from utils.dynamodb import dynamodb_client, TABLES
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 
 from models.rider_earnings import RiderEarnings
 from utils.datetime_ist import IST, now_ist_iso
 from utils.dynamodb import TABLES, dynamodb_client
 from utils.dynamodb_helpers import dynamodb_to_python
+
+logger = Logger()
 
 CONFIG_PK = "CONFIG#GLOBAL"
 CONFIG_SK = "CONFIG"
@@ -44,11 +51,36 @@ def _to_int(value: Any) -> Optional[int]:
         return None
 
 
+def _is_cod_row(e: "RiderEarnings") -> bool:
+    """COD cash-collection rows are tracked separately and must NOT roll up
+    into ``totalEarnings`` (they're a liability against the rider's pocket,
+    not an earned payout)."""
+    return (e.entry_type or "") == "COD_AMOUNT_COLLECTED"
+
+
+def _aggregate_totals(earnings_list: List[RiderEarnings]) -> Dict[str, float]:
+    """Compute the period-level rollup values from a list of earnings rows.
+
+    ``totalEarnings`` is the GROSS payout owed to the rider (delivery fees +
+    tips + incentives + bonuses).  COD cash-collected rows are reported
+    separately in ``totalCashCollected`` and are NOT subtracted from
+    ``totalEarnings`` — clients render them as a distinct line item.
+    """
+    return {
+        "totalDeliveries": sum(e.total_deliveries for e in earnings_list),
+        "totalEarnings": sum(e.total_earnings for e in earnings_list if not _is_cod_row(e)),
+        "totalTips": sum(e.tips for e in earnings_list),
+        "totalIncentives": sum(e.incentives for e in earnings_list),
+        "totalCashCollected": sum(e.cash_collected for e in earnings_list),
+    }
+
+
 class EarningsService:
     """Service for rider earnings operations."""
 
     ENTRY_TYPE_ORDER_EARNING = "ORDER_EARNING"
     ENTRY_TYPE_MILESTONE_BONUS = "MILESTONE_BONUS"
+    ENTRY_TYPE_COD_AMOUNT_COLLECTED = "COD_AMOUNT_COLLECTED"
     BONUS_TYPE_RIDER_TARGET = "RIDER_TARGET"
 
     @staticmethod
@@ -233,7 +265,13 @@ class EarningsService:
     @staticmethod
     def summarize_earnings(earnings_list: List[RiderEarnings]) -> dict:
         total_deliveries = sum(e.total_deliveries for e in earnings_list)
-        total_earnings = round(sum(e.total_earnings for e in earnings_list), 2)
+        # Exclude COD adjustment rows: ``totalEarnings`` is the gross payout
+        # owed to the rider.  Cash held by the rider is reported separately
+        # via ``totalCashCollected``.
+        total_earnings = round(
+            sum(e.total_earnings for e in earnings_list if not _is_cod_row(e)),
+            2,
+        )
         total_tips = round(sum(e.tips for e in earnings_list), 2)
         total_incentives = round(sum(e.incentives for e in earnings_list), 2)
         total_bonus_earnings = round(
@@ -244,6 +282,10 @@ class EarningsService:
             sum(e.delivery_fees for e in earnings_list if EarningsService._is_order_entry(e)),
             2,
         )
+        total_cash_collected = round(
+            sum(e.cash_collected for e in earnings_list),
+            2,
+        )
         return {
             "totalDeliveries": total_deliveries,
             "totalEarnings": total_earnings,
@@ -251,6 +293,7 @@ class EarningsService:
             "totalIncentives": total_incentives,
             "totalBonusEarnings": total_bonus_earnings,
             "deliveryEarnings": delivery_earnings,
+            "totalCashCollected": total_cash_collected,
             "dailyBreakdown": [e.to_dict() for e in earnings_list],
         }
 
@@ -398,6 +441,60 @@ class EarningsService:
         rider_id: str, start_date: str, end_date: str
     ) -> List[RiderEarnings]:
         """Get earnings for a date range."""
+    def record_cash_collected(
+        rider_id: str,
+        order_id: str,
+        cash_amount: float,
+        date_override: Optional[str] = None,
+    ) -> None:
+        """Record a COD cash-collection event as a distinct earnings row.
+
+        Sort key: ``<YYYY-MM-DD>#COD#<orderId>`` (intentionally distinct from
+        the delivery row at ``<YYYY-MM-DD>#<orderId>`` so the two events live
+        side by side in the same query window).
+
+        The row is tagged ``entryType=COD_AMOUNT_COLLECTED`` and is EXCLUDED
+        from the ``totalEarnings`` rollup; the cash amount is surfaced via
+        the separate ``totalCashCollected`` aggregate so clients can render
+        it as its own line item (it represents a liability of the rider, not
+        an earned payout).
+
+        Component fields (deliveryFees / tips / incentives) stay 0.
+        ``cashCollected`` carries the gross amount for display /
+        reconciliation. ``totalEarnings`` is stored as ``-cash_amount`` for
+        backward compatibility with older aggregates that summed the field
+        directly; new code paths use the explicit COD filter.
+        """
+        try:
+            cash_amount = float(cash_amount or 0)
+            date_str = date_override or datetime.utcnow().strftime('%Y-%m-%d')
+            earnings = RiderEarnings(
+                rider_id=rider_id,
+                date=f"{date_str}#COD#{order_id}",
+                total_deliveries=0,
+                total_earnings=-cash_amount,
+                delivery_fees=0.0,
+                tips=0.0,
+                incentives=0.0,
+                delivery_duration_minutes=0,
+                order_id=order_id,
+                settled=False,
+                settled_at=None,
+                entry_type=EarningsService.ENTRY_TYPE_COD_AMOUNT_COLLECTED,
+                payment_channel="COD",
+                cash_collected=cash_amount,
+            )
+
+            dynamodb_client.put_item(
+                TableName=TABLES['EARNINGS'],
+                Item=earnings.to_dynamodb_item()
+            )
+        except ClientError as e:
+            raise Exception(f"Failed to record cash collected: {str(e)}")
+
+    @staticmethod
+    def get_earnings_for_date_range(rider_id: str, start_date: str, end_date: str) -> List[RiderEarnings]:
+        """Get earnings for a date range"""
         try:
             response = dynamodb_client.query(
                 TableName=TABLES["EARNINGS"],
@@ -440,11 +537,15 @@ class EarningsService:
         end_date = today.strftime("%Y-%m-%d")
 
         earnings_list = EarningsService.get_earnings_for_date_range(rider_id, start_date, end_date)
+        totals = _aggregate_totals(earnings_list)
+
         return {
             "period": "week",
             "startDate": start_date,
             "endDate": end_date,
             **EarningsService.summarize_earnings(earnings_list),
+            **totals,
+            "dailyBreakdown": [e.to_dict() for e in earnings_list]
         }
 
     @staticmethod
@@ -457,11 +558,15 @@ class EarningsService:
         end_date = today.strftime("%Y-%m-%d")
 
         earnings_list = EarningsService.get_earnings_for_date_range(rider_id, start_date, end_date)
+        totals = _aggregate_totals(earnings_list)
+
         return {
             "period": "month",
             "startDate": start_date,
             "endDate": end_date,
             **EarningsService.summarize_earnings(earnings_list),
+            **totals,
+            "dailyBreakdown": [e.to_dict() for e in earnings_list]
         }
 
     @staticmethod
@@ -485,6 +590,16 @@ class EarningsService:
                 if not earning.order_id:
                     continue
                 if earning.order_id not in order_ids:
+                    continue
+                # COD rows are cash physically collected by the rider on behalf
+                # of the platform — they are not part of the rider's payout and
+                # must never be flagged as "settled". Skip them so settling an
+                # order only touches its ORDER_EARNING (and any bonus) rows.
+                if _is_cod_row(earning):
+                    logger.info(
+                        f"Skipping COD row during settle: riderId={rider_id}, "
+                        f"date={earning.date}, orderId={earning.order_id}"
+                    )
                     continue
 
                 dynamodb_client.update_item(

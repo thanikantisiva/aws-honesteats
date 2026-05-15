@@ -97,12 +97,11 @@ class NotificationService:
 
             # Data-only messages let Notifee handle rendering on both foreground AND
             # background/killed app states, giving consistent sound + action buttons.
-            # order_status, order_assigned, order_accepted go via this path so the JS handler
+            # order_status and order_assigned go via this path so the JS handler
             # (displayNotificationFromRemoteMessage) always controls the notification.
             is_data_only = string_data.get("type") in (
                 "order_status",
                 "order_assigned",
-                "order_accepted",
             )
 
             # iOS: ensure distinct title and body so notification shows two lines (title bold, body below)
@@ -256,114 +255,64 @@ class NotificationService:
             logger.error(f"Error sending notification: {str(e)}")
             return False
     
+    # The rider receives ONLY two notification statuses, both via this method:
+    #   - OFFERED_TO_RIDER : an offer that rider can accept/reject
+    #   - RIDER_ASSIGNED   : a direct assignment (e.g. all offers were rejected
+    #                        and the system force-assigned the nearest rider)
+    # No other rider-facing pushes are sent.
+    RIDER_NOTIFY_OFFERED = "OFFERED_TO_RIDER"
+    RIDER_NOTIFY_ASSIGNED = "RIDER_ASSIGNED"
+    _RIDER_NOTIFY_ALLOWED = {RIDER_NOTIFY_OFFERED, RIDER_NOTIFY_ASSIGNED}
+
     @staticmethod
     def send_order_assigned_notification(
         rider_mobile: str,
         order_id: str,
         restaurant_name: str,
-        delivery_fee: float
+        delivery_fee: float,
+        notification_status: str = "RIDER_ASSIGNED",
     ) -> bool:
         """
-        Send notification to rider when order is assigned
-        
+        Send a ride-alert notification to the rider.
+
+        Only two values of ``notification_status`` are accepted:
+          - ``OFFERED_TO_RIDER`` : offer, rider can accept/reject
+          - ``RIDER_ASSIGNED``   : direct/force assignment
+        Any other value is rejected to keep rider pushes constrained to the
+        two ride-alert statuses the rider app actually handles.
+
         Args:
             rider_mobile: Rider's phone number
             order_id: Order ID
             restaurant_name: Restaurant name
             delivery_fee: Delivery fee amount
-            
+            notification_status: OFFERED_TO_RIDER | RIDER_ASSIGNED
+
         Returns:
             True if sent successfully, False otherwise
         """
         try:
             from utils.dynamodb import dynamodb_client
-            
+
+            if notification_status not in NotificationService._RIDER_NOTIFY_ALLOWED:
+                logger.warning(
+                    f"Refusing rider notification with unsupported status "
+                    f"{notification_status!r}; allowed: "
+                    f"{sorted(NotificationService._RIDER_NOTIFY_ALLOWED)}"
+                )
+                return False
+
             phone_key = normalize_phone(rider_mobile)
             if not phone_key:
                 logger.warning(f"Invalid rider phone for assignment notification: {rider_mobile!r}")
                 return False
 
-            logger.info(f"📱 Sending order assignment notification to rider: {phone_key}")
-            
+            logger.info(
+                f"📱 Sending rider notification status={notification_status} "
+                f"to rider: {phone_key}"
+            )
+
             # Get rider's FCM token from UsersTableV2 (composite key: phone + role)
-            users_table = os.environ.get('USERS_TABLE_NAME', f'food-delivery-users-{os.environ.get("ENVIRONMENT", "dev")}')
-            
-            user_response = dynamodb_client.get_item(
-                TableName=users_table,
-                Key={
-                    'phone': {'S': phone_key},
-                    'role': {'S': 'RIDER'}
-                }
-            )
-            
-            if 'Item' not in user_response:
-                logger.warning(f"Rider not found in users table (normalized={phone_key}, raw={rider_mobile!r})")
-                return False
-            
-            fcm_token = user_response['Item'].get('fcmToken', {}).get('S')
-            
-            if not fcm_token:
-                logger.warning(f"No FCM token for rider: {phone_key}")
-                return False
-            
-            # Prepare notification
-            title = "New Order Assigned! 🛵"
-            body = f"Pickup from {restaurant_name} • Earn ₹{delivery_fee:.0f}"
-            
-            logger.info(f"   Token: {fcm_token[:30]}...")
-            logger.info(f"   Title: {title}")
-            logger.info(f"   Body: {body}")
-            
-            notification_data = {
-                "type": "order_assigned",
-                "orderId": order_id,
-                "restaurantName": restaurant_name,
-                "deliveryFee": str(delivery_fee),
-                "title": title,
-                "body": body,
-                "channelId": RIDER_NOTIFICATION_CHANNEL_ID,
-                "sound": RIDER_NOTIFICATION_SOUND,
-            }
-            
-            # Send via Firebase FCM
-            success = NotificationService.send_via_firebase(
-                fcm_token=fcm_token,
-                title=title,
-                body=body,
-                data=notification_data
-            )
-            
-            if success:
-                logger.info(f"✅ Rider notification sent successfully")
-            else:
-                logger.error(f"❌ Failed to send rider notification")
-            
-            return success
-            
-        except Exception as e:
-            logger.error(f"Error sending rider notification: {str(e)}", exc_info=True)
-            return False
-
-    @staticmethod
-    def send_rider_order_accepted_notification(
-        rider_mobile: str,
-        order_id: str,
-        restaurant_name: str,
-    ) -> bool:
-        """
-        Notify rider after they accept an offer (RIDER_ASSIGNED).
-        Uses the same FCM channel/sound as order_assigned so the custom ring plays.
-        """
-        try:
-            from utils.dynamodb import dynamodb_client
-
-            phone_key = normalize_phone(rider_mobile)
-            if not phone_key:
-                logger.warning(f"Invalid rider phone for accept notification: {rider_mobile!r}")
-                return False
-
-            logger.info(f"📱 Sending order-accepted confirmation to rider: {phone_key}")
-
             users_table = os.environ.get(
                 "USERS_TABLE_NAME",
                 f"food-delivery-users-{os.environ.get('ENVIRONMENT', 'dev')}",
@@ -371,13 +320,14 @@ class NotificationService:
 
             user_response = dynamodb_client.get_item(
                 TableName=users_table,
-                Key={"phone": {"S": phone_key}, "role": {"S": "RIDER"}},
+                Key={
+                    "phone": {"S": phone_key},
+                    "role": {"S": "RIDER"},
+                },
             )
 
             if "Item" not in user_response:
-                logger.warning(
-                    f"Rider not found in users table (normalized={phone_key}, raw={rider_mobile!r})"
-                )
+                logger.warning(f"Rider not found in users table (normalized={phone_key}, raw={rider_mobile!r})")
                 return False
 
             fcm_token = user_response["Item"].get("fcmToken", {}).get("S")
@@ -385,13 +335,20 @@ class NotificationService:
                 logger.warning(f"No FCM token for rider: {phone_key}")
                 return False
 
-            title = "Order confirmed"
-            body = f"Head to {restaurant_name} for pickup"
+            is_offer = notification_status == NotificationService.RIDER_NOTIFY_OFFERED
+            title = "New Order Offered 🛵" if is_offer else "New Order Assigned! 🛵"
+            body = f"Pickup from {restaurant_name} • Earn ₹{delivery_fee:.0f}"
+
+            logger.info(f"   Token: {fcm_token[:30]}...")
+            logger.info(f"   Title: {title}")
+            logger.info(f"   Body : {body}")
 
             notification_data = {
-                "type": "order_accepted",
+                "type": "order_assigned",
+                "status": notification_status,
                 "orderId": order_id,
                 "restaurantName": restaurant_name,
+                "deliveryFee": str(delivery_fee),
                 "title": title,
                 "body": body,
                 "channelId": RIDER_NOTIFICATION_CHANNEL_ID,
@@ -404,13 +361,22 @@ class NotificationService:
                 body=body,
                 data=notification_data,
             )
+
             if success:
-                logger.info(f"✅ Rider accept notification sent for order {order_id}")
+                logger.info(
+                    f"✅ Rider notification sent (status={notification_status}, "
+                    f"orderId={order_id})"
+                )
             else:
-                logger.error(f"❌ Failed to send rider accept notification for {order_id}")
+                logger.error(
+                    f"❌ Failed to send rider notification "
+                    f"(status={notification_status}, orderId={order_id})"
+                )
+
             return success
+
         except Exception as e:
-            logger.error(f"Error sending rider accept notification: {str(e)}", exc_info=True)
+            logger.error(f"Error sending rider notification: {str(e)}", exc_info=True)
             return False
 
     @staticmethod

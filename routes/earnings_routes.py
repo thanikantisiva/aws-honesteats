@@ -1,6 +1,6 @@
 """Rider earnings routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
-from services.earnings_service import EarningsService
+from services.earnings_service import EarningsService, _aggregate_totals
 from services.restaurant_earnings_service import RestaurantEarningsService
 from datetime import datetime
 
@@ -47,6 +47,8 @@ def register_earnings_routes(app):
                 result = EarningsService.summarize_earnings(today_earnings)
                 result.update({
                     "period": "today",
+                    **_aggregate_totals(today_earnings),
+                    "dailyBreakdown": [e.to_dict() for e in today_earnings]
                 })
             elif period == 'week':
                 result = EarningsService.get_weekly_earnings(rider_id)
@@ -98,6 +100,7 @@ def register_earnings_routes(app):
                 "totalIncentives": summary["totalIncentives"],
                 "totalBonusEarnings": summary["totalBonusEarnings"],
                 "deliveryEarnings": summary["deliveryEarnings"],
+                "totalCashCollected": summary["totalCashCollected"],
                 "history": summary["dailyBreakdown"],
             }), 200
             

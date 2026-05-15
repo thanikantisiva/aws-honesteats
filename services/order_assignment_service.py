@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import json
 import os
 import boto3
+from utils.datetime_ist import now_ist_iso
 
 logger = Logger()
 
@@ -153,7 +154,7 @@ class OrderAssignmentService:
 
                 OrderService.update_order(order_id, {
                     'riderId': nearest_rider.rider_id,
-                    'riderAssignedAt': datetime.utcnow().isoformat(),
+                    'riderAssignedAt': now_ist_iso(),
                     'status': Order.RIDER_ASSIGNED,
                     'riderCurrentLat': nearest_rider.lat,
                     'riderCurrentLng': nearest_rider.lng,
@@ -172,7 +173,8 @@ class OrderAssignmentService:
                             rider_mobile=nearest_rider.phone,
                             order_id=order_id,
                             restaurant_name=order.restaurant_name or "Restaurant",
-                            delivery_fee=order.delivery_fee
+                            delivery_fee=order.delivery_fee,
+                            notification_status=NotificationService.RIDER_NOTIFY_ASSIGNED,
                         )
                         logger.info(f"[orderId={order_id}] Direct assignment notification sent to rider {nearest_rider.phone}")
                 except Exception as e:
@@ -192,7 +194,7 @@ class OrderAssignmentService:
             OrderService.update_order(order_id, {
                 'riderId': nearest_rider.rider_id,
                 'status': Order.OFFERED_TO_RIDER,
-                'offeredAt': datetime.utcnow().isoformat()
+                'offeredAt': now_ist_iso()
             })
             logger.info(f"[orderId={order_id}] Updated to OFFERED_TO_RIDER for rider {nearest_rider.rider_id}")
 
@@ -210,7 +212,8 @@ class OrderAssignmentService:
                         rider_mobile=nearest_rider.phone,
                         order_id=order_id,
                         restaurant_name=order.restaurant_name or "Restaurant",
-                        delivery_fee=order.delivery_fee
+                        delivery_fee=order.delivery_fee,
+                        notification_status=NotificationService.RIDER_NOTIFY_OFFERED,
                     )
                     logger.info(f"[orderId={order_id}] Offer notification sent to rider {nearest_rider.phone}")
             except Exception as e:
@@ -283,4 +286,3 @@ class OrderAssignmentService:
         except Exception as e:
             logger.error(f"Error reassigning order: {str(e)}", exc_info=True)
             return None
-

@@ -14,6 +14,7 @@ from models.payment import Payment
 from datetime import datetime, timezone
 import random
 from typing import Any, Dict, Optional
+from utils.datetime_ist import now_ist_iso, IST
 
 logger = Logger()
 tracer = Tracer()
@@ -307,32 +308,26 @@ def register_rider_order_routes(app):
             )
             metrics.add_metric(name="RiderCashCollected", unit="Count", value=1)
 
-            # Safety-net rider-earnings write. Cash is in the rider's pocket
-            # NOW; if anything goes sideways between this call and the eventual
-            # DELIVERED transition (rider closes app, OTP retry fails, lambda
-            # times out), we still have an earnings row tracking the payout.
-            # delivery_duration_minutes=0 here is a placeholder — the DELIVERED
-            # handler runs later, derives the correct value, and overwrites
-            # this same row (date_override pins both writes to the same SK).
+            # Record the cash-collection event as a *negative* earnings row at
+            # SK "<date>#COD#<orderId>". This sits beside the regular delivery
+            # row (written later at DELIVERED with SK "<date>#<orderId>") so
+            # the period-level sum of totalEarnings nets out to "what the
+            # platform still owes this rider" — the rider already holds the
+            # cash, so it's a liability against their settlement.
             try:
-                delivery_fee_portion, incentives_portion = _rider_earnings_breakdown(order)
-                EarningsService.add_delivery(
+                EarningsService.record_cash_collected(
                     rider_id,
                     order_id,
-                    delivery_fee_portion,
-                    0.0,
-                    incentives_portion,
-                    delivery_duration_minutes=0,
+                    cash_amount=float(getattr(order, "grand_total", 0) or 0),
                     date_override=_earnings_date_for_order(order),
                 )
-                metrics.add_metric(name="RiderEarningsRecordedAtCashCollected", unit="Count", value=1)
+                metrics.add_metric(name="RiderCashCollectedRecorded", unit="Count", value=1)
             except Exception:
                 # Don't fail the cash-collected response — money was collected
-                # successfully and Payment is already SUCCESS. The DELIVERED
-                # handler will retry the earnings write.
+                # successfully and Payment is already SUCCESS. A retry can
+                # repost; the row is idempotent on PK+SK.
                 logger.error(
-                    f"[orderId={order_id}] Failed to record rider earnings at cash-collected; "
-                    f"will retry at DELIVERED transition",
+                    f"[orderId={order_id}] Failed to record COD cash-collected earnings row",
                     exc_info=True,
                 )
 
@@ -374,7 +369,7 @@ def register_rider_order_routes(app):
             # Get rider's current location and copy to order for tracking
             rider = RiderService.get_rider(rider_id)
             update_data = {
-                'riderAssignedAt': datetime.utcnow().isoformat()
+                'riderAssignedAt': now_ist_iso()
             }
             
             # Copy rider location if available and not already in order
@@ -389,20 +384,10 @@ def register_rider_order_routes(app):
             
             OrderService.update_order(order_id, update_data)
 
-            # Confirmation push (type order_accepted, quieter channel) — distinct from
-            # order_assigned ring sent when the offer was first created.
-            if rider and rider.phone:
-                try:
-                    restaurant_name = order.restaurant_name or "Restaurant"
-                    NotificationService.send_rider_order_accepted_notification(
-                        rider_mobile=rider.phone,
-                        order_id=order_id,
-                        restaurant_name=restaurant_name,
-                    )
-                except Exception as notify_err:
-                    logger.warning(
-                        f"[orderId={order_id}] Accept notification failed (non-fatal): {notify_err}"
-                    )
+            # NOTE: No post-accept push is sent — the rider already knows they
+            # accepted (they tapped Accept and got the API success response).
+            # Rider receives only the two ride-alert pushes:
+            # OFFERED_TO_RIDER (offer) and RIDER_ASSIGNED (direct assign).
 
             RiderService.increment_assignment_count(rider_id)
 
@@ -513,14 +498,14 @@ def register_rider_order_routes(app):
                 
                 # Mark as out for delivery
                 OrderService.update_order(order_id, {
-                    'riderPickupAt': datetime.utcnow().isoformat()
+                    'riderPickupAt': now_ist_iso()
                 })
             
             elif new_status == Order.STATUS_DELIVERED:
                 if order.status != Order.STATUS_OUT_FOR_DELIVERY:
                     return {"error": "Order must be OUT_FOR_DELIVERY first"}, 400
 
-                delivered_at = datetime.utcnow()
+                delivered_at = datetime.now(IST)
                 # Mark as delivered (no OTP verification needed)
                 OrderService.update_order(order_id, {
                     'riderDeliveredAt': delivered_at.isoformat()
@@ -529,9 +514,16 @@ def register_rider_order_routes(app):
                 delivery_duration_minutes = 0
                 pickup_at = _parse_iso_datetime(order.rider_pickup_at)
                 if pickup_at:
-                    if pickup_at.tzinfo is not None:
-                        pickup_at = pickup_at.astimezone(timezone.utc).replace(tzinfo=None)
-                    elapsed_seconds = max(0.0, (delivered_at - pickup_at).total_seconds())
+                    if pickup_at.tzinfo is None:
+                        # Backward compatibility for older UTC-naive values already stored.
+                        pickup_at = pickup_at.replace(tzinfo=timezone.utc)
+                    elapsed_seconds = max(
+                        0.0,
+                        (
+                            delivered_at.astimezone(timezone.utc) -
+                            pickup_at.astimezone(timezone.utc)
+                        ).total_seconds()
+                    )
                     delivery_duration_minutes = max(0, round(elapsed_seconds / 60))
                 else:
                     logger.warning(
@@ -542,9 +534,10 @@ def register_rider_order_routes(app):
                 RiderService.set_working_on_order(rider_id, None)
 
                 # Add to rider's earnings (order is an Order model; payouts live under revenue.*).
-                # date_override pins this to the same SK the cash-collected safety net uses,
-                # so this PUT overwrites that row with the correct delivery_duration_minutes
-                # rather than creating a duplicate (relevant when COD).
+                # SK is "<date>#<orderId>"; for COD orders the cash-collected handler
+                # has already written a separate negative-totalEarnings row at
+                # "<date>#COD#<orderId>" — these two rows sit side by side and sum to
+                # the rider's net payable for the order.
                 delivery_fee_portion, incentives_portion = _rider_earnings_breakdown(order)
                 EarningsService.add_delivery(
                     rider_id,

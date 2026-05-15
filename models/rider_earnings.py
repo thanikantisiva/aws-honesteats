@@ -9,7 +9,14 @@ class RiderEarnings:
     def __init__(
         self,
         rider_id: str,
-        date: str,  # YYYY-MM-DD#ORDER_ID format
+        # Sort-key formats (per-order rows):
+        #   delivery row : "YYYY-MM-DD#<orderId>"           — earnings owed to rider (positive)
+        #   COD row      : "YYYY-MM-DD#COD#<orderId>"       — cash physically held by rider
+        #                                                     (totalEarnings stored as NEGATIVE
+        #                                                     of the cash amount so that
+        #                                                     sum(totalEarnings) gives the
+        #                                                     net owed-to-rider directly)
+        date: str,
         total_deliveries: int = 0,
         total_earnings: float = 0.0,
         delivery_fees: float = 0.0,
@@ -28,6 +35,8 @@ class RiderEarnings:
         campaign_start_date: Optional[str] = None,
         campaign_end_date: Optional[str] = None,
         bonus_label: Optional[str] = None,
+        payment_channel: Optional[str] = None,
+        cash_collected: float = 0.0
     ):
         self.rider_id = rider_id
         self.date = date
@@ -49,6 +58,9 @@ class RiderEarnings:
         self.campaign_start_date = campaign_start_date
         self.campaign_end_date = campaign_end_date
         self.bonus_label = bonus_label
+        self.payment_channel = payment_channel
+        self.cash_collected = cash_collected
+
     
     def to_dict(self) -> dict:
         """Convert to dictionary"""
@@ -73,6 +85,8 @@ class RiderEarnings:
             "campaignStartDate": self.campaign_start_date,
             "campaignEndDate": self.campaign_end_date,
             "bonusLabel": self.bonus_label,
+            "paymentChannel": self.payment_channel,
+            "cashCollected": self.cash_collected,
         }
     
     @classmethod
@@ -99,6 +113,9 @@ class RiderEarnings:
             campaign_start_date=item.get("campaignStartDate", {}).get("S") if "campaignStartDate" in item else None,
             campaign_end_date=item.get("campaignEndDate", {}).get("S") if "campaignEndDate" in item else None,
             bonus_label=item.get("bonusLabel", {}).get("S") if "bonusLabel" in item else None,
+            payment_channel=item.get("paymentChannel", {}).get("S") if "paymentChannel" in item else None,
+            cash_collected=float(item.get("cashCollected", {}).get("N", "0")) if "cashCollected" in item else 0.0,
+
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -134,4 +151,8 @@ class RiderEarnings:
         item["settled"] = {"BOOL": self.settled}
         if self.settled_at:
             item["settledAt"] = {"S": self.settled_at}
+        if self.payment_channel:
+            item["paymentChannel"] = {"S": self.payment_channel}
+        if self.cash_collected:
+            item["cashCollected"] = {"N": str(self.cash_collected)}
         return item
