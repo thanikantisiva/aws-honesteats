@@ -249,15 +249,11 @@ def register_delivery_routes(app):
 
             if item_total is None:
                 return {"error": "itemTotal is required"}, 400
-            if not use_coords and distance_km_raw is None:
-                return {
-                    "error": (
-                        "Provide itemTotal and either (addressLat, addressLng, restaurantLat, restaurantLng) "
-                        "or distanceKm"
-                    )
-                }, 400
             if coupon_code and not restaurant_id:
                 return {"error": "restaurantId is required when couponCode is provided"}, 400
+            # Coords and distanceKm are both optional: when neither is sent
+            # the caller is doing a coupon-eligibility preview (no address
+            # yet), and the delivery-fee calculation is skipped further down.
 
             item_total = float(item_total)
 
@@ -282,9 +278,14 @@ def register_delivery_routes(app):
                     distance_km,
                     distance_source,
                 )
-            else:
+            elif distance_km_raw is not None:
                 distance_km = float(distance_km_raw)
                 distance_source = "client_supplied_distance"
+            else:
+                # Preview mode — no address yet. Delivery-fee math is skipped
+                # below; coupon eligibility is still evaluated.
+                distance_km = None
+                distance_source = "none"
 
             logger.info(
                 "Delivery fee request received: "
@@ -300,7 +301,7 @@ def register_delivery_routes(app):
                     f"missingKeys={missing_keys}"
                 )
                 metrics.add_metric(name="DeliveryFeeConfigMissing", unit="Count", value=1)
-                return _build_safe_zero_response(distance_km, missing_keys, item_total, distance_source), 200
+                return _build_safe_zero_response(distance_km or 0.0, missing_keys, item_total, distance_source), 200
 
             max_radius_km = config.get("maxDeliveryRadiusKm")  # None → unlimited
             customer_per_km_cfg = config.get("customerViewRiderFarePerKm")  # None → falls back to riderFarePerKm
@@ -316,7 +317,14 @@ def register_delivery_routes(app):
 
             # Reject the request early if the delivery location is outside the configured radius.
             # Guard: max_radius_km must be > 0 to prevent an accidental zero value blocking all deliveries.
-            if max_radius_km is not None and max_radius_km > 0 and distance_km > max_radius_km:
+            # In preview mode (no coords/distanceKm) distance_km is None — there is
+            # nothing to compare against, so the radius check is skipped.
+            if (
+                distance_km is not None
+                and max_radius_km is not None
+                and max_radius_km > 0
+                and distance_km > max_radius_km
+            ):
                 logger.info(
                     f"Delivery radius exceeded: distanceKm={distance_km}, maxDeliveryRadiusKm={max_radius_km}"
                 )
@@ -328,11 +336,41 @@ def register_delivery_routes(app):
                     "distanceSource": distance_source,
                 }, 200
 
-            result = calculate_delivery_fee(
-                distance_km=distance_km,
-                item_total=item_total,
-                config=config
-            )
+            if distance_km is None:
+                # Preview mode — no address. Skip the delivery-fee math and
+                # build a zeroed response of the same shape so the coupon
+                # block (and the client) can consume it unchanged. No new
+                # keys are introduced; clients infer preview from the zeroed
+                # fee fields and the empty/`none` distanceSource.
+                platform_fee_rounded = round(config["platformFee"], 2)
+                result = {
+                    "deliveryFee": 0.0,
+                    "riderSettlementAmount": 0.0,
+                    "platformFee": platform_fee_rounded,
+                    "gst": _build_gst_breakdown(item_total, 0.0, platform_fee_rounded),
+                    "breakdown": {
+                        "baseFee": 0.0,
+                        "distanceFee": 0.0,
+                        "deliveryFeeDiscount": 0.0,
+                        "couponDiscount": 0.0,
+                        "totalDiscount": 0.0,
+                        "discount": 0.0,
+                    },
+                    "freeDeliveryThreshold": round(config["freeDeliveryAboveThreshold"], 2),
+                    "isFreeDelivery": False,
+                    "distance": 0.0,
+                }
+                logger.info(
+                    "Delivery fee skipped (no coords/distanceKm): "
+                    f"itemTotal={item_total}, couponCode={coupon_code}, "
+                    f"restaurantId={restaurant_id}, mobileNumberPresent={bool(mobile_number)}"
+                )
+            else:
+                result = calculate_delivery_fee(
+                    distance_km=distance_km,
+                    item_total=item_total,
+                    config=config
+                )
             result["distanceSource"] = distance_source
             result["outsideDeliveryRadius"] = False
             if max_radius_km is not None:

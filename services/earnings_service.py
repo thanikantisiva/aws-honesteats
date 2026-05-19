@@ -370,6 +370,12 @@ class EarningsService:
         credited_at = now_ist_iso()
         date_key = f"{credited_at[:10]}#BONUS#{campaign['startDate'][:10]}#{milestone_stops}"
         bonus_label = f"Milestone Bonus - {milestone_stops} stops"
+        # Milestone bonus rows store the credited amount in ``total_earnings``.
+        # ``incentives`` is intentionally NOT populated — that bucket is
+        # reserved for per-order incentives (e.g. longDistanceBonus) so the
+        # Incentives mini-stat doesn't double-count milestone payouts.
+        # Aggregation surfaces milestone amounts via ``summarize_earnings`` →
+        # ``totalBonusEarnings`` (entryType-filtered, reads total_earnings).
         earning = RiderEarnings(
             rider_id=rider_id,
             date=date_key,
@@ -377,7 +383,7 @@ class EarningsService:
             total_earnings=round(amount, 2),
             delivery_fees=0.0,
             tips=0.0,
-            incentives=round(amount, 2),
+            incentives=0.0,
             order_id=None,
             settled=False,
             settled_at=None,
