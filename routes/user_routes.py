@@ -145,7 +145,16 @@ def register_user_routes(app):
     @app.post("/api/v1/users/<phone>/fcm-token")
     @tracer.capture_method
     def register_fcm_token(phone: str):
-        """Register or update FCM token for push notifications - creates user if not exists"""
+        """Register or update FCM token for push notifications - creates user if not exists.
+
+        The customer app (bundle app.rork.honesteats) and rider app
+        (bundle app.rork.honesteats.rider) are two different Firebase iOS apps,
+        so each issues its own FCM token. We must NEVER write a token across
+        roles: a customer-app token written to the RIDER row would silently
+        break rider offer/assignment pushes (and vice versa). Therefore this
+        endpoint scopes the write to exactly the role from the body (default
+        CUSTOMER); the rider app sends role=RIDER explicitly.
+        """
         try:
             phone = normalize_phone(phone)
             if not phone:
@@ -153,45 +162,45 @@ def register_user_routes(app):
 
             body = app.current_event.json_body
             fcm_token = body.get('fcmToken')
-            create_role = (body.get("role") or "CUSTOMER").upper()
-            if create_role not in ("CUSTOMER", "RIDER"):
+            role = (body.get("role") or "CUSTOMER").upper()
+            if role not in ("CUSTOMER", "RIDER"):
                 return {"error": "Invalid role"}, 400
-            
+
             if not fcm_token:
                 return {"error": "fcmToken is required"}, 400
-            
-            logger.info(f"📱 Registering FCM token for: {phone[:5]}***")
+
+            logger.info(f"📱 Registering FCM token for: {phone[:5]}*** role={role}")
             logger.info(f"🔑 Token: {fcm_token[:30]}...")
-            
-            # Get all roles for this phone and update FCM token for all
-            all_roles = UserService.get_all_user_roles(phone)
-            
-            if all_roles:
-                # Update FCM token for all existing roles
-                logger.info(f"✅ Found {len(all_roles)} role(s), updating FCM token for all")
-                for user_role in all_roles:
-                    UserService.update_user(phone, user_role.role, {
-                        'fcmToken': fcm_token,
-                        'fcmTokenUpdatedAt': now_ist_iso()
-                    })
+
+            existing_user = UserService.get_user_by_role(phone, role)
+
+            if existing_user:
+                # A fresh FCM token means the device just opened the app, so
+                # re-activate the row (logout sets isActive=False and nothing
+                # else flips it back on login — without this, any logged-out
+                # customer stays invisible to the custom broadcast handler).
+                logger.info(f"✅ Updating FCM token on existing {role} row (re-activating)")
+                UserService.update_user(phone, role, {
+                    'fcmToken': fcm_token,
+                    'fcmTokenUpdatedAt': now_ist_iso(),
+                    'isActive': True,
+                })
             else:
-                # No rows yet: default CUSTOMER; rider apps should send role=RIDER so token is not stored only on CUSTOMER
-                logger.info(f"🆕 User not found, creating {create_role} with FCM token")
-                from models.user import User
+                logger.info(f"🆕 {role} row not found, creating with FCM token")
                 new_user = User(
                     phone=phone,
                     name='',  # Will be updated during registration
                     email='',
-                    role=create_role,
+                    role=role,
                     is_active=True,
                     fcm_token=fcm_token,
                     fcm_token_updated_at=now_ist_iso()
                 )
                 UserService.create_user(new_user)
-                logger.info(f"✅ User created with FCM token")
-            
+                logger.info(f"✅ {role} row created with FCM token")
+
             metrics.add_metric(name="FCMTokenRegistered", unit="Count", value=1)
-            
+
             return {"message": "FCM token registered successfully"}, 200
         except Exception as e:
             logger.error(f"❌ Error registering FCM token: {str(e)}", exc_info=True)

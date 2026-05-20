@@ -46,7 +46,7 @@ def _query_customer_fcm_tokens(geohash: str) -> List[str]:
             "IndexName": USERS_GEOHASH_INDEX,
             "KeyConditionExpression": "geohash = :gh",
             "ExpressionAttributeValues": {":gh": {"S": geohash}},
-            "ProjectionExpression": "#r, fcmToken, isActive",
+            "ProjectionExpression": "#r, fcmToken",
             "ExpressionAttributeNames": {"#r": "role"},
         }
         if last_evaluated_key:
@@ -56,10 +56,6 @@ def _query_customer_fcm_tokens(geohash: str) -> List[str]:
 
         for item in response.get("Items", []):
             if item.get("role", {}).get("S") != CUSTOMER_ROLE:
-                continue
-            # isActive defaults to True when missing (legacy rows)
-            is_active_attr = item.get("isActive", {})
-            if "BOOL" in is_active_attr and not is_active_attr["BOOL"]:
                 continue
             token = item.get("fcmToken", {}).get("S")
             if not token or token in seen:
