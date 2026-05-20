@@ -45,6 +45,29 @@ def _fetch_config_item(pk: str, sk: str):
     return response.get("Item")
 
 
+def _coerce_bool(value, default=False) -> bool:
+    """Coerce common JSON/admin values to bool while preserving explicit false."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+        return default
+    return bool(value)
+
+
+def _normalize_home_hero_banner(banner: dict) -> dict:
+    """Return a banner copy with defaults expected by the customer app."""
+    normalized = dict(banner)
+    normalized["mask"] = _coerce_bool(normalized.get("mask"), True)
+    return normalized
+
+
 def register_config_routes(app):
     """Register app config routes"""
 
@@ -137,10 +160,18 @@ def register_config_routes(app):
     @app.get("/api/v1/config/home-hero-banner")
     @tracer.capture_method
     def get_home_hero_banner():
-        """Return active home hero banner(s). Supports one banner or a list under config.banners."""
+        """Return home hero banner(s).
+        Customer mode (default): returns only active/in-date banners.
+        Admin mode (?admin=true): returns ALL banners (including inactive) for management.
+        """
         try:
+            query_params = app.current_event.query_string_parameters or {}
+            admin_mode = str(query_params.get("admin", "")).lower() == "true"
+
             item = _fetch_config_item("BANNER#HOME_HERO", "ACTIVE")
             if not item:
+                if admin_mode:
+                    return {"banners": [], "total": 0}, 200
                 return {"heroBanners": [], "heroBanner": None}, 200
 
             config = dynamodb_to_python(item.get("config", {"NULL": True}))
@@ -150,7 +181,17 @@ def register_config_routes(app):
                 except json.JSONDecodeError:
                     config = {}
             if not isinstance(config, dict):
+                if admin_mode:
+                    return {"banners": [], "total": 0}, 200
                 return {"heroBanners": [], "heroBanner": None}, 200
+
+            # Admin mode: return ALL banners unfiltered.
+            if admin_mode:
+                raw_list = config.get("banners", [])
+                if not isinstance(raw_list, list):
+                    raw_list = []
+                banners = [_normalize_home_hero_banner(b) for b in raw_list if isinstance(b, dict)]
+                return {"banners": banners, "total": len(banners)}, 200
 
             now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -173,7 +214,7 @@ def register_config_routes(app):
             else:
                 candidates = [config] if isinstance(config, dict) else []
 
-            active = [b for b in candidates if _banner_active(b)]
+            active = [_normalize_home_hero_banner(b) for b in candidates if _banner_active(b)]
             active.sort(key=lambda b: (b.get("priority", 99), b.get("id", "")))
 
             if not active:
@@ -185,6 +226,45 @@ def register_config_routes(app):
             }, 200
         except Exception as e:
             logger.error("Error fetching home hero banner", exc_info=True)
+            return {"error": str(e)}, 500
+
+    @app.post("/api/v1/config/home-hero-banner")
+    @tracer.capture_method
+    def save_home_hero_banner():
+        """Save/replace the full list of home hero banners."""
+        try:
+            import uuid as _uuid
+            body = app.current_event.json_body or {}
+            banners = body.get("banners", [])
+
+            if not isinstance(banners, list):
+                return {"error": "banners must be a list"}, 400
+
+            # Auto-assign IDs and normalize defaults for any banner missing them.
+            for b in banners:
+                if isinstance(b, dict):
+                    if not b.get("id"):
+                        b["id"] = _uuid.uuid4().hex[:8]
+                    b["mask"] = _coerce_bool(b.get("mask"), True)
+
+            config = {"banners": banners}
+
+            item = {
+                "partitionkey": {"S": "BANNER#HOME_HERO"},
+                "sortKey": {"S": "ACTIVE"},
+                "config": python_to_dynamodb(config),
+                "updatedAt": {"S": now_ist_iso()}
+            }
+
+            dynamodb_client.put_item(
+                TableName=TABLES["CONFIG"],
+                Item=item
+            )
+
+            metrics.add_metric(name="HeroBannerSaved", unit="Count", value=1)
+            return {"message": "Banners saved", "count": len(banners), "banners": banners}, 200
+        except Exception as e:
+            logger.error("Error saving hero banners", exc_info=True)
             return {"error": str(e)}, 500
 
     @app.get("/api/v1/config/app-version")

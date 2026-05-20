@@ -40,6 +40,7 @@ HERO_BANNER = {
     "title": "15% EXTRA DISCOUNT",
     "subtitle": "Get your first order delivery free!",
     "button": "explore now",
+    "mask": True,
     # Use restaurant://<restaurant-id> to open a restaurant from the customer app.
     "ctaAction": "restaurant://REPLACE_WITH_RESTAURANT_ID",
     "startDate": "2026-01-01",
