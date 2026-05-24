@@ -443,24 +443,16 @@ class NotificationService:
                 "body": body_text
             }
 
+            # Data-only high priority lets the native Android receiver run even
+            # when the Capacitor WebView is backgrounded/killed. The app's
+            # OrderPollingService owns fetching confirmed orders and ringing.
             message = messaging.Message(
                 token=fcm_token,
                 data=data,
-                notification=messaging.Notification(
-                    title=title_text,
-                    body=body_text
-                ),
                 android=messaging.AndroidConfig(
                     priority="high",
-                    notification=messaging.AndroidNotification(
-                        title=title_text,
-                        body=body_text,
-                        sound="telephone_ring",
-                        channel_id="new_orders",
-                        icon="ic_launcher",
-                        color="#F59E0B",
-                        tag=order_id
-                    )
+                    ttl=timedelta(seconds=300),
+                    collapse_key=order_id
                 )
             )
 
