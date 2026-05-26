@@ -429,7 +429,10 @@ class RestaurantService:
                     fcm_token=updates.get('fcmToken', existing_restaurant.fcm_token),
                     fcm_token_updated_at=updates.get('fcmTokenUpdatedAt', existing_restaurant.fcm_token_updated_at),
                     position=updates.get('position', existing_restaurant.position),
-                    top_offer_banner=updates.get('topOfferBanner', existing_restaurant.top_offer_banner)
+                    top_offer_banner=updates.get('topOfferBanner', existing_restaurant.top_offer_banner),
+                    shift_timings=updates.get('shiftTimings', existing_restaurant.shift_timings),
+                    timezone=updates.get('timezone', existing_restaurant.timezone),
+                    theater_mode=updates.get('theaterMode', existing_restaurant.theater_mode)
                 )
                 
                 logger.info(f"   Creating new entry with geohash: {updated_restaurant.geohash}")
@@ -558,6 +561,12 @@ class RestaurantService:
                 expression_attribute_names['#timezone'] = 'timezone'
                 expression_attribute_values[':timezone'] = {'S': tz_val}
 
+            if 'theaterMode' in updates:
+                expression_attribute_names['#theaterMode'] = 'theaterMode'
+                if updates['theaterMode'] is not None:
+                    update_expressions.append('#theaterMode = :theaterMode')
+                    expression_attribute_values[':theaterMode'] = {'S': str(updates['theaterMode'])}
+
             set_expressions = [expr for expr in update_expressions if expr]
             remove_expressions = []
             if 'fcmToken' in updates and updates['fcmToken'] is None:
@@ -572,6 +581,8 @@ class RestaurantService:
                 remove_expressions.append('#topOfferBanner')
             if 'avgPreparationTime' in updates and updates['avgPreparationTime'] is None:
                 remove_expressions.append('#avgPreparationTime')
+            if 'theaterMode' in updates and updates['theaterMode'] is None:
+                remove_expressions.append('#theaterMode')
 
             if not set_expressions and not remove_expressions:
                 logger.info("No changes detected, returning existing restaurant")

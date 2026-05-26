@@ -109,8 +109,18 @@ class OrderAssignmentService:
             rider_id if assigned, None if no riders available
         """
         try:
+            # Short-circuit for theater (PICKUP) orders: no rider, customer
+            # picks up at the venue F&B counter.
+            order = OrderService.get_order(order_id)
+            if order and order.order_type == Order.ORDER_TYPE_PICKUP:
+                logger.info(
+                    f"[orderId={order_id}] orderType=PICKUP → skipping rider assignment "
+                    f"(theater/in-venue order, no rider needed)"
+                )
+                return None
+
             logger.info(f"[orderId={order_id}] Offering to rider near ({restaurant_lat}, {restaurant_lng})")
-            
+
             # Find available riders within 5km
             available_riders = RiderService.find_available_riders_near(
                 restaurant_lat,

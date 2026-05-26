@@ -35,6 +35,11 @@ class Order:
     STATUS_OUT_FOR_DELIVERY = "OUT_FOR_DELIVERY"
     STATUS_DELIVERED = "DELIVERED"
     STATUS_CANCELLED = "CANCELLED"
+    STATUS_FAILED_INVENTORY = "FAILED_INVENTORY"  # theater orders only
+
+    # Order types
+    ORDER_TYPE_DELIVERY = "DELIVERY"
+    ORDER_TYPE_PICKUP = "PICKUP"  # in-venue (theater) — no rider, no delivery address
     
     @classmethod
     def get_all_statuses(cls):
@@ -104,7 +109,11 @@ class Order:
         rejected_by_riders: Optional[List[str]] = None,
         created_at: Optional[Union[int, str]] = None,
         calculated_fee_response: Optional[Dict[str, Any]] = None,
-        preparation_time: Optional[int] = None
+        preparation_time: Optional[int] = None,
+        # Theater / pickup mode
+        order_type: str = ORDER_TYPE_DELIVERY,
+        pickup_token: Optional[str] = None,
+        inventory_reverted: bool = False
     ):
         self.order_id = order_id
         self.customer_phone = customer_phone
@@ -152,6 +161,10 @@ class Order:
         self.rejected_by_riders = rejected_by_riders or []
         self.calculated_fee_response = calculated_fee_response
         self.preparation_time = preparation_time
+        # Theater / pickup
+        self.order_type = order_type if order_type in (self.ORDER_TYPE_DELIVERY, self.ORDER_TYPE_PICKUP) else self.ORDER_TYPE_DELIVERY
+        self.pickup_token = pickup_token
+        self.inventory_reverted = bool(inventory_reverted)
         # Store as IST ISO string; support int (legacy) for backward compatibility
         self.created_at = created_at if created_at is not None else now_ist_iso()
 
@@ -244,6 +257,12 @@ class Order:
             result["rejectedByRiders"] = self.rejected_by_riders
         if self.preparation_time is not None:
             result["preparationTime"] = self.preparation_time
+        # Theater / pickup
+        result["orderType"] = self.order_type
+        if self.pickup_token:
+            result["pickupToken"] = self.pickup_token
+        if self.inventory_reverted:
+            result["inventoryReverted"] = True
         return result
     
     @classmethod
@@ -317,7 +336,11 @@ class Order:
             rejected_by_riders=dynamodb_to_python(item["rejectedByRiders"]) if "rejectedByRiders" in item else [],
             created_at=created_at,
             calculated_fee_response=dynamodb_to_python(item["calculatedFeeResponse"]) if "calculatedFeeResponse" in item and "M" in item["calculatedFeeResponse"] else None,
-            preparation_time=int(float(item["preparationTime"]["N"])) if "preparationTime" in item else None
+            preparation_time=int(float(item["preparationTime"]["N"])) if "preparationTime" in item else None,
+            # Theater / pickup
+            order_type=item.get("orderType", {}).get("S", cls.ORDER_TYPE_DELIVERY) if "orderType" in item else cls.ORDER_TYPE_DELIVERY,
+            pickup_token=item.get("pickupToken", {}).get("S") if "pickupToken" in item else None,
+            inventory_reverted=bool(item.get("inventoryReverted", {}).get("BOOL", False)) if "inventoryReverted" in item else False,
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -413,4 +436,11 @@ class Order:
             item["rejectedByRiders"] = python_to_dynamodb(self.rejected_by_riders)
         if self.preparation_time is not None:
             item["preparationTime"] = {"N": str(self.preparation_time)}
+        # Theater / pickup — only persist non-default values to keep existing rows untouched
+        if self.order_type and self.order_type != self.ORDER_TYPE_DELIVERY:
+            item["orderType"] = {"S": self.order_type}
+        if self.pickup_token:
+            item["pickupToken"] = {"S": self.pickup_token}
+        if self.inventory_reverted:
+            item["inventoryReverted"] = {"BOOL": True}
         return item

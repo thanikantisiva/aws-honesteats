@@ -468,6 +468,17 @@ def register_restaurant_routes(app):
                 if not tz:
                     return {"error": "timezone must be a non-empty IANA string"}, 400
                 updates['timezone'] = tz
+            if 'theaterMode' in body:
+                raw_tm = body.get('theaterMode')
+                if raw_tm is None or (isinstance(raw_tm, str) and not raw_tm.strip()):
+                    # Explicit null/empty → remove the flag (turn theater mode OFF
+                    # for this restaurant). The Theater Menu tab will disappear.
+                    updates['theaterMode'] = None
+                else:
+                    tm = str(raw_tm).strip().upper()
+                    if tm != 'AVAILABLE':
+                        return {"error": "theaterMode must be 'AVAILABLE' or null"}, 400
+                    updates['theaterMode'] = tm
             
             if not updates:
                 return {"error": "No fields to update"}, 400

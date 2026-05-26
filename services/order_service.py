@@ -459,8 +459,72 @@ class OrderService:
                     MenuService.increment_ordered_count(order.restaurant_id, order.items)
                 except Exception as e:
                     logger.error(f"[orderId={order_id}] Failed to increment orderedCount on menu items: {str(e)}")
-            
+
+            # Theater (PICKUP) restock on cancellation: idempotent via inventoryReverted flag.
+            if (
+                status == Order.STATUS_CANCELLED
+                and order.order_type == Order.ORDER_TYPE_PICKUP
+                and not order.inventory_reverted
+                and order.status != Order.STATUS_CANCELLED
+            ):
+                try:
+                    OrderService.restock_theater_inventory(order_id)
+                except Exception as e:
+                    logger.error(f"[orderId={order_id}] Failed to restock theater inventory on cancel: {str(e)}")
+
             logger.info(f"[orderId={order_id}] Status update complete")
             return OrderService.get_order(order_id)
         except ClientError as e:
             raise Exception(f"Failed to update order status: {str(e)}")
+
+    @staticmethod
+    def restock_theater_inventory(order_id: str) -> bool:
+        """Idempotently restock inventoryCount for every theater line item on the order.
+
+        Uses a DynamoDB conditional update on the order row to atomically set
+        inventoryReverted=true ONLY if it was false. This guarantees the restock
+        loop runs at most once per order, even if cancel + refund webhook race.
+
+        Returns True if restock ran in this call, False if it was already reverted
+        or the order doesn't qualify.
+        """
+        order = OrderService.get_order(order_id)
+        if not order:
+            logger.warning(f"[orderId={order_id}] restock skipped: order not found")
+            return False
+        if order.order_type != Order.ORDER_TYPE_PICKUP:
+            return False
+        if order.inventory_reverted:
+            logger.info(f"[orderId={order_id}] restock skipped: inventoryReverted already true")
+            return False
+
+        # Idempotency guard via conditional update on the order row.
+        try:
+            dynamodb_client.update_item(
+                TableName=TABLES['ORDERS'],
+                Key={'orderId': {'S': order_id}},
+                UpdateExpression="SET inventoryReverted = :true",
+                ConditionExpression="attribute_not_exists(inventoryReverted) OR inventoryReverted = :false",
+                ExpressionAttributeValues={
+                    ':true': {'BOOL': True},
+                    ':false': {'BOOL': False},
+                },
+            )
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                logger.info(f"[orderId={order_id}] restock skipped: lost the race, already reverted")
+                return False
+            raise
+
+        from services.menu_service import MenuService
+        for line in (order.items or []):
+            item_id = line.get('itemId')
+            try:
+                qty = int(line.get('quantity', 1) or 1)
+            except (TypeError, ValueError):
+                qty = 1
+            if not item_id or qty <= 0:
+                continue
+            MenuService.restock_inventory(order.restaurant_id, item_id, qty)
+        logger.info(f"[orderId={order_id}] Theater inventory restocked")
+        return True

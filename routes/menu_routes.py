@@ -78,19 +78,44 @@ def register_menu_routes(app):
     @app.get("/api/v1/restaurants/<restaurant_id>/menu")
     @tracer.capture_method
     def list_menu_items(restaurant_id: str):
-        """List all menu items for a restaurant"""
+        """List menu items for a restaurant.
+
+        Query params:
+            mode=theater  -> return ONLY theaterMode=True items
+                             (used by the customer-side theater flow)
+            mode=all      -> return EVERY item (used by the restaurant POV
+                             management UI, which must be able to see and edit
+                             theater items alongside regular ones)
+            (default)     -> EXCLUDE theaterMode=True items so they don't leak
+                             into the regular customer-facing restaurant page
+        """
         try:
-            logger.info(f"Listing menu items for restaurant: {restaurant_id}")
+            query_params = app.current_event.query_string_parameters or {}
+            mode = (query_params.get("mode") or "").strip().lower()
+            theater_only = mode == "theater"
+            include_all = mode == "all"
+
+            logger.info(
+                f"Listing menu items for restaurant: {restaurant_id} (mode={mode or 'regular'})"
+            )
             menu_items = MenuService.list_menu_items(restaurant_id)
             # Exclude items without itemId
             valid_items = [item for item in menu_items if item.item_id]
+
+            if theater_only:
+                valid_items = [item for item in valid_items if item.theater_mode]
+            elif not include_all:
+                valid_items = [item for item in valid_items if not item.theater_mode]
+
             # Resolve restaurant timezone once for all items
             restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
             tz = restaurant.timezone if restaurant else "Asia/Kolkata"
             metrics.add_metric(name="MenuItemsListed", unit="Count", value=1)
-            
+
+            response_mode = "theater" if theater_only else ("all" if include_all else "regular")
             return {
                 "restaurantId": restaurant_id,
+                "mode": response_mode,
                 "items": [_serialize_menu_item(item, tz) for item in valid_items],
                 "total": len(valid_items)
             }, 200
@@ -141,6 +166,14 @@ def register_menu_routes(app):
             
             logger.info(f"Creating menu item: {name}, restaurantPrice=₹{restaurant_price}, hikePercentage={hike_percentage}%")
             
+            theater_mode = bool(body.get('theaterMode', False))
+            try:
+                inventory_count = int(body.get('inventoryCount', 0) or 0)
+            except (ValueError, TypeError):
+                return {"error": "inventoryCount must be a non-negative integer"}, 400
+            if inventory_count < 0:
+                return {"error": "inventoryCount must be a non-negative integer"}, 400
+
             menu_item = MenuItem(
                 restaurant_id=restaurant_id,
                 item_id=generate_id('ITM'),
@@ -156,7 +189,9 @@ def register_menu_routes(app):
                 add_on_options=body.get('addOnOptions', []),
                 top_offer_banner=top_offer_banner,
                 item_offer_coupon_code=item_offer_coupon_code,
-                shift_timings=body.get('shiftTimings') or []
+                shift_timings=body.get('shiftTimings') or [],
+                theater_mode=theater_mode,
+                inventory_count=inventory_count,
             )
             
             created_item = MenuService.create_menu_item(menu_item)
@@ -219,7 +254,17 @@ def register_menu_routes(app):
                     if err:
                         return {"error": err}, 400
                     updates['shiftTimings'] = raw_shifts
-            
+            if 'theaterMode' in body:
+                updates['theaterMode'] = bool(body['theaterMode'])
+            if 'inventoryCount' in body:
+                try:
+                    inv = int(body['inventoryCount'])
+                except (ValueError, TypeError):
+                    return {"error": "inventoryCount must be a non-negative integer"}, 400
+                if inv < 0:
+                    return {"error": "inventoryCount must be a non-negative integer"}, 400
+                updates['inventoryCount'] = inv
+
             if not updates:
                 return {"error": "No fields to update"}, 400
             

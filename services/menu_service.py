@@ -158,7 +158,15 @@ class MenuService:
                 else:
                     update_expressions.append('#itemOfferCouponCode = :itemOfferCouponCode')
                     expression_attribute_values[':itemOfferCouponCode'] = {'S': str(updates['itemOfferCouponCode'])}
-            
+
+            if 'theaterMode' in updates:
+                update_expressions.append('theaterMode = :theaterMode')
+                expression_attribute_values[':theaterMode'] = {'BOOL': bool(updates['theaterMode'])}
+
+            if 'inventoryCount' in updates:
+                update_expressions.append('inventoryCount = :inventoryCount')
+                expression_attribute_values[':inventoryCount'] = {'N': str(int(updates['inventoryCount']))}
+
             set_expressions = [expr for expr in update_expressions if expr]
             remove_expressions = []
             if 'topOfferBanner' in updates and updates['topOfferBanner'] is None:
@@ -252,6 +260,104 @@ class MenuService:
                 logger.info(f"Incremented orderedCount for restaurantId={restaurant_id} itemId={item_id} by {qty}")
             except ClientError as e:
                 logger.error(f"Failed increment orderedCount for itemId={item_id}: {str(e)}")
+
+    @staticmethod
+    def decrement_inventory(restaurant_id: str, item_id: str, quantity: int) -> bool:
+        """Atomically decrement inventoryCount for a theater item.
+
+        Uses a DynamoDB conditional update so we never oversell:
+        only succeeds when inventoryCount >= quantity AND theaterMode = true.
+
+        Returns True on success, False if the condition fails (sold out / race).
+        """
+        if quantity <= 0:
+            return True
+        try:
+            dynamodb_client.update_item(
+                TableName=TABLES["MENU_ITEMS"],
+                Key={
+                    "PK": {"S": f"RESTAURANT#{restaurant_id}"},
+                    "SK": {"S": f"ITEM#{item_id}"},
+                },
+                UpdateExpression="ADD inventoryCount :neg",
+                ConditionExpression="theaterMode = :true AND inventoryCount >= :qty",
+                ExpressionAttributeValues={
+                    ":neg": {"N": str(-int(quantity))},
+                    ":qty": {"N": str(int(quantity))},
+                    ":true": {"BOOL": True},
+                },
+            )
+            logger.info(
+                f"Decremented inventoryCount for restaurantId={restaurant_id} "
+                f"itemId={item_id} by {quantity}"
+            )
+            return True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                logger.warning(
+                    f"Inventory decrement rejected (sold out / not theater) for "
+                    f"restaurantId={restaurant_id} itemId={item_id} qty={quantity}"
+                )
+                return False
+            raise Exception(f"Failed to decrement inventory: {str(e)}")
+
+    @staticmethod
+    def restock_inventory(restaurant_id: str, item_id: str, quantity: int) -> None:
+        """Atomically add back inventoryCount (used on cancel / refund / partial-fail restock)."""
+        if quantity <= 0:
+            return
+        try:
+            dynamodb_client.update_item(
+                TableName=TABLES["MENU_ITEMS"],
+                Key={
+                    "PK": {"S": f"RESTAURANT#{restaurant_id}"},
+                    "SK": {"S": f"ITEM#{item_id}"},
+                },
+                UpdateExpression="ADD inventoryCount :inc",
+                ExpressionAttributeValues={":inc": {"N": str(int(quantity))}},
+            )
+            logger.info(
+                f"Restocked inventoryCount for restaurantId={restaurant_id} "
+                f"itemId={item_id} by {quantity}"
+            )
+        except ClientError as e:
+            logger.error(
+                f"Failed to restock inventory for itemId={item_id}: {str(e)}"
+            )
+
+    @staticmethod
+    def generate_pickup_token(restaurant_id: str) -> str:
+        """Atomically generate a daily-rolling pickup token per restaurant.
+
+        Uses a counter row at PK=RESTAURANT#{id}, SK=COUNTER#PICKUP#YYYYMMDD
+        on the MENU_ITEMS table (already shares the RESTAURANT# partition).
+        Token format: A###  (e.g. A042). Resets daily per restaurant.
+        """
+        from datetime import datetime
+        try:
+            today = datetime.utcnow().strftime("%Y%m%d")
+            response = dynamodb_client.update_item(
+                TableName=TABLES["MENU_ITEMS"],
+                Key={
+                    "PK": {"S": f"RESTAURANT#{restaurant_id}"},
+                    "SK": {"S": f"COUNTER#PICKUP#{today}"},
+                },
+                UpdateExpression="ADD #count :inc",
+                ExpressionAttributeNames={"#count": "count"},
+                ExpressionAttributeValues={":inc": {"N": "1"}},
+                ReturnValues="UPDATED_NEW",
+            )
+            current = int(response.get("Attributes", {}).get("count", {}).get("N", "0"))
+            token = f"A{current:03d}"
+            logger.info(
+                f"Generated pickupToken={token} for restaurantId={restaurant_id} today={today}"
+            )
+            return token
+        except ClientError as e:
+            logger.error(f"Failed to generate pickup token: {str(e)}")
+            # Fallback to a timestamp-derived token; still readable but uncoordinated
+            import time
+            return f"A{int(time.time()) % 1000:03d}"
 
     @staticmethod
     def bulk_price_hike(restaurant_id: str, percentage: float) -> list:

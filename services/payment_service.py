@@ -119,6 +119,54 @@ class PaymentService:
             return False
 
     @staticmethod
+    def refund_payment(payment_id: str, amount: Optional[float] = None, notes: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
+        """Initiate a refund against the captured Razorpay payment for the given payment_id.
+
+        Looks up the payment row to find the razorpayPaymentId, then calls the
+        Razorpay refund API. Refund processing is asynchronous on Razorpay's side;
+        the existing refund.created / payment.refunded webhook handler will flip
+        the payment row to STATUS_REFUNDED.
+
+        Returns the refund object on success, None when the payment isn't refundable
+        (missing razorpayPaymentId, already REFUNDED, etc.).
+        """
+        try:
+            payment = PaymentService.get_payment(payment_id)
+            if not payment:
+                logger.error(f"refund_payment: payment {payment_id} not found")
+                return None
+            if not payment.razorpay_payment_id:
+                logger.warning(
+                    f"refund_payment: payment {payment_id} has no razorpayPaymentId; cannot refund "
+                    f"(payment_status={payment.payment_status})"
+                )
+                return None
+            if payment.payment_status == Payment.STATUS_REFUNDED:
+                logger.info(f"refund_payment: payment {payment_id} already REFUNDED; skipping")
+                return None
+
+            refund_amount_paise = None
+            if amount is not None:
+                refund_amount_paise = max(1, int(round(float(amount) * 100)))
+
+            payload: Dict[str, Any] = {"speed": "normal"}
+            if refund_amount_paise is not None:
+                payload["amount"] = refund_amount_paise
+            if notes:
+                payload["notes"] = notes
+
+            logger.info(
+                f"Initiating Razorpay refund for paymentId={payment_id} "
+                f"razorpayPaymentId={payment.razorpay_payment_id} amount_paise={refund_amount_paise}"
+            )
+            refund = razorpay_client.payment.refund(payment.razorpay_payment_id, payload)
+            logger.info(f"Razorpay refund initiated: {refund.get('id')} status={refund.get('status')}")
+            return refund
+        except Exception as e:
+            logger.error(f"refund_payment failed for {payment_id}: {str(e)}", exc_info=True)
+            return None
+
+    @staticmethod
     def fetch_razorpay_payment_status(razorpay_payment_id: str) -> Dict[str, Any]:
         """Fetch payment status from Razorpay and normalize to internal terminal states.
 

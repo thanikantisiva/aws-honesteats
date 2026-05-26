@@ -88,6 +88,16 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             if new_image.get('riderId', {}).get('S'):
                 logger.info(f"[orderId={order_id}] Order already has rider assigned, skipping")
                 continue
+
+            # Theater (PICKUP) orders: no rider, customer picks up from the
+            # venue F&B counter. Skip the whole assignment pipeline.
+            order_type = new_image.get('orderType', {}).get('S', 'DELIVERY')
+            if order_type == 'PICKUP':
+                logger.info(
+                    f"[orderId={order_id}] orderType=PICKUP → skipping rider assignment "
+                    f"(theater/in-venue order)"
+                )
+                continue
             
             # Get restaurant details by restaurantId using GSI
             logger.info(f"[orderId={order_id}] 📍 Fetching restaurant details using restaurantId-index GSI")

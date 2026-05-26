@@ -26,6 +26,38 @@ RAZORPAY_FETCH_MAX_ATTEMPTS = 6
 RAZORPAY_FETCH_RETRY_SECONDS = 2
 
 
+def _commit_theater_inventory(order: "Order") -> tuple:
+    """Atomically decrement inventoryCount for each line item on a theater order.
+
+    Returns (success: bool, decremented_pairs: list[(item_id, qty)]).
+    Decremented pairs are returned so the caller can roll them back on failure.
+    """
+    from services.menu_service import MenuService
+
+    decremented: list = []
+    for line in (order.items or []):
+        item_id = line.get("itemId")
+        try:
+            qty = int(line.get("quantity", 1) or 1)
+        except (TypeError, ValueError):
+            qty = 1
+        if not item_id or qty <= 0:
+            continue
+        ok = MenuService.decrement_inventory(order.restaurant_id, item_id, qty)
+        if ok:
+            decremented.append((item_id, qty))
+        else:
+            # Roll back everything decremented in this call
+            for prev_item_id, prev_qty in decremented:
+                MenuService.restock_inventory(order.restaurant_id, prev_item_id, prev_qty)
+            logger.error(
+                f"[orderId={order.order_id}] Inventory decrement failed for itemId={item_id} "
+                f"qty={qty}; rolled back {len(decremented)} prior decrements"
+            )
+            return False, []
+    return True, decremented
+
+
 def _apply_payment_success_and_order_updates(
     payment: Payment,
     razorpay_order_id: Optional[str],
@@ -35,6 +67,10 @@ def _apply_payment_success_and_order_updates(
     """
     Mark payment SUCCESS and sync order (OTPs, paymentId). Idempotent.
     Order may already be CONFIRMED (pay-at-delivery UPI QR) before this runs.
+
+    For theater (PICKUP) orders: also atomically decrement inventoryCount.
+    If decrement fails (sold out / race), refund the payment and mark the
+    order FAILED_INVENTORY instead of CONFIRMED.
     """
     already_success = payment.payment_status == Payment.STATUS_SUCCESS
     if already_success:
@@ -60,6 +96,39 @@ def _apply_payment_success_and_order_updates(
         return
 
     order = OrderService.get_order(order_id)
+
+    # ── Theater inventory: only commit once (idempotent guard) ─────────────
+    if order and order.order_type == Order.ORDER_TYPE_PICKUP:
+        # Only run on the first transition into CONFIRMED. After that, the
+        # order is either already-CONFIRMED (idempotent retry) or already
+        # FAILED_INVENTORY/CANCELLED — leave it alone.
+        if order.status == Order.STATUS_INITIATED:
+            ok, _decremented = _commit_theater_inventory(order)
+            if not ok:
+                # Refund the payment and mark order FAILED_INVENTORY.
+                try:
+                    PaymentService.refund_payment(payment.payment_id, payment.amount)
+                except Exception as ref_err:
+                    logger.error(
+                        f"[orderId={order_id}] Refund attempt after inventory failure raised: {ref_err}",
+                        exc_info=True,
+                    )
+                OrderService.update_order_status(order_id, Order.STATUS_FAILED_INVENTORY, None)
+                OrderService.update_order(
+                    order_id,
+                    {
+                        'paymentId': payment.payment_id,
+                        'paymentMethod': pm,
+                        'inventoryReverted': True,
+                    },
+                )
+                logger.error(
+                    f"[orderId={order_id}] Theater inventory failed at payment success; "
+                    f"order marked FAILED_INVENTORY and payment refunded"
+                )
+                metrics.add_metric(name="TheaterInventoryFailedAtPayment", unit="Count", value=1)
+                return
+
     if order and order.status == Order.STATUS_INITIATED:
         OrderService.update_order_status(order_id, Order.STATUS_CONFIRMED, None)
 
@@ -144,7 +213,36 @@ def register_payment_routes(app):
                 Payment.PAYMENT_CHANNEL_COD_AT_DELIVERY,
             ):
                 return {"error": "Invalid paymentChannel"}, 400
-            
+
+            # ── Theater (PICKUP) branch ──────────────────────────────────────
+            # If orderType=PICKUP, the cart is theater-only: no rider, no
+            # delivery address, no coupons, Razorpay only. seatNumber + venueName
+            # are required and get composed into deliveryAddress / addressId.
+            order_type_req = (body.get('orderType') or Order.ORDER_TYPE_DELIVERY)
+            if isinstance(order_type_req, str):
+                order_type_req = order_type_req.strip().upper()
+            else:
+                order_type_req = Order.ORDER_TYPE_DELIVERY
+            if order_type_req not in (Order.ORDER_TYPE_DELIVERY, Order.ORDER_TYPE_PICKUP):
+                return {"error": "Invalid orderType"}, 400
+            is_pickup = order_type_req == Order.ORDER_TYPE_PICKUP
+
+            seat_number = (body.get('seatNumber') or '').strip() if body.get('seatNumber') else None
+            venue_name = (body.get('venueName') or '').strip() if body.get('venueName') else None
+
+            if is_pickup:
+                if not seat_number or not venue_name:
+                    return {"error": "seatNumber and venueName are required for theater (PICKUP) orders"}, 400
+                if payment_channel_req == Payment.PAYMENT_CHANNEL_COD_AT_DELIVERY:
+                    return {"error": "COD is not supported for theater items"}, 400
+                if coupon_code or coupon_applied or (total_discount and total_discount > 0):
+                    return {"error": "Coupons are not supported for theater items"}, 400
+                # Force-blank the delivery address fields — the theater branch
+                # composes its own below from venueName + seatNumber.
+                delivery_address = None
+                formatted_address = None
+                address_id = None
+
             if not all([customer_phone, restaurant_id, restaurant_name, amount]):
                 return {"error": "Missing required fields"}, 400
             if not receiver_phone:
@@ -162,7 +260,7 @@ def register_payment_routes(app):
             
             enriched_items = []
             total_customer_amount = 0
-            
+
             for item in items:
                 item_id = item.get('itemId')
                 try:
@@ -170,6 +268,7 @@ def register_payment_routes(app):
                 except (TypeError, ValueError):
                     quantity = 1
 
+                menu_item = None
                 try:
                     menu_item = MenuService.get_menu_item(restaurant_id, item_id)
                     if menu_item:
@@ -194,7 +293,16 @@ def register_payment_routes(app):
                     item_offer_coupon_code = None
                     coupon_issued_by = None
                     item_discount_amount = 0.0
-                
+
+                # Defence-in-depth: theater orders MUST only contain theaterMode=true items,
+                # and regular orders must not contain them.
+                if is_pickup:
+                    if not menu_item or not menu_item.theater_mode:
+                        return {"error": f"Item {item_id} is not a theater item"}, 400
+                else:
+                    if menu_item and menu_item.theater_mode:
+                        return {"error": f"Theater item {item_id} cannot be in a regular delivery order"}, 400
+
                 add_on_total = 0.0
                 try:
                     add_on_total = float(item.get('addOnTotal', 0) or 0)
@@ -206,7 +314,7 @@ def register_payment_routes(app):
                     'name': item.get('name'),
                     'quantity': quantity,
                     'price': customer_price,
-                    'isVeg': menu_item.is_veg,
+                    'isVeg': menu_item.is_veg if menu_item else None,
                     'restaurantPrice': restaurant_price,
                     'hikePercentage': hike_percentage,
                     'itemOfferCouponCode': item_offer_coupon_code,
@@ -215,7 +323,7 @@ def register_payment_routes(app):
                     'addOns': item.get('addOns', []),
                     'addOnTotal': add_on_total,
                 })
-                
+
                 total_customer_amount += (customer_price + add_on_total) * quantity
             
             # Fetch restaurant location details
@@ -234,11 +342,11 @@ def register_payment_routes(app):
                 logger.error(f"[orderId={order_id}] Failed to fetch restaurant location: {str(e)}")
                 # Continue without location - can be added later
             
-            # Fetch delivery address coordinates
+            # Fetch delivery address coordinates (skipped for theater pickup orders)
             delivery_lat = None
             delivery_lng = None
-            
-            if address_id and customer_phone:
+
+            if not is_pickup and address_id and customer_phone:
                 try:
                     address = AddressService.get_address(customer_phone, address_id)
                     if address:
@@ -247,7 +355,23 @@ def register_payment_routes(app):
                         logger.info(f"[orderId={order_id}] Fetched delivery location from address: ({delivery_lat}, {delivery_lng})")
                 except Exception as e:
                     logger.error(f"[orderId={order_id}] Failed to fetch delivery address location: {str(e)}")
-            
+
+            # Theater branch: compose synthetic deliveryAddress + addressId from
+            # venueName + seatNumber, and mint a pickup token.
+            pickup_token = None
+            if is_pickup:
+                delivery_address = f"{venue_name} - {seat_number}"
+                address_id = f"THEATER#{seat_number}"
+                formatted_address = delivery_address
+                pickup_token = MenuService.generate_pickup_token(restaurant_id)
+                # Theater orders skip delivery fees; the JS app must send 0 here, but
+                # double-clamp on the server to keep totals honest.
+                delivery_fee = 0.0
+                logger.info(
+                    f"[orderId={order_id}] Theater order: venue='{venue_name}' seat='{seat_number}' "
+                    f"pickupToken={pickup_token}"
+                )
+
             # Create Order in DB with INITIATED status (revenue is computed later by revenue_calculator Lambda)
             order = Order(
                 order_id=order_id,
@@ -270,7 +394,9 @@ def register_payment_routes(app):
                 pickup_lat=pickup_lat,
                 pickup_lng=pickup_lng,
                 delivery_lat=delivery_lat,
-                delivery_lng=delivery_lng
+                delivery_lng=delivery_lng,
+                order_type=order_type_req,
+                pickup_token=pickup_token,
             )
             
             from services.order_service import OrderService
@@ -349,6 +475,8 @@ def register_payment_routes(app):
                 'amount': razorpay_order['amount'],  # In paise
                 'currency': razorpay_order['currency'],
                 'paymentChannel': Payment.PAYMENT_CHANNEL_STANDARD,
+                'orderType': order_type_req,
+                'pickupToken': pickup_token,
             }, 200
             
         except Exception as e:
@@ -827,6 +955,8 @@ def register_payment_routes(app):
                                 )
 
                             if payment.order_id:
+                                # update_order_status already triggers theater inventory restock
+                                # via OrderService when transitioning to CANCELLED on a PICKUP order.
                                 OrderService.update_order_status(payment.order_id, Order.STATUS_CANCELLED, None)
                                 logger.info(f"✅ Order {payment.order_id} marked as CANCELLED")
                         else:

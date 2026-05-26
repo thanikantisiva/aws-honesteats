@@ -43,7 +43,8 @@ class Restaurant:
         position: Optional[int] = None,
         top_offer_banner: Optional[str] = None,
         shift_timings: Optional[List[dict]] = None,
-        timezone: Optional[str] = None
+        timezone: Optional[str] = None,
+        theater_mode: Optional[str] = None
     ):
         self.location_id = location_id
         self.restaurant_id = restaurant_id
@@ -71,6 +72,12 @@ class Restaurant:
         self.top_offer_banner = top_offer_banner
         self.shift_timings = shift_timings or []
         self.timezone = timezone or "Asia/Kolkata"
+        # theater_mode is a string flag: "AVAILABLE" (in-venue ordering enabled) or
+        # None / absent (regular delivery-only restaurant). Kept as a string so we
+        # can introduce more states later (e.g. "COMING_SOON") without a migration.
+        self.theater_mode = (
+            str(theater_mode).strip().upper() if theater_mode else None
+        )
     
     @property
     def pk(self) -> str:
@@ -146,6 +153,8 @@ class Restaurant:
         if self.shift_timings:
             result["shiftTimings"] = self.shift_timings
         result["timezone"] = self.timezone
+        if self.theater_mode:
+            result["theaterMode"] = self.theater_mode
         return result
     
     @classmethod
@@ -225,7 +234,8 @@ class Restaurant:
             position=position,
             top_offer_banner=top_offer_banner,
             shift_timings=dynamodb_to_python(item["shiftTimings"]) if "shiftTimings" in item else [],
-            timezone=item.get("timezone", {}).get("S", "Asia/Kolkata") if "timezone" in item else "Asia/Kolkata"
+            timezone=item.get("timezone", {}).get("S", "Asia/Kolkata") if "timezone" in item else "Asia/Kolkata",
+            theater_mode=item.get("theaterMode", {}).get("S") if "theaterMode" in item else None
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -278,5 +288,7 @@ class Restaurant:
         if self.shift_timings:
             item["shiftTimings"] = python_to_dynamodb(self.shift_timings)
         item["timezone"] = {"S": self.timezone}
+        if self.theater_mode:
+            item["theaterMode"] = {"S": self.theater_mode}
 
         return item

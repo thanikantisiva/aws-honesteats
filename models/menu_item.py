@@ -79,7 +79,9 @@ class MenuItem:
         ordered_count: int = 0,
         top_offer_banner: Optional[str] = None,
         item_offer_coupon_code: Optional[str] = None,
-        shift_timings: Optional[List[Dict[str, Any]]] = None
+        shift_timings: Optional[List[Dict[str, Any]]] = None,
+        theater_mode: bool = False,
+        inventory_count: int = 0
     ):
         self.restaurant_id = restaurant_id
         self.item_id = item_id
@@ -97,6 +99,11 @@ class MenuItem:
         self.top_offer_banner = top_offer_banner
         self.item_offer_coupon_code = item_offer_coupon_code
         self.shift_timings = shift_timings or []
+        self.theater_mode = bool(theater_mode)
+        try:
+            self.inventory_count = int(inventory_count or 0)
+        except (TypeError, ValueError):
+            self.inventory_count = 0
 
     @property
     def price(self) -> float:
@@ -143,6 +150,9 @@ class MenuItem:
             result["itemOfferCouponCode"] = self.item_offer_coupon_code
         if self.shift_timings:
             result["shiftTimings"] = self.shift_timings
+        if self.theater_mode:
+            result["theaterMode"] = True
+            result["inventoryCount"] = self.inventory_count
         if original_price is not None and float(original_price) > resolved_price:
             result["originalPrice"] = float(original_price)
         return result
@@ -176,6 +186,9 @@ class MenuItem:
         is_veg = cls._to_python_attr(item.get("isVeg"))
         description = cls._to_python_attr(item.get("description"))
         ordered_count = int(cls._safe_float(cls._to_python_attr(item.get("orderedCount", 0)), 0))
+        theater_mode_attr = cls._to_python_attr(item.get("theaterMode"))
+        theater_mode = bool(theater_mode_attr) if theater_mode_attr is not None else False
+        inventory_count = int(cls._safe_float(cls._to_python_attr(item.get("inventoryCount", 0)), 0))
 
         return cls(
             restaurant_id=restaurant_id,
@@ -193,7 +206,9 @@ class MenuItem:
             ordered_count=ordered_count,
             top_offer_banner=top_offer_banner,
             item_offer_coupon_code=item_offer_coupon_code,
-            shift_timings=cls._to_python_attr(item.get("shiftTimings")) if "shiftTimings" in item else []
+            shift_timings=cls._to_python_attr(item.get("shiftTimings")) if "shiftTimings" in item else [],
+            theater_mode=theater_mode,
+            inventory_count=inventory_count,
         )
 
     def to_dynamodb_item(self) -> dict:
@@ -226,4 +241,7 @@ class MenuItem:
             item["itemOfferCouponCode"] = {"S": self.item_offer_coupon_code}
         if self.shift_timings:
             item["shiftTimings"] = python_to_dynamodb(self.shift_timings)
+        if self.theater_mode:
+            item["theaterMode"] = {"BOOL": True}
+            item["inventoryCount"] = {"N": str(self.inventory_count)}
         return item
