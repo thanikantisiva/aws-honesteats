@@ -281,6 +281,8 @@ def register_restaurant_earnings_routes(app):
                 if not earning.order_id or earning.order_id not in orders_map:
                     continue
                 row = _order_to_row(orders_map[earning.order_id], earning.date.split('#')[0])
+                if getattr(earning, 'comments', None) is not None:
+                    row['comments'] = earning.comments
                 if not restaurant_name:
                     restaurant_name = row['restaurantName']
                 rows.append(row)

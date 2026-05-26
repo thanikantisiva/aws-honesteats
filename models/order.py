@@ -68,6 +68,7 @@ class Order:
         grand_total: float,
         status: str = STATUS_PENDING,
         rider_id: Optional[str] = None,
+        rider_name: Optional[str] = None,
         restaurant_name: Optional[str] = None,
         restaurant_image: Optional[str] = None,
         delivery_address: Optional[str] = None,
@@ -116,6 +117,7 @@ class Order:
         self.grand_total = grand_total
         self.status = status
         self.rider_id = rider_id
+        self.rider_name = rider_name
         self.restaurant_name = restaurant_name
         self.restaurant_image = restaurant_image
         self.delivery_address = delivery_address
@@ -177,6 +179,8 @@ class Order:
             "rating": self.rating,
             "createdAt": epoch_ms_to_ist_iso(self.created_at) if isinstance(self.created_at, int) else self.created_at
         }
+        if self.rider_name:
+            result["riderName"] = self.rider_name
         if self.restaurant_name:
             result["restaurantName"] = self.restaurant_name
         if self.restaurant_image:
@@ -277,6 +281,7 @@ class Order:
             grand_total=float(item.get("grandTotal", {}).get("N", "0")),
             status=item.get("status", {}).get("S", cls.STATUS_PENDING),
             rider_id=item.get("riderId", {}).get("S") if "riderId" in item else None,
+            rider_name=item.get("riderName", {}).get("S") if "riderName" in item else None,
             restaurant_name=item.get("restaurantName", {}).get("S") if "restaurantName" in item else None,
             restaurant_image=item.get("restaurantImage", {}).get("S") if "restaurantImage" in item else None,
             delivery_address=item.get("deliveryAddress", {}).get("S") if "deliveryAddress" in item else None,
@@ -345,6 +350,8 @@ class Order:
         if self.rider_id:
             item["riderId"] = {"S": self.rider_id}
             item["riderStatusCreatedAt"] = {"S": f"{self.status}#{created_at}"}
+        if self.rider_name:
+            item["riderName"] = {"S": self.rider_name}
         if self.restaurant_name:
             item["restaurantName"] = {"S": self.restaurant_name}
         if self.restaurant_image:

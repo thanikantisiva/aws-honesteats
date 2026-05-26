@@ -16,7 +16,8 @@ class RestaurantEarnings:
         settled_at: Optional[str] = None,
         settlement_id: Optional[str] = None,
         order_id: Optional[str] = None,
-        created_at: Optional[str] = None
+        created_at: Optional[str] = None,
+        comments: Optional[str] = None
     ):
         self.restaurant_id = restaurant_id
         self.date = date
@@ -27,9 +28,10 @@ class RestaurantEarnings:
         self.settlement_id = settlement_id
         self.order_id = order_id
         self.created_at = created_at or now_ist_iso()
+        self.comments = comments
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "restaurantId": self.restaurant_id,
             "date": self.date,
             "totalOrders": self.total_orders,
@@ -40,6 +42,9 @@ class RestaurantEarnings:
             "settlementId": self.settlement_id,
             "createdAt": self.created_at
         }
+        if self.comments is not None:
+            result["comments"] = self.comments
+        return result
 
     @classmethod
     def from_dynamodb_item(cls, item: dict) -> "RestaurantEarnings":
@@ -52,7 +57,8 @@ class RestaurantEarnings:
             settled=item.get("settled", {}).get("BOOL", False) if "settled" in item else False,
             settled_at=item.get("settledAt", {}).get("S") if "settledAt" in item else None,
             settlement_id=item.get("settlementId", {}).get("S") if "settlementId" in item else None,
-            created_at=item.get("createdAt", {}).get("S", "")
+            created_at=item.get("createdAt", {}).get("S", ""),
+            comments=item.get("comments", {}).get("S") if "comments" in item else None
         )
 
     def to_dynamodb_item(self) -> dict:
@@ -70,4 +76,6 @@ class RestaurantEarnings:
             item["settledAt"] = {"S": self.settled_at}
         if self.settlement_id:
             item["settlementId"] = {"S": self.settlement_id}
+        if self.comments is not None:
+            item["comments"] = {"S": self.comments}
         return item

@@ -154,6 +154,7 @@ class OrderAssignmentService:
 
                 OrderService.update_order(order_id, {
                     'riderId': nearest_rider.rider_id,
+                    'riderName': f"{nearest_rider.first_name or ''} {nearest_rider.last_name or ''}".strip() or None,
                     'riderAssignedAt': now_ist_iso(),
                     'status': Order.RIDER_ASSIGNED,
                     'riderCurrentLat': nearest_rider.lat,
@@ -193,6 +194,7 @@ class OrderAssignmentService:
             # Update order with offered rider and status
             OrderService.update_order(order_id, {
                 'riderId': nearest_rider.rider_id,
+                'riderName': f"{nearest_rider.first_name or ''} {nearest_rider.last_name or ''}".strip() or None,
                 'status': Order.OFFERED_TO_RIDER,
                 'offeredAt': now_ist_iso()
             })
