@@ -78,7 +78,20 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             order_id = new_image.get('orderId', {}).get('S', '')
             restaurant_id = new_image.get('restaurantId', {}).get('S', '')
             customer_phone = new_image.get('customerPhone', {}).get('S', '')
-            
+
+            # ── Theater (PICKUP) orders → drop directly ─────────────────────
+            # In-venue orders are picked up by the customer at the F&B
+            # counter; there is no rider in the loop. We check this BEFORE
+            # any logging / restaurant lookup so PICKUP orders are dropped
+            # at the earliest possible point.
+            order_type = new_image.get('orderType', {}).get('S', 'DELIVERY')
+            if order_type == 'PICKUP':
+                logger.info(
+                    f"[orderId={order_id}] orderType=PICKUP → dropping "
+                    f"(theater/in-venue order, no rider assignment)"
+                )
+                continue
+
             logger.info(f"[orderId={order_id}] 🍽️ Order is preparing")
             logger.info(f"[orderId={order_id}] Restaurant: {restaurant_id}")
             logger.info(f"[orderId={order_id}] Customer: {customer_phone}")
@@ -87,16 +100,6 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             # Check if already assigned (avoid double assignment)
             if new_image.get('riderId', {}).get('S'):
                 logger.info(f"[orderId={order_id}] Order already has rider assigned, skipping")
-                continue
-
-            # Theater (PICKUP) orders: no rider, customer picks up from the
-            # venue F&B counter. Skip the whole assignment pipeline.
-            order_type = new_image.get('orderType', {}).get('S', 'DELIVERY')
-            if order_type == 'PICKUP':
-                logger.info(
-                    f"[orderId={order_id}] orderType=PICKUP → skipping rider assignment "
-                    f"(theater/in-venue order)"
-                )
                 continue
             
             # Get restaurant details by restaurantId using GSI

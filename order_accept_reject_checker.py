@@ -38,6 +38,16 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             logger.warning(f"[orderId={order_id}] Order not found")
             return {"statusCode": 200, "body": json.dumps({"message": "Order not found"})}
 
+        # Theater (PICKUP) orders never participate in the offer/accept loop.
+        # If a stale schedule somehow fires for one, drop it immediately
+        # rather than reassigning to another rider.
+        if order.order_type == Order.ORDER_TYPE_PICKUP:
+            logger.info(
+                f"[orderId={order_id}] orderType=PICKUP → dropping "
+                f"(theater/in-venue order, no rider needed)"
+            )
+            return {"statusCode": 200, "body": json.dumps({"message": "Theater order, skipped"})}
+
         if order.status == Order.RIDER_ASSIGNED:
             logger.info(f"[orderId={order_id}] Already accepted by rider")
             return {"statusCode": 200, "body": json.dumps({"message": "Already assigned"})}

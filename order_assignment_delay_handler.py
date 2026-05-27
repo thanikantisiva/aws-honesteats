@@ -31,6 +31,17 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             logger.warning(f"[orderId={order_id}] Order not found")
             return {"statusCode": 200, "body": json.dumps({"message": "Order not found"})}
 
+        # Theater (PICKUP) orders never need a rider. Drop them directly so
+        # a stale EventBridge schedule can't kick off an assignment after the
+        # restaurant flips a regular order into a theater order, or any
+        # other unforeseen flow.
+        if order.order_type == Order.ORDER_TYPE_PICKUP:
+            logger.info(
+                f"[orderId={order_id}] orderType=PICKUP → dropping "
+                f"(theater/in-venue order, no rider needed)"
+            )
+            return {"statusCode": 200, "body": json.dumps({"message": "Theater order, skipped"})}
+
         if order.rider_id:
             logger.info(f"[orderId={order_id}] Rider already assigned, skipping")
             return {"statusCode": 200, "body": json.dumps({"message": "Already assigned"})}

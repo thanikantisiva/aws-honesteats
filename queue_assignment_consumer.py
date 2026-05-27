@@ -9,6 +9,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from services.order_assignment_service import OrderAssignmentService
 from services.order_service import OrderService
 from services.sns_alert_service import publish_order_alert
+from models.order import Order
 
 logger = Logger(service="queue-assignment-consumer")
 
@@ -79,7 +80,19 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
             if not order:
                 logger.warning(f"[orderId={order_id}] Order not found, skipping")
                 continue
-            
+
+            # Theater (PICKUP) orders never need a rider. Drop them directly
+            # rather than recycling through SQS retries — even though no code
+            # path enqueues them today, this is cheap defence-in-depth so a
+            # future flow change can't accidentally start handing theater
+            # orders to riders.
+            if order.order_type == Order.ORDER_TYPE_PICKUP:
+                logger.info(
+                    f"[orderId={order_id}] orderType=PICKUP → dropping from queue "
+                    f"(theater/in-venue order, no rider needed)"
+                )
+                continue
+
             if order.status != 'AWAITING_RIDER_ASSIGNMENT':
                 logger.info(f"[orderId={order_id}] Status is {order.status}, no longer awaiting assignment")
                 continue

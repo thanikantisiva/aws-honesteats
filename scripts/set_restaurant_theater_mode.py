@@ -40,44 +40,57 @@ TABLE_NAME = f"food-delivery-restaurants-{ENVIRONMENT}"
 REGION = os.environ.get("AWS_DEFAULT_REGION", "ap-south-1")
 
 
-def _find_restaurant_pk(client, restaurant_id: str) -> str:
-    """Locate the geohash PK for a given restaurantId.
+def _find_all_restaurant_pks(client, restaurant_id: str) -> list[str]:
+    """Locate ALL geohash PKs for a given restaurantId via the GSI.
 
-    Uses a Scan with a SK filter because the table is keyed on geohash (PK)
-    and SK=`RESTAURANT#<id>`. For one-off ops this is cheap; if you call this
-    a lot, consider switching to GSI1 on `restaurantId`.
+    Historically a few restaurants ended up with duplicate rows (one at the
+    old geohash, one at the new) when the location was updated by an early
+    version of `update_restaurant`. The API reads through `restaurantId-index`
+    and may return EITHER row, so this script also writes to every match —
+    that way `theaterMode` is set regardless of which row the API picks up.
+
+    Returns:
+        List of PK (geohash) strings. Always at least one; may be more.
     """
-    sk = f"RESTAURANT#{restaurant_id}"
-    paginator = client.get_paginator("scan")
-    for page in paginator.paginate(
+    response = client.query(
         TableName=TABLE_NAME,
-        FilterExpression="SK = :sk",
-        ExpressionAttributeValues={":sk": {"S": sk}},
-        ProjectionExpression="PK, SK",
-    ):
-        for item in page.get("Items", []):
-            return item["PK"]["S"]
-    raise SystemExit(
-        f"Restaurant '{restaurant_id}' not found in table {TABLE_NAME!r}. "
-        "Double-check the ID and ENVIRONMENT variables."
+        IndexName="restaurantId-index",
+        KeyConditionExpression="restaurantId = :rid",
+        ExpressionAttributeValues={":rid": {"S": restaurant_id}},
+        ProjectionExpression="PK",
     )
+    items = response.get("Items", [])
+    if not items:
+        raise SystemExit(
+            f"Restaurant '{restaurant_id}' not found in table {TABLE_NAME!r} "
+            f"via restaurantId-index. Double-check the ID and ENVIRONMENT."
+        )
+    return [it["PK"]["S"] for it in items]
 
 
 def set_theater_mode(restaurant_id: str, state: str) -> None:
     client = boto3.client("dynamodb", region_name=REGION)
-    pk = _find_restaurant_pk(client, restaurant_id)
+    pks = _find_all_restaurant_pks(client, restaurant_id)
     sk = f"RESTAURANT#{restaurant_id}"
+
+    if len(pks) > 1:
+        print(
+            f"⚠️  Found {len(pks)} rows for {restaurant_id} (duplicate geohashes: {pks}). "
+            "Writing to ALL of them so the API can't pick up a stale one."
+        )
 
     state_upper = state.strip().upper()
     if state_upper in ("OFF", "NONE", "REMOVE", "DISABLED"):
-        client.update_item(
-            TableName=TABLE_NAME,
-            Key={"PK": {"S": pk}, "SK": {"S": sk}},
-            UpdateExpression="REMOVE theaterMode",
-        )
+        for pk in pks:
+            client.update_item(
+                TableName=TABLE_NAME,
+                Key={"PK": {"S": pk}, "SK": {"S": sk}},
+                UpdateExpression="REMOVE theaterMode",
+            )
+            print(f"  removed theaterMode (env={ENVIRONMENT}, pk={pk})")
         print(
-            f"Removed theaterMode flag from {restaurant_id} "
-            f"(env={ENVIRONMENT}, pk={pk}). Theater Menu tab will disappear."
+            f"Removed theaterMode from {restaurant_id}. "
+            "Theater Menu tab will disappear."
         )
         return
 
@@ -86,20 +99,21 @@ def set_theater_mode(restaurant_id: str, state: str) -> None:
             f"--state must be 'AVAILABLE' or 'OFF', got {state!r}."
         )
 
-    try:
-        client.update_item(
-            TableName=TABLE_NAME,
-            Key={"PK": {"S": pk}, "SK": {"S": sk}},
-            UpdateExpression="SET theaterMode = :v",
-            ExpressionAttributeValues={":v": {"S": "AVAILABLE"}},
-        )
-    except ClientError as e:
-        raise SystemExit(f"DynamoDB update failed: {e}") from e
+    for pk in pks:
+        try:
+            client.update_item(
+                TableName=TABLE_NAME,
+                Key={"PK": {"S": pk}, "SK": {"S": sk}},
+                UpdateExpression="SET theaterMode = :v",
+                ExpressionAttributeValues={":v": {"S": "AVAILABLE"}},
+            )
+            print(f"  set theaterMode=AVAILABLE (env={ENVIRONMENT}, pk={pk})")
+        except ClientError as e:
+            raise SystemExit(f"DynamoDB update failed for pk={pk}: {e}") from e
 
     print(
-        f"Set theaterMode=AVAILABLE on {restaurant_id} "
-        f"(env={ENVIRONMENT}, pk={pk}). Theater Menu tab is now active "
-        "in the restaurant POV web app."
+        f"Set theaterMode=AVAILABLE on {restaurant_id}. "
+        "Theater Menu tab is now active in the restaurant POV web app."
     )
 
 

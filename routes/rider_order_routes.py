@@ -417,7 +417,21 @@ def register_rider_order_routes(app):
             
             if order.rider_id != rider_id:
                 return {"error": "Order not assigned to this rider"}, 403
-            
+
+            # Theater (PICKUP) orders should never reach a rider in the first
+            # place. If one somehow did, just clear the rider hookup and
+            # stop — do NOT reassign to another rider. We deliberately leave
+            # the order status untouched so the restaurant POV can resolve
+            # whatever weird state caused this.
+            if order.order_type == Order.ORDER_TYPE_PICKUP:
+                logger.warning(
+                    f"[orderId={order_id}] Theater (PICKUP) order assigned to rider {rider_id} "
+                    f"unexpectedly; clearing rider without reassigning"
+                )
+                OrderService.update_order(order_id, {'riderId': None})
+                RiderService.set_working_on_order(rider_id, None)
+                return {"message": "Theater order, no reassignment"}, 200
+
             # Only allow rejecting orders in OFFERED_TO_RIDER status
             if order.status != 'OFFERED_TO_RIDER':
                 return {"error": f"Order cannot be rejected in {order.status} status"}, 400
