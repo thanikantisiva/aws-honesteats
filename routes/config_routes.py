@@ -20,6 +20,11 @@ def _restaurant_config_pk(restaurant_id: str) -> str:
     return f"CONFIG#RESTAURANT#{restaurant_id.strip()}"
 
 
+def _theatre_config_pk(theatre_name: str) -> str:
+    """Build partition key for theatre show-timing config."""
+    return f"THEATRE#{theatre_name.strip()}"
+
+
 def _extract_payload(body: dict):
     """Prefer explicit config object; otherwise store request body except key fields."""
     if "config" in body:
@@ -319,4 +324,49 @@ def register_config_routes(app):
             return {"cards": sanitized}, 200
         except Exception as e:
             logger.error("Error fetching promo cards", exc_info=True)
+            return {"error": str(e)}, 500
+
+    @app.get("/api/v1/config/theatre-show-timings")
+    @tracer.capture_method
+    def get_theatre_show_timings():
+        """Return theatre show timings keyed by theatreName from QR/deep link."""
+        try:
+            query_params = app.current_event.query_string_parameters or {}
+            theatre_name = str(
+                query_params.get("theatreName") or query_params.get("theaterName") or ""
+            ).strip()
+
+            if not theatre_name:
+                return {"error": "theatreName is required"}, 400
+
+            # Preferred key: THEATRE#{name}. Fallback to raw name for manually
+            # inserted legacy rows where theatreName itself was used as the PK.
+            pk_candidates = [_theatre_config_pk(theatre_name), theatre_name]
+            item = None
+            used_pk = None
+            for pk in pk_candidates:
+                item = _fetch_config_item(pk, "SHOW_TIMINGS")
+                if item:
+                    used_pk = pk
+                    break
+
+            if not item:
+                return {
+                    "error": "Theatre show timings not found",
+                    "theatreName": theatre_name,
+                }, 404
+
+            config = dynamodb_to_python(item.get("config", {"NULL": True}))
+            if not isinstance(config, dict):
+                return {"error": "Invalid theatre show timing config"}, 500
+
+            return {
+                "partitionkey": used_pk,
+                "sortKey": "SHOW_TIMINGS",
+                "theatreName": config.get("theatreName") or theatre_name,
+                "config": config,
+                "updatedAt": item.get("updatedAt", {}).get("S"),
+            }, 200
+        except Exception as e:
+            logger.error("Error fetching theatre show timings", exc_info=True)
             return {"error": str(e)}, 500

@@ -53,6 +53,7 @@ PUBLIC_ROUTES = [
     "/api/v1/ratings",
     "/api/v1/globalconfig",
     "/api/v1/config/app-version",
+    "/api/v1/config/theatre-show-timings",
     "/api/v1/payments/webhook",
 ]
 
@@ -67,6 +68,7 @@ GUEST_PUBLIC_GET_PREFIXES = [
     "/api/v1/config/app-version", # force-update version check (must work without JWT)
     "/api/v1/config/home-hero-banner",  # home hero banners (guest browsing)
     "/api/v1/config/promo-cards",       # promo cards (guest browsing)
+    "/api/v1/config/theatre-show-timings", # theatre QR show windows
     "/api/v1/coupons/available",  # available coupons list (read-only, no mutation)
 ]
 
