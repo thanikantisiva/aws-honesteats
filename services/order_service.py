@@ -111,56 +111,48 @@ class OrderService:
     
     @staticmethod
     def list_orders_by_restaurant(restaurant_id: str, status: str = None, limit: int = 500) -> List[Order]:
-        """List orders by restaurant ID.
-        With status filter: uses GSI (restaurantId-statusCreatedAt-index) for efficient lookup.
-        Without status filter: uses a table scan so that orders missing the composite sort key
-        attribute (e.g. older orders) are still returned.
+        """List orders by restaurant ID via the restaurantId-statusCreatedAt-index GSI.
+
+        With status: uses begins_with on the composite sort key to fetch only that status.
+        Without status: queries by partition key alone (returns every order for the restaurant
+        in a single billed-by-results Query — no full-table Scan). Results are re-sorted by
+        createdAt desc in memory because the GSI sort order is by status#createdAt.
         """
         try:
             logger.info(f"Listing orders for restaurant={restaurant_id} status={status} limit={limit}")
 
+            query_params = {
+                'TableName': TABLES['ORDERS'],
+                'IndexName': 'restaurantId-statusCreatedAt-index',
+                'ScanIndexForward': False,
+            }
             if status:
-                # Status-filtered path — GSI is efficient here
-                query_params = {
-                    'TableName': TABLES['ORDERS'],
-                    'IndexName': 'restaurantId-statusCreatedAt-index',
-                    'ScanIndexForward': False,
-                    'KeyConditionExpression': 'restaurantId = :restaurantId AND begins_with(restaurantStatusCreatedAt, :statusPrefix)',
-                    'ExpressionAttributeValues': {
-                        ':restaurantId': {'S': restaurant_id},
-                        ':statusPrefix': {'S': f'{status}#'},
-                    },
+                query_params['KeyConditionExpression'] = 'restaurantId = :restaurantId AND begins_with(restaurantStatusCreatedAt, :statusPrefix)'
+                query_params['ExpressionAttributeValues'] = {
+                    ':restaurantId': {'S': restaurant_id},
+                    ':statusPrefix': {'S': f'{status}#'},
                 }
-                orders = []
-                while True:
-                    response = dynamodb_client.query(**query_params)
-                    for item in response.get('Items', []):
-                        orders.append(Order.from_dynamodb_item(item))
-                        if len(orders) >= limit:
-                            break
-                    if len(orders) >= limit or 'LastEvaluatedKey' not in response:
-                        break
-                    query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
             else:
-                # No-status path — scan so that ALL orders are returned regardless of
-                # whether the composite sort key attribute exists on the item.
-                scan_params = {
-                    'TableName': TABLES['ORDERS'],
-                    'FilterExpression': 'restaurantId = :restaurantId',
-                    'ExpressionAttributeValues': {
-                        ':restaurantId': {'S': restaurant_id},
-                    },
+                query_params['KeyConditionExpression'] = 'restaurantId = :restaurantId'
+                query_params['ExpressionAttributeValues'] = {
+                    ':restaurantId': {'S': restaurant_id},
                 }
-                orders = []
-                while True:
-                    response = dynamodb_client.scan(**scan_params)
-                    for item in response.get('Items', []):
-                        orders.append(Order.from_dynamodb_item(item))
-                    if 'LastEvaluatedKey' not in response or len(orders) >= limit:
-                        break
-                    scan_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
-                # Sort newest-first (mirrors GSI ScanIndexForward=False behaviour)
+            orders: List[Order] = []
+            while True:
+                response = dynamodb_client.query(**query_params)
+                for item in response.get('Items', []):
+                    orders.append(Order.from_dynamodb_item(item))
+                    if len(orders) >= limit:
+                        break
+                if len(orders) >= limit or 'LastEvaluatedKey' not in response:
+                    break
+                query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+            if not status:
+                # Without a status filter the GSI sort order is status#createdAt (i.e. grouped
+                # by status), so re-sort by createdAt to keep the caller-visible contract that
+                # callers receive newest-first regardless of status.
                 def _sort_key(o: 'Order') -> str:
                     ca = o.created_at
                     if isinstance(ca, int):

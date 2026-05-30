@@ -377,6 +377,114 @@ def register_restaurant_routes(app):
             logger.error("Error clearing restaurant FCM token", exc_info=True)
             return {"error": "Failed to clear restaurant FCM token", "message": str(e)}, 500
 
+    @app.post("/api/v1/restaurants/<restaurant_id>/test-notification")
+    @tracer.capture_method
+    def send_restaurant_test_notification(restaurant_id: str):
+        """Send a real FCM push to every token registered for this restaurant.
+
+        Lets an operator self-verify their setup from the Settings screen — if
+        the phone buzzes, the whole pipeline (token registration → FCM project
+        → device receive) is wired correctly.
+        """
+        try:
+            _, auth_error = _authorize_restaurant_token(restaurant_id)
+            if auth_error:
+                return auth_error
+
+            restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+            if not restaurant:
+                return {"error": "Restaurant not found"}, 404
+
+            tokens = list(restaurant.fcm_tokens or [])
+            if restaurant.fcm_token and restaurant.fcm_token not in tokens:
+                tokens.append(restaurant.fcm_token)
+            tokens = [t for t in tokens if t and isinstance(t, str)]
+
+            if not tokens:
+                return {
+                    "error": "No FCM tokens registered for this restaurant",
+                    "message": "Open the app, grant notification permission, and log in again.",
+                    "tokenCount": 0
+                }, 409
+
+            results = []
+            success_count = 0
+            invalid_tokens = []
+            for token in tokens:
+                outcome = NotificationService.send_restaurant_new_order_notification_with_result(
+                    fcm_token=token,
+                    order_id="TEST-NOTIFICATION",
+                    restaurant_name=restaurant.name or "Your restaurant",
+                    customer_phone="",
+                    item_summary="Test notification",
+                    item_count=1,
+                    amount=0.0,
+                )
+                ok = bool(outcome.get("success"))
+                invalid = bool(outcome.get("invalidToken"))
+                results.append({
+                    "tokenSuffix": token[-8:] if len(token) >= 8 else token,
+                    "success": ok,
+                    "invalidToken": invalid,
+                })
+                if ok:
+                    success_count += 1
+                elif invalid:
+                    invalid_tokens.append(token)
+
+            # Reap any tokens FCM explicitly rejected so the next test/real order
+            # doesn't waste a send call on them.
+            for bad in invalid_tokens:
+                try:
+                    RestaurantService.remove_fcm_token(restaurant_id, bad, now_ist_iso())
+                    logger.info(f"[restaurantId={restaurant_id}] Removed invalid token via test endpoint")
+                except Exception:
+                    logger.warning(
+                        f"[restaurantId={restaurant_id}] Failed to remove invalid token (best-effort)",
+                        exc_info=True,
+                    )
+
+            metrics.add_metric(name="RestaurantTestNotification", unit="Count", value=1)
+            return {
+                "tokenCount": len(tokens),
+                "successCount": success_count,
+                "failureCount": len(tokens) - success_count,
+                "invalidTokensRemoved": len(invalid_tokens),
+                "results": results,
+            }, 200
+        except Exception as e:
+            logger.error("Error sending restaurant test notification", exc_info=True)
+            return {"error": "Failed to send test notification", "message": str(e)}, 500
+
+    @app.post("/api/v1/restaurants/<restaurant_id>/fcm-token-failure")
+    @tracer.capture_method
+    def report_restaurant_fcm_token_failure(restaurant_id: str):
+        """Client-side beacon — restaurant app reports failures uploading its FCM token.
+
+        Lets us see in CloudWatch when devices repeatedly fail to register, which
+        is otherwise invisible (client errors stay on-device). No auth required so
+        even unauthenticated/pre-login failures can be logged; restaurantId is
+        treated as untrusted metadata.
+        """
+        try:
+            body = app.current_event.json_body or {}
+            reason = str(body.get("reason") or "unknown")[:200]
+            http_status = body.get("httpStatus")
+            attempt = body.get("attempt")
+            token_suffix = str(body.get("tokenSuffix") or "")[:16]
+            platform = str(body.get("platform") or "")[:32]
+            app_version = str(body.get("appVersion") or "")[:32]
+            logger.warning(
+                f"[restaurantId={restaurant_id}] FCM token upload failure reported "
+                f"reason={reason} httpStatus={http_status} attempt={attempt} "
+                f"tokenSuffix={token_suffix} platform={platform} appVersion={app_version}"
+            )
+            metrics.add_metric(name="RestaurantFCMTokenUploadFailure", unit="Count", value=1)
+            return {"ok": True}, 200
+        except Exception as e:
+            logger.error("Error logging FCM token upload failure", exc_info=True)
+            return {"error": "Failed to record failure", "message": str(e)}, 500
+
     @app.get("/api/v1/restaurants/<restaurant_id>/fcm-token-status")
     @tracer.capture_method
     def get_restaurant_fcm_token_status(restaurant_id: str):

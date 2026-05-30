@@ -425,6 +425,7 @@ Resources:
                 - !Sub '${OrdersTable.Arn}/index/customer-phone-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/restaurantId-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/riderId-statusCreatedAt-index'
+                - !Sub '${OrdersTable.Arn}/index/status-createdAtIso-index'
                 - !Sub '${RidersTable.Arn}/index/phone-index'
                 - !Sub '${RidersTable.Arn}/index/GSI3'
                 - !Sub '${RestaurantsTable.Arn}/index/restaurantId-index'

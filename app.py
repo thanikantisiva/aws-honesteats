@@ -31,6 +31,7 @@ from routes.rating_routes import register_rating_routes
 from routes.config_routes import register_config_routes
 from routes.food_category_routes import register_food_category_routes
 from routes.restaurant_earnings_routes import register_restaurant_earnings_routes
+from routes.analytics_routes import register_analytics_routes
 
 # Initialize AWS Lambda Power Tools
 logger = Logger(service="rork-honesteats-api")
@@ -122,6 +123,7 @@ register_rating_routes(app)
 register_config_routes(app)
 register_food_category_routes(app)
 register_restaurant_earnings_routes(app)
+register_analytics_routes(app)
 
 
 @app.get("/health")
