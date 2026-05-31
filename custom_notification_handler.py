@@ -8,6 +8,9 @@ our current operating area. Recipients are resolved by querying UsersTableV2's
 in-memory for role=="CUSTOMER", isActive, and a non-empty fcmToken. FCM tokens
 are deduplicated and notified sequentially via NotificationService.send_via_firebase.
 
+`{{name}}` in title or customMessage is replaced per-recipient with the
+customer's first name (falls back to "there" when name is missing).
+
 Expected event:
 {
   "title": "Optional title",  // default "Notification"
@@ -16,7 +19,7 @@ Expected event:
 }
 """
 import json
-from typing import List
+from typing import List, Tuple
 
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -34,10 +37,10 @@ CUSTOMER_ROLE = "CUSTOMER"
 USERS_GEOHASH_INDEX = "geohash-index"
 
 
-def _query_customer_fcm_tokens(geohash: str) -> List[str]:
-    """Paginated Query on UsersTableV2.geohash-index → unique CUSTOMER fcmTokens."""
+def _query_customer_fcm_tokens(geohash: str) -> List[Tuple[str, str]]:
+    """Paginated Query on UsersTableV2.geohash-index → unique CUSTOMER (fcmToken, name) tuples."""
     seen = set()
-    tokens: List[str] = []
+    recipients: List[Tuple[str, str]] = []
     last_evaluated_key = None
 
     while True:
@@ -46,8 +49,9 @@ def _query_customer_fcm_tokens(geohash: str) -> List[str]:
             "IndexName": USERS_GEOHASH_INDEX,
             "KeyConditionExpression": "geohash = :gh",
             "ExpressionAttributeValues": {":gh": {"S": geohash}},
-            "ProjectionExpression": "#r, fcmToken",
-            "ExpressionAttributeNames": {"#r": "role"},
+            # `name` is a DynamoDB reserved word → must alias via #n.
+            "ProjectionExpression": "#r, fcmToken, #n",
+            "ExpressionAttributeNames": {"#r": "role", "#n": "name"},
         }
         if last_evaluated_key:
             kwargs["ExclusiveStartKey"] = last_evaluated_key
@@ -61,13 +65,14 @@ def _query_customer_fcm_tokens(geohash: str) -> List[str]:
             if not token or token in seen:
                 continue
             seen.add(token)
-            tokens.append(token)
+            name = (item.get("name", {}).get("S") or "").strip()
+            recipients.append((token, name))
 
         last_evaluated_key = response.get("LastEvaluatedKey")
         if not last_evaluated_key:
             break
 
-    return tokens
+    return recipients
 
 
 def lambda_handler(event: dict, context: LambdaContext) -> dict:
@@ -84,10 +89,10 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
 
         geohash = TARGET_GEOHASH
         logger.info(f"Querying CUSTOMER fcmTokens for geohash partition '{geohash}'")
-        tokens = _query_customer_fcm_tokens(geohash)
-        logger.info(f"Found {len(tokens)} unique CUSTOMER fcmTokens in partition '{geohash}'")
+        recipients = _query_customer_fcm_tokens(geohash)
+        logger.info(f"Found {len(recipients)} unique CUSTOMER fcmTokens in partition '{geohash}'")
 
-        if not tokens:
+        if not recipients:
             return {
                 "statusCode": 200,
                 "body": json.dumps({
@@ -104,12 +109,15 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
 
         sent = 0
         failed = 0
-        for token in tokens:
+        for token, name in recipients:
+            first_name = (name.split()[0] if name else "") or "there"
+            rendered_title = title.replace("{{name}}", first_name)
+            rendered_body = custom_message.replace("{{name}}", first_name)
             ok = NotificationService.send_via_firebase(
                 fcm_token=token,
-                title=title,
+                title=rendered_title,
                 data=payload,
-                body=custom_message,
+                body=rendered_body,
             )
             if ok:
                 sent += 1
@@ -117,14 +125,14 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                 failed += 1
 
         logger.info(
-            f"Custom notification complete: geohash={geohash} matched={len(tokens)} "
+            f"Custom notification complete: geohash={geohash} matched={len(recipients)} "
             f"sent={sent} failed={failed}"
         )
         return {
             "statusCode": 200,
             "body": json.dumps({
                 "geohash": geohash,
-                "matched": len(tokens),
+                "matched": len(recipients),
                 "sent": sent,
                 "failed": failed,
             }),
