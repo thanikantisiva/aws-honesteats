@@ -371,7 +371,17 @@ def register_rider_order_routes(app):
             update_data = {
                 'riderAssignedAt': now_ist_iso()
             }
-            
+
+            # Snapshot rider name on the order so downstream consumers
+            # (customer app, notifications, ops Retool) don't have to join
+            # against the riders table.
+            if rider:
+                rider_display_name = " ".join(
+                    part for part in (rider.first_name, rider.last_name) if part
+                ).strip()
+                if rider_display_name:
+                    update_data['riderName'] = rider_display_name
+
             # Copy rider location if available and not already in order
             if rider and rider.lat is not None and rider.lng is not None:
                 if not order.rider_current_lat or not order.rider_current_lng:
