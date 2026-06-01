@@ -44,7 +44,13 @@ Globals:
     Environment:
       Variables:
         POWERTOOLS_SERVICE_NAME: rork-honesteats-api
-        LOG_LEVEL: INFO
+        # WARNING (not INFO) — INFO chatter was driving ~150MB/day on the
+        # prod API log group alone. WARNING keeps real errors visible while
+        # dropping verbose request/response/business-event tracing.
+        # To temporarily re-enable INFO for a debug session: set env var
+        # LOG_LEVEL=INFO on the specific function in the Lambda console (no
+        # redeploy needed) and unset it when done.
+        LOG_LEVEL: WARNING
         JWT_SECRET_KEY: !Sub "/rork-honesteats/${Environment}/JWT_SECRET_KEY"
         FIREBASE_SERVICE_ACCOUNT_JSON: !Sub "/rork-honesteats/${Environment}/FIREBASE_SERVICE_ACCOUNT_JSON"
         RETOOL_BYPASS_VALUE: !Sub "/rork-honesteats/${Environment}/RETOOL_BYPASS_VALUE"
