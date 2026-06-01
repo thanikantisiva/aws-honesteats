@@ -6,6 +6,7 @@ from typing import Optional
 from aws_lambda_powertools import Logger
 
 from config.pricing import round_nearest_half
+from utils import normalize_phone
 from utils.dynamodb import TABLES, dynamodb_client
 
 logger = Logger()
@@ -78,6 +79,7 @@ class CouponService:
             "couponRestaurant": item.get("couponRestaurant", {}).get("S"),
             "couponItem": item.get("couponItem", {}).get("S"),
             "description": item.get("description", {}).get("S") or None,
+            "targetCustomerPhones": item.get("targetCustomerPhones", {}).get("SS", []),
         }
 
     @staticmethod
@@ -109,6 +111,27 @@ class CouponService:
         return coupon_restaurant == str(restaurant_id or "").strip()
 
     @staticmethod
+    def is_coupon_valid_for_customer(coupon: Optional[dict], mobile_number: Optional[str]) -> bool:
+        """Validate whether a coupon is public or targeted to this customer phone."""
+        if not coupon:
+            return False
+
+        target_phones = set(coupon.get("targetCustomerPhones") or [])
+        if not target_phones:
+            return True
+
+        normalized_mobile = normalize_phone(str(mobile_number).strip()) if mobile_number else None
+        if not normalized_mobile:
+            return False
+
+        normalized_targets = {
+            normalize_phone(str(phone).strip())
+            for phone in target_phones
+            if str(phone or "").strip()
+        }
+        return normalized_mobile in normalized_targets
+
+    @staticmethod
     def get_menu_item_prices(menu_item) -> dict:
         """Return authoritative menu pricing, including coupon discount when valid."""
         base_price = float(menu_item.price)
@@ -128,6 +151,11 @@ class CouponService:
             return default_result
 
         if not CouponService.is_coupon_active(coupon.get("startDate"), coupon.get("endDate")):
+            return default_result
+
+        # Menu pricing has no customer identity today, so targeted coupons must
+        # not affect public item prices.
+        if coupon.get("targetCustomerPhones"):
             return default_result
 
         coupon_type = str(coupon.get("couponType") or "").strip().lower()

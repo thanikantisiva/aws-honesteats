@@ -10,10 +10,10 @@ class RestaurantEarningsService:
     """Service for restaurant earnings operations"""
 
     @staticmethod
-    def add_order_earning(restaurant_id: str, order_id: str, amount: float):
+    def add_order_earning(restaurant_id: str, order_id: str, amount: float, date_override: str = None):
         """Add a restaurant earning entry per order"""
         try:
-            today = datetime.utcnow().strftime('%Y-%m-%d')
+            today = date_override or datetime.utcnow().strftime('%Y-%m-%d')
             earnings = RestaurantEarnings(
                 restaurant_id=restaurant_id,
                 date=f"{today}#{order_id}",

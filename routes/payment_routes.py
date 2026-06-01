@@ -247,6 +247,17 @@ def register_payment_routes(app):
                 return {"error": "Missing required fields"}, 400
             if not receiver_phone:
                 return {"error": "receiverPhone is required"}, 400
+
+            if coupon_code:
+                from services.coupon_service import CouponService
+
+                coupon = CouponService.get_coupon(coupon_code)
+                if not coupon or not CouponService.is_coupon_active(coupon.get("startDate"), coupon.get("endDate")):
+                    return {"error": "Coupon is inactive or invalid"}, 400
+                if not CouponService.is_coupon_valid_for_restaurant(coupon, restaurant_id):
+                    return {"error": "Coupon is not valid for this restaurant"}, 400
+                if not CouponService.is_coupon_valid_for_customer(coupon, customer_phone):
+                    return {"error": "Coupon is not valid for this customer"}, 403
             
             # Generate IDs
             payment_id = generate_id('PAY')

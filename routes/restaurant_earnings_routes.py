@@ -58,18 +58,22 @@ def _order_to_row(order: Order, earning_date: str) -> dict:
     rev = order.revenue or {}
     platform_rev = rev.get('platformRevenue') or {}
     restaurant_rev = rev.get('restaurantRevenue') or {}
+    govt_rev = rev.get('govtRevenue') or {}
 
     food_commission = float(platform_rev.get('foodCommission') or 0)
+    gst_on_food = float(govt_rev.get('gstOnFood') or 0)
     coupon_deduction = (
         float(restaurant_rev.get('couponDiscount') or 0) +
         float(restaurant_rev.get('itemCouponDiscount') or 0)
     )
     net_payout = float(restaurant_rev.get('finalPayout') or 0)
+    delivered_at = order.rider_delivered_at or (order.created_at if isinstance(order.created_at, str) else '')
+    delivery_date = delivered_at[:10] if delivered_at else earning_date
 
     return {
         'orderId'        : order.order_id,
-        'date'           : earning_date,
-        'createdAt'      : order.created_at if isinstance(order.created_at, str) else '',
+        'date'           : delivery_date,
+        'createdAt'      : delivered_at,
         'grandTotal'     : round(float(order.grand_total or 0), 2),
         'foodTotal'      : round(float(order.food_total or 0), 2),
         'deliveryFee'    : round(float(order.delivery_fee or 0), 2),
@@ -77,6 +81,7 @@ def _order_to_row(order: Order, earning_date: str) -> dict:
         'paymentMethod'  : order.payment_method or '-',
         'restaurantName' : order.restaurant_name or '',
         'foodCommission' : round(food_commission, 2),
+        'gstOnFood'      : round(gst_on_food, 2),
         'couponDeduction': round(coupon_deduction, 2),
         'netPayout'      : round(net_payout, 2),
     }
@@ -87,6 +92,7 @@ def _build_summary(rows: list) -> dict:
         'totalOrders'         : len(rows),
         'totalGMV'            : round(sum(r['foodTotal'] for r in rows), 2),
         'totalCommission'     : round(sum(r['foodCommission'] for r in rows), 2),
+        'totalGstOnFood'      : round(sum(r['gstOnFood'] for r in rows), 2),
         'totalCouponDeduction': round(sum(r['couponDeduction'] for r in rows), 2),
         'netPayable'          : round(sum(r['netPayout'] for r in rows), 2),
     }
@@ -122,7 +128,7 @@ def _generate_xlsx(restaurant_id: str, restaurant_name: str, settlement_id: str,
         return Font(bold=bold, color=color, name="Calibri", size=size)
 
     # ── Row 1: Title bar ─────────────────────────────────────────────────────
-    ws.merge_cells('A1:H1')
+    ws.merge_cells('A1:I1')
     ws['A1'].value     = "YumDude  •  Restaurant Settlement Report"
     ws['A1'].font      = Font(bold=True, color=WHITE, name="Calibri", size=14)
     ws['A1'].fill      = fill(RED)
@@ -151,7 +157,7 @@ def _generate_xlsx(restaurant_id: str, restaurant_name: str, settlement_id: str,
     summary = _build_summary(rows)
     sr = 3 + len(info_items) + 1  # one blank row after info
 
-    ws.merge_cells(f'A{sr}:H{sr}')
+    ws.merge_cells(f'A{sr}:I{sr}')
     sh = ws.cell(row=sr, column=1, value="Summary")
     sh.font = Font(bold=True, color=WHITE, name="Calibri", size=11)
     sh.fill = fill(DARK)
@@ -161,6 +167,7 @@ def _generate_xlsx(restaurant_id: str, restaurant_name: str, settlement_id: str,
     summary_rows = [
         ("Total Orders",                           str(summary['totalOrders'])),
         ("Total Gross Menu Value",                 f"\u20b9{summary['totalGMV']:,.2f}"),
+        ("GST on Food",                            f"\u20b9{summary['totalGstOnFood']:,.2f}"),
         ("Platform Commission",                    f"\u20b9{summary['totalCommission']:,.2f}"),
         ("Your Coupon Discount (restaurant-issued)", f"\u20b9{summary['totalCouponDeduction']:,.2f}"),
         ("Your Net Settlement",                    f"\u20b9{summary['netPayable']:,.2f}"),
@@ -181,9 +188,10 @@ def _generate_xlsx(restaurant_id: str, restaurant_name: str, settlement_id: str,
     # ── Orders table ─────────────────────────────────────────────────────────
     tr = sr + len(summary_rows) + 2  # one blank row before table
 
-    headers    = ["#", "Order ID", "Date & Time", "Gross Menu Value (₹)",
-                  "Platform Commission (₹)", "Your Coupon Discount (₹)", "Your Net Payout (₹)", "Payment"]
-    col_widths = [5, 22, 22, 22, 24, 26, 22, 14]
+    headers    = ["#", "Order ID", "Date & Time", "Gross Menu Value (Rs.)",
+                  "GST on Food (Rs.)", "Platform Commission (Rs.)",
+                  "Your Coupon Discount (Rs.)", "Your Net Payout (Rs.)", "Payment"]
+    col_widths = [5, 22, 22, 22, 18, 24, 26, 22, 14]
 
     for ci, (h, w) in enumerate(zip(headers, col_widths), start=1):
         cell = ws.cell(row=tr, column=ci, value=h)
@@ -206,13 +214,13 @@ def _generate_xlsx(restaurant_id: str, restaurant_name: str, settlement_id: str,
         values = [
             row_num, row['orderId'], date_str,
             row['foodTotal'],
-            row['foodCommission'], row['couponDeduction'],
+            row['gstOnFood'], row['foodCommission'], row['couponDeduction'],
             row['netPayout'], row['paymentMethod'],
         ]
         for ci, val in enumerate(values, start=1):
             cell      = ws.cell(row=r, column=ci, value=val)
-            is_num    = ci in (4, 5, 6, 7)
-            is_payout = ci == 7
+            is_num    = ci in (4, 5, 6, 7, 8)
+            is_payout = ci == 8
             cell.font = Font(bold=is_payout, color=DARK, name="Calibri", size=10)
             cell.fill = row_fill; cell.border = border
             cell.alignment = Alignment(horizontal='right' if is_num else 'center', vertical='center')
@@ -221,7 +229,7 @@ def _generate_xlsx(restaurant_id: str, restaurant_name: str, settlement_id: str,
 
     # ── Footer ───────────────────────────────────────────────────────────────
     fr = tr + len(rows) + 2
-    ws.merge_cells(f'A{fr}:H{fr}')
+    ws.merge_cells(f'A{fr}:I{fr}')
     fc = ws.cell(row=fr, column=1,
                  value="System-generated report by YumDude. For disputes, contact support@yumdude.com")
     fc.font      = Font(italic=True, color="999999", name="Calibri", size=9)
@@ -270,7 +278,8 @@ def register_restaurant_earnings_routes(app):
                 return {
                     "restaurantId": restaurant_id, "startDate": start_date, "endDate": end_date,
                     "totalOrders": 0, "totalGMV": 0, "totalCommission": 0,
-                    "totalCouponDeduction": 0, "netPayable": 0, "orders": []
+                    "totalGstOnFood": 0, "totalCouponDeduction": 0,
+                    "netPayable": 0, "orders": []
                 }, 200
 
             orders_map      = _batch_fetch_orders(order_ids)

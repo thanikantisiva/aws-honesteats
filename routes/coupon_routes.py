@@ -2,6 +2,7 @@
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.coupon_service import CouponService
 from services.menu_service import MenuService
+from utils import normalize_phone
 from utils.dynamodb import dynamodb_client, TABLES
 
 logger = Logger()
@@ -41,6 +42,42 @@ def register_coupon_routes(app):
             )
         return normalized, None
 
+    def _normalize_target_customer_phones(body: dict):
+        """Normalize optional targeted-customer phone lists for special coupons."""
+        field_names = ("targetCustomerPhones", "targetCustomers", "eligibleCustomerPhones")
+        values = [body[name] for name in field_names if name in body and body[name] is not None]
+        if not values:
+            return [], False, None
+
+        raw_phones = []
+        for value in values:
+            if isinstance(value, str):
+                raw_phones.extend(part.strip() for part in value.split(","))
+            elif isinstance(value, (list, tuple, set)):
+                for phone in value:
+                    if not isinstance(phone, str):
+                        return [], True, ({"error": "targetCustomerPhones must contain only strings"}, 400)
+                    raw_phones.append(phone.strip())
+            else:
+                return [], True, (
+                    {"error": "targetCustomerPhones must be an array of phone strings or a comma-separated string"},
+                    400,
+                )
+
+        normalized = []
+        seen = set()
+        for phone in raw_phones:
+            if not phone:
+                continue
+            normalized_phone = normalize_phone(phone)
+            if normalized_phone and normalized_phone not in seen:
+                normalized.append(normalized_phone)
+                seen.add(normalized_phone)
+
+        if not normalized:
+            return [], True, ({"error": "targetCustomerPhones must include at least one phone when provided"}, 400)
+        return normalized, True, None
+
     @app.post("/api/v1/coupons")
     @tracer.capture_method
     def create_coupon():
@@ -62,6 +99,9 @@ def register_coupon_routes(app):
             item_banner_text, item_banner_error = _normalize_item_banner_text(body.get('itemBannerText'))
             normalized_description, description_error = _normalize_optional_string_field(
                 body.get('description'), 'description'
+            )
+            target_customer_phones, target_customer_phones_provided, target_customer_phones_error = (
+                _normalize_target_customer_phones(body)
             )
             is_once_per_user = body.get('isOncePerUser', False)
             if isinstance(is_once_per_user, str):
@@ -97,6 +137,8 @@ def register_coupon_routes(app):
                 return item_banner_error
             if description_error:
                 return description_error
+            if target_customer_phones_error:
+                return target_customer_phones_error
 
             normalized_issued_by = str(issued_by).strip().upper() if issued_by is not None else None
 
@@ -104,6 +146,8 @@ def register_coupon_routes(app):
                 return {"error": "couponRestaurant is required when issuedBy is RESTAURANT"}, 400
             if normalized_item_id and not normalized_coupon_restaurant:
                 return {"error": "couponRestaurant is required when itemId is provided"}, 400
+            if target_customer_phones_provided and normalized_item_id:
+                return {"error": "targetCustomerPhones is supported only for checkout coupons, not item coupons"}, 400
             # Only non-empty banner text counts as "provided" (null/empty/whitespace = omitted)
             if item_banner_text and not normalized_item_id:
                 return {"error": "itemId is required when itemBannerText is provided"}, 400
@@ -139,6 +183,8 @@ def register_coupon_routes(app):
                 item['minOrderValue'] = {'N': str(min_order_value)}
             if normalized_description:
                 item['description'] = {'S': normalized_description}
+            if target_customer_phones_provided:
+                item['targetCustomerPhones'] = {'SS': target_customer_phones}
 
             dynamodb_client.put_item(
                 TableName=TABLES['CONFIG'],
@@ -161,6 +207,8 @@ def register_coupon_routes(app):
                 response["itemId"] = normalized_item_id
             if item_banner_text:
                 response["itemBannerText"] = item_banner_text
+            if target_customer_phones_provided:
+                response["targetCustomerCount"] = len(target_customer_phones)
             return response, 200
         except Exception as e:
             logger.error("Error saving coupon", exc_info=True)
@@ -210,7 +258,7 @@ def register_coupon_routes(app):
         """Return all active, eligible coupons for a given restaurant and user."""
         try:
             restaurant_id = app.current_event.get_query_string_value('restaurantId')
-            mobile_number = app.current_event.get_query_string_value('mobileNumber')
+            mobile_number = normalize_phone(app.current_event.get_query_string_value('mobileNumber'))
 
             # Scan ConfigTable for all COUPON# records (handles DynamoDB pagination)
             scan_kwargs = {
@@ -283,6 +331,7 @@ def register_coupon_routes(app):
                 coupon_restaurant = str(item.get('couponRestaurant', {}).get('S') or '').strip()
                 issued_by = str(item.get('issuedBy', {}).get('S') or '').strip()
                 description = str(item.get('description', {}).get('S') or '').strip() or None
+                target_customer_phones = item.get('targetCustomerPhones', {}).get('SS', [])
 
                 # Must be within active date window
                 if not CouponService.is_coupon_active(start_date, end_date):
@@ -290,6 +339,13 @@ def register_coupon_routes(app):
 
                 # Must match this restaurant, or be a global coupon (no restriction)
                 if coupon_restaurant and restaurant_id and coupon_restaurant != str(restaurant_id).strip():
+                    continue
+
+                # Targeted coupons are visible only to selected customers.
+                if not CouponService.is_coupon_valid_for_customer(
+                    {'targetCustomerPhones': target_customer_phones},
+                    mobile_number,
+                ):
                     continue
 
                 # Skip if already used by this user (isOncePerUser enforcement)

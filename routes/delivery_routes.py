@@ -462,7 +462,8 @@ def register_delivery_routes(app):
                             f"isOncePerUser={is_once_per_user}, isOncePerDay={is_once_per_day}, "
                             f"couponTarget={coupon_target}, minOrderValue={min_order_value}, "
                             f"issuedBy={coupon_issued_by}, "
-                            f"couponRestaurant={coupon.get('couponRestaurant')!r}"
+                            f"couponRestaurant={coupon.get('couponRestaurant')!r}, "
+                            f"targetCustomerCount={len(coupon.get('targetCustomerPhones') or [])}"
                         )
 
                         if not CouponService.is_coupon_active(coupon.get('startDate'), coupon.get('endDate')):
@@ -471,6 +472,15 @@ def register_delivery_routes(app):
                                 f"couponCode={coupon_code}, reason=inactive_or_invalid"
                             )
                             result['couponRejectedReason'] = 'inactive_or_invalid'
+                        elif not CouponService.is_coupon_valid_for_customer(coupon, mobile_number):
+                            logger.info(
+                                "Coupon rejected due to targeted-customer mismatch: "
+                                f"couponCode={coupon_code}, mobileNumberPresent={bool(mobile_number)}, "
+                                f"targetCustomerCount={len(coupon.get('targetCustomerPhones') or [])}"
+                            )
+                            result['couponRejectedReason'] = 'customer_not_eligible'
+                            result['couponApplied'] = False
+                            return result, 200
                         elif not CouponService.is_coupon_valid_for_restaurant(coupon, restaurant_id):
                             logger.info(
                                 "Coupon rejected due to restaurant mismatch: "

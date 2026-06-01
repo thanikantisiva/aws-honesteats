@@ -591,7 +591,10 @@ def register_rider_order_routes(app):
 
                 restaurant_payout = _revenue_final_payout(order, "restaurantRevenue", "finalPayout")
                 RestaurantEarningsService.add_order_earning(
-                    order.restaurant_id, order_id, restaurant_payout
+                    order.restaurant_id,
+                    order_id,
+                    restaurant_payout,
+                    date_override=delivered_at.strftime('%Y-%m-%d'),
                 )
             
             # Update order status
