@@ -289,6 +289,21 @@ class PaymentService:
             raise
 
     @staticmethod
+    def get_payments_for_order(order_id: str) -> List[Payment]:
+        """Return ALL payment rows for the given order (any status)."""
+        try:
+            response = dynamodb_client.query(
+                TableName=TABLES['PAYMENTS'],
+                IndexName='orderId-index',
+                KeyConditionExpression='orderId = :oid',
+                ExpressionAttributeValues={':oid': {'S': order_id}},
+            )
+            return [Payment.from_dynamodb_item(raw) for raw in response.get('Items', [])]
+        except ClientError as e:
+            logger.error(f"Failed to query all payments by orderId: {str(e)}")
+            raise
+
+    @staticmethod
     def get_initiated_rider_upi_payments_for_order(order_id: str) -> List[Payment]:
         """INITIATED payments for this order (rider completes via UPI QR or cash at delivery)."""
         try:

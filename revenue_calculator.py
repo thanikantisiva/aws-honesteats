@@ -2,381 +2,20 @@
 Lambda triggered by DynamoDB Orders stream when an order becomes CONFIRMED.
 Computes the revenue breakdown (food commission, platform revenue, restaurant settlement)
 and writes it to both the Order and Payment records.
+
+The actual revenue math lives in `services/revenue_service.py` so the ops
+item-adjustment endpoint can recompute revenue using the same code path.
 """
 import json
 from datetime import datetime, timezone, timedelta
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
-from config.pricing import calculate_customer_price_from_hike
 from services.order_service import OrderService
 from services.payment_service import PaymentService
+from services.revenue_service import compute_revenue
 from utils.dynamodb import dynamodb_client, TABLES
-from utils.dynamodb_helpers import dynamodb_to_python
 
 logger = Logger(service="revenue-calculator")
-
-
-def _fetch_restaurant_commission_config(restaurant_id: str) -> dict:
-    """
-    Fetch commission config for a restaurant from CONFIG#RESTAURANT#{restaurant_id}.
-    Returns the parsed 'config' attribute dict, or {} if not found.
-    """
-    try:
-        response = dynamodb_client.get_item(
-            TableName=TABLES["CONFIG"],
-            Key={
-                "partitionkey": {"S": f"CONFIG#RESTAURANT#{restaurant_id}"},
-                "sortKey": {"S": "CONFIG"},
-            },
-        )
-        item = response.get("Item")
-        if not item:
-            return {}
-        config = dynamodb_to_python(item.get("config", {"NULL": True}))
-        return config if isinstance(config, dict) else {}
-    except Exception as e:
-        logger.warning(f"Failed to fetch restaurant commission config for {restaurant_id}: {e}")
-        return {}
-
-
-def _fetch_global_default_commission() -> float:
-    """
-    Fetch defaultCommission from CONFIG#GLOBAL / CONFIG.
-    Returns 0.0 if not found.
-    """
-    try:
-        response = dynamodb_client.get_item(
-            TableName=TABLES["CONFIG"],
-            Key={
-                "partitionkey": {"S": "CONFIG#GLOBAL"},
-                "sortKey": {"S": "CONFIG"},
-            },
-        )
-        item = response.get("Item")
-        if not item:
-            return 0.0
-        config = dynamodb_to_python(item.get("config", {"NULL": True}))
-        if not isinstance(config, dict):
-            return 0.0
-        return float(config.get("restaurantCommissionPercentage", 0) or 0)
-    except Exception as e:
-        logger.warning(f"Failed to fetch global default commission: {e}")
-        return 0.0
-
-
-def _resolve_commission_pct(item_id: str, restaurant_config: dict, global_default: float) -> float:
-    """
-    Resolve commission percentage for an item using 3-tier priority:
-    1. Item-level:       ITM-{item_id}_commissionPercentage  in restaurant config
-    2. Restaurant-level: restaurantCommissionPercentage       in restaurant config
-    3. Global default:   defaultCommission                    from CONFIG#GLOBAL
-    """
-    item_key = f"ITM-{item_id}_commissionPercentage"
-    for field in (item_key, "restaurantCommissionPercentage"):
-        value = restaurant_config.get(field)
-        if value is not None:
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                pass
-    return global_default
-
-
-def _safe_float(value, default: float = 0.0) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return default
-
-
-def _normalize_coupon_issuer(value) -> str | None:
-    normalized = str(value or "").strip().upper()
-    return normalized or None
-
-
-def _get_gross_item_price(item: dict, customer_price: float, stored_discount_amount: float) -> float:
-    restaurant_price = _safe_float(item.get("restaurantPrice"))
-    hike_percentage = _safe_float(item.get("hikePercentage"))
-
-    if restaurant_price > 0:
-        reconstructed = calculate_customer_price_from_hike(restaurant_price, hike_percentage)
-        return round(max(reconstructed, customer_price), 2)
-
-    if stored_discount_amount > 0:
-        return round(customer_price + stored_discount_amount, 2)
-
-    return round(customer_price, 2)
-
-
-def _compute_revenue(order) -> tuple[dict, list]:
-    """
-    Build the revenue dict from an Order object and a list of order line items
-    annotated with commission fields.
-
-    Food commission is percentage-driven using a 3-tier config lookup:
-    item-level → restaurant-level → global default.
-
-    Each item in the returned list includes:
-      - itemCommissionPercentage: resolved commission % for that line
-      - itemCommissionAmount: total platform commission for the line (all units)
-    """
-    total_customer_paid = 0.0
-    gross_food_value = 0.0
-    total_food_commission = 0.0
-    total_item_coupon_discount = 0.0
-    platform_item_coupon_discount = 0.0
-    restaurant_item_coupon_discount = 0.0
-    # Sum of per-unit restaurantPrice × quantity across all items. Used to cap
-    # restaurant payout: anything the hike model would route to restaurant beyond
-    # this is the platform's share of the markup (see post-loop cap below).
-    # Items without a restaurantPrice fall back to gross_price so they remain
-    # uncapped (we have no "owed amount" to compare against).
-    total_items_restaurant_price = 0.0
-    restaurantRevenue = {}
-    platformRevenue = {}
-    enriched_items: list = []
-
-    restaurant_config = _fetch_restaurant_commission_config(order.restaurant_id)
-    global_default_commission = _fetch_global_default_commission()
-
-    logger.info(
-        f"Commission config for restaurant {order.restaurant_id}: "
-        f"restaurantCommissionPercentage={restaurant_config.get('restaurantCommissionPercentage')}, "
-        f"globalDefault={global_default_commission}"
-    )
-
-    total_add_on_value = 0.0
-
-    for item in (order.items or []):
-        item_copy = dict(item)
-        item_id = item.get("itemId") or item.get("item_id") or ""
-        try:
-            quantity = int(item.get("quantity", 1) or 1)
-        except (TypeError, ValueError):
-            quantity = 1
-        customer_price = _safe_float(item.get("price"))
-        add_on_total = _safe_float(item.get("addOnTotal"))
-        stored_discount_amount = max(_safe_float(item.get("itemDiscountAmount")), 0.0)
-        restaurant_price = _safe_float(item.get("restaurantPrice"))
-        gross_price = _get_gross_item_price(item, customer_price, stored_discount_amount)
-        item_discount_amount = round(max(gross_price - customer_price, 0.0), 2)
-        coupon_issued_by = _normalize_coupon_issuer(item.get("couponIssuedBy"))
-        # Cap basis for restaurant payout: when restaurantPrice is set the
-        # restaurant is owed exactly that per unit. Without a restaurantPrice
-        # (legacy items) fall back to gross_price so the cap is a no-op.
-        item_restaurant_owed = restaurant_price if restaurant_price > 0 else gross_price
-        total_items_restaurant_price += item_restaurant_owed * quantity
-
-        commission_pct = _resolve_commission_pct(item_id, restaurant_config, global_default_commission)
-        # Commission applies to base item price only (add-ons are 100% restaurant revenue).
-        # If YumDude funds the item coupon, commission is on discounted customer price.
-        # Otherwise (restaurant-funded / unknown), commission is on gross item price.
-        commission_base = customer_price if coupon_issued_by == "YUMDUDE" else gross_price
-        item_commission_per_unit = round(commission_base * commission_pct / 100.0, 4)
-        item_commission = item_commission_per_unit * quantity
-
-        item_copy["itemCommissionPercentage"] = round(commission_pct, 4)
-        item_copy["itemCommissionAmount"] = round(item_commission, 4)
-        item_copy["grossPrice"] = gross_price
-        item_copy["itemDiscountAmount"] = item_discount_amount
-        item_copy["couponIssuedBy"] = coupon_issued_by
-
-        enriched_items.append(item_copy)
-
-        total_food_commission += item_commission
-        total_customer_paid += (customer_price + add_on_total) * quantity
-        gross_food_value += (gross_price + add_on_total) * quantity
-        total_add_on_value += add_on_total * quantity
-        total_item_coupon_discount += item_discount_amount * quantity
-
-        if coupon_issued_by == "YUMDUDE":
-            platform_item_coupon_discount += item_discount_amount * quantity
-        elif coupon_issued_by == "RESTAURANT":
-            restaurant_item_coupon_discount += item_discount_amount * quantity
-
-        logger.info(
-            f"Item {item_id}: grossPrice={gross_price}, customerPrice={customer_price}, "
-            f"addOnTotal={add_on_total}, qty={quantity}, "
-            f"itemDiscountAmount={item_discount_amount}, couponIssuedBy={coupon_issued_by}, "
-            f"commissionBase={commission_base}, "
-            f"itemCommissionPercentage={item_copy['itemCommissionPercentage']}, "
-            f"itemCommissionAmount={item_copy['itemCommissionAmount']}"
-        )
-
-    fee_resp = order.calculated_fee_response
-    fee_dict = fee_resp if isinstance(fee_resp, dict) else {}
-    food_commission = round(total_food_commission, 2)
-    platformRevenue["foodCommission"] = food_commission
-
-    distance_km = _safe_float(fee_dict.get("distance"))
-    long_distance_bonus = 15.0 if distance_km > 6 else 0.0
-    logger.info(
-        f"Long distance bonus check: distanceKm={distance_km}, "
-        f"longDistanceBonus={long_distance_bonus}"
-    )
-    
-    platform_fee = 0.0
-    if isinstance(fee_resp, dict):
-        try:
-            platform_fee = float(fee_resp.get("platformFee", 0) or 0)
-        except (TypeError, ValueError):
-            platform_fee = 0.0
-    elif order.platform_fee:
-        platform_fee = float(order.platform_fee)
-
-    platformRevenue["platformFee"] = platform_fee
-
-    total_platform_revenue = round(food_commission + platform_fee, 2)
-    restaurant_settlement = round(gross_food_value - food_commission, 2)
-    restaurantRevenue["revenue"] = restaurant_settlement
-
-    # Cap restaurant payout at sum(items.restaurantPrice * qty) + add-on totals.
-    # When (1 + hikePercentage/100) × (1 - commissionPercentage/100) > 1 the
-    # current settlement leaves the restaurant overpaid relative to its agreed
-    # restaurantPrice; that overpayment is the platform's share of the markup
-    # and is moved to platformRevenue.excessFromRestaurantRevenue. Add-ons stay
-    # with the restaurant in full (existing semantics: add-ons are 100% restaurant).
-    restaurant_owed_total = round(total_items_restaurant_price + total_add_on_value, 2)
-    if restaurant_settlement > restaurant_owed_total:
-        excess_from_restaurant = round(restaurant_settlement - restaurant_owed_total, 2)
-        logger.info(
-            f"Restaurant payout capped at restaurantPrice + addOns: "
-            f"settlementBeforeCap={restaurant_settlement}, "
-            f"restaurantOwed={restaurant_owed_total}, "
-            f"excessTransferredToPlatform={excess_from_restaurant}"
-        )
-        restaurant_settlement = restaurant_owed_total
-        restaurantRevenue["revenue"] = restaurant_settlement
-        platformRevenue["excessFromRestaurantRevenue"] = excess_from_restaurant
-        total_platform_revenue = round(total_platform_revenue + excess_from_restaurant, 2)
-
-    coupon_code = None
-    coupon_applied = False
-    coupon_discount = 0.0
-    issued_by = None
-    is_once_per_user = False
-    is_once_per_day = False
-
-    if isinstance(fee_resp, dict):
-        coupon_applied = bool(fee_resp.get("couponApplied"))
-        coupon_discount = float(fee_resp.get("breakdown", {}).get("couponDiscount", 0))
-        coupon_code = fee_resp.get("couponCode", None)
-
-
-    if coupon_applied and coupon_code:
-        try:
-            pk = f"COUPON#{coupon_code}"
-            response = dynamodb_client.query(
-                TableName=TABLES["CONFIG"],
-                KeyConditionExpression="partitionkey = :pk",
-                ExpressionAttributeValues={":pk": {"S": pk}},
-                Limit=1,
-            )
-            coupon_item = (response.get("Items") or [None])[0]
-            if coupon_item:
-                issued_by = _normalize_coupon_issuer(coupon_item.get("issuedBy", {}).get("S"))
-                is_once_per_user = coupon_item.get("isOncePerUser", {}).get("BOOL", False)
-                is_once_per_day = coupon_item.get("isOncePerDay", {}).get("BOOL", False)
-        except Exception as e:
-            logger.warning(f"Failed to look up coupon {coupon_code}: {e}")
-
-
-    # Customer-side delivery-fee waiver (shown to the customer as a "discount").
-    # Tracked here for analytics; it is NOT what the platform actually pays out.
-    # The real platform outflow on delivery is captured by riderDeliverySubsidy
-    # below, which covers BOTH the free-delivery waiver and the rider/customer
-    # per-km rate gap in a single number.
-    delivery_fee_discount_raw = fee_dict.get("breakdown", {}).get("deliveryFeeDiscount", 0)
-    if delivery_fee_discount_raw and delivery_fee_discount_raw > 0:
-        platformRevenue["deliveryFeeDiscount"] = round(delivery_fee_discount_raw, 2)
-
-    # Rider delivery subsidy = (what we pay the rider) − (what the customer paid
-    # us for delivery). When > 0, the platform is funding the gap out of pocket;
-    # when 0, the customer fully covered the rider's earnings.
-    rider_settlement = _safe_float(fee_dict.get("riderSettlementAmount"))
-    customer_delivery_fee = _safe_float(fee_dict.get("deliveryFee"))
-    rider_delivery_subsidy = round(max(rider_settlement - customer_delivery_fee, 0.0), 2)
-    if rider_delivery_subsidy > 0:
-        total_platform_revenue = round(total_platform_revenue - rider_delivery_subsidy, 2)
-        platformRevenue["riderDeliverySubsidy"] = rider_delivery_subsidy
-
-    if coupon_applied and coupon_discount > 0:
-        if issued_by == "YUMDUDE":
-            total_platform_revenue = round(total_platform_revenue - coupon_discount, 2)
-            platformRevenue["couponDiscount"] = coupon_discount
-        elif issued_by == "RESTAURANT":
-            restaurant_settlement = round(restaurant_settlement - coupon_discount, 2)
-            restaurantRevenue["couponDiscount"] = coupon_discount
-
-    if platform_item_coupon_discount > 0:
-        platformRevenue["itemCouponDiscount"] = round(platform_item_coupon_discount, 2)
-    if restaurant_item_coupon_discount > 0:
-        restaurantRevenue["itemCouponDiscount"] = round(restaurant_item_coupon_discount, 2)
-
-    restaurantRevenue["finalPayout"] = round(
-        restaurantRevenue.get("revenue", 0)
-        - restaurantRevenue.get("couponDiscount", 0)
-        - restaurantRevenue.get("itemCouponDiscount", 0),
-        2,
-    )
-    platformRevenue["finalPayout"] = round(
-        platformRevenue.get("foodCommission", 0)
-        + platformRevenue.get("platformFee", 0)
-        + platformRevenue.get("excessFromRestaurantRevenue", 0)
-        - platformRevenue.get("riderDeliverySubsidy", 0)
-        - platformRevenue.get("couponDiscount", 0)
-        - platformRevenue.get("itemCouponDiscount", 0)
-        - long_distance_bonus,
-        2,
-    )
-
-    riderRevenue = {
-        "finalPayout": round(rider_settlement + long_distance_bonus, 2),
-        "riderSettlementAmount": round(rider_settlement, 2),
-    }
-    if long_distance_bonus > 0:
-        riderRevenue["longDistanceBonus"] = long_distance_bonus
-
-    gst_data = fee_dict.get("gst", {})
-    gst_on_food = round(float(gst_data.get("gstOnFood", 0) or 0), 2)
-    gst_on_delivery = round(float(gst_data.get("gstOnDeliveryFee", 0) or 0), 2)
-    gst_on_platform = round(float(gst_data.get("gstOnPlatformFee", 0) or 0), 2)
-    total_gst = round(gst_on_food + gst_on_delivery + gst_on_platform, 2)
-
-    revenue = {
-        "totalCustomerPaid": round(total_customer_paid, 2),
-        "customerPaidFoodValue": round(total_customer_paid, 2),
-        "grossFoodValue": round(gross_food_value, 2),
-        "totalAddOnValue": round(total_add_on_value, 2),
-        "itemCouponDiscountTotal": round(total_item_coupon_discount, 2),
-        "itemCouponDiscountByPlatform": round(platform_item_coupon_discount, 2),
-        "itemCouponDiscountByRestaurant": round(restaurant_item_coupon_discount, 2),
-        "totalDiscount": round(fee_dict.get("breakdown", {}).get("totalDiscount", 0), 2),
-        "couponCode": coupon_code,
-        "couponApplied": coupon_applied,
-        "couponIssuedBy": issued_by,
-        "couponIsOncePerUser": is_once_per_user,
-        "couponIsOncePerDay": is_once_per_day,
-        "restaurantRevenue": restaurantRevenue,
-        "platformRevenue": platformRevenue,
-        "riderRevenue": riderRevenue,
-        "govtRevenue": {
-            "gstOnFood": gst_on_food,
-            "gstOnDeliveryFee": gst_on_delivery,
-            "gstOnPlatformFee": gst_on_platform,
-            "finalPayout": total_gst,
-        },
-    }
-    return revenue, enriched_items
-
-
-def _extract_coupon_from_order(order) -> str | None:
-    """Try to find coupon code stored alongside the order (from calculatedFeeResponse or items metadata)."""
-    if order.calculated_fee_response and isinstance(order.calculated_fee_response, dict):
-        code = order.calculated_fee_response.get("couponCode")
-        if code:
-            return code
-    return None
 
 
 def lambda_handler(event: dict, context: LambdaContext) -> dict:
@@ -414,12 +53,27 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                 logger.info(f"[orderId={order_id}] Revenue already present, skipping")
                 continue
 
-            revenue, items_with_commission = _compute_revenue(order)
+            revenue, items_with_commission = compute_revenue(order)
             logger.info(f"[orderId={order_id}] Revenue computed: {json.dumps(revenue)}")
+
+            # Stamp the originalGrandTotal / prepaidAmount snapshot at first
+            # CONFIRMED so the ops adjustment endpoint can always compute
+            # `delta = newGrandTotal - originalGrandTotal` deterministically.
+            pm = (order.payment_method or "").upper()
+            pc = (order.payment_channel or "").upper()
+            is_cod = pm == "COD" or pc in ("COD_AT_DELIVERY", "UPI_QR_AT_RIDER")
+            prepaid_amount = 0.0 if is_cod else float(order.grand_total or 0)
+            amount_due = float(order.grand_total or 0) - prepaid_amount
 
             OrderService.update_order(
                 order_id,
-                {"revenue": revenue, "items": items_with_commission},
+                {
+                    "revenue": revenue,
+                    "items": items_with_commission,
+                    "originalGrandTotal": float(order.grand_total or 0),
+                    "prepaidAmount": prepaid_amount,
+                    "amountDueAtDelivery": amount_due,
+                },
             )
             logger.info(f"[orderId={order_id}] Revenue written to order")
 

@@ -156,43 +156,24 @@ class OrderAssignmentService:
             return None
 
         try:
-            # If everyone has rejected, direct-assign to best-scoring from available_riders
+            # If every nearby rider has already rejected this order, do NOT
+            # force-assign to one of them. Force-assignment was creating bad
+            # rider UX (they get an order they explicitly declined) and bad
+            # customer UX (the "assigned" rider just sat on it). Instead, park
+            # the order in AWAITING_RIDER_ASSIGNMENT and let the SQS retry
+            # consumer try again — new riders may come online, or in-flight
+            # riders may free up. After MAX_ASSIGNMENT_ATTEMPTS the consumer
+            # fires an SNS alert for manual ops intervention.
             if not filtered_riders and available_riders:
-                ranked = _rank_riders(available_riders)
-                nearest_rider, distance, score = ranked[0]
-                logger.info(f"[orderId={order_id}] All riders rejected; direct assign to {nearest_rider.rider_id} (score={score:.3f}, dist={distance:.2f}km)")
-
-                OrderService.update_order(order_id, {
-                    'riderId': nearest_rider.rider_id,
-                    'riderName': f"{nearest_rider.first_name or ''} {nearest_rider.last_name or ''}".strip() or None,
-                    'riderAssignedAt': now_ist_iso(),
-                    'status': Order.RIDER_ASSIGNED,
-                    'riderCurrentLat': nearest_rider.lat,
-                    'riderCurrentLng': nearest_rider.lng,
-                    'riderSpeed': nearest_rider.speed,
-                    'riderHeading': nearest_rider.heading,
-                    'riderLocationUpdatedAt': datetime.utcnow().isoformat()
-                })
-
-                RiderService.set_working_on_order(nearest_rider.rider_id, order_id)
-                RiderService.increment_assignment_count(nearest_rider.rider_id)
-
-                try:
-                    order = OrderService.get_order(order_id)
-                    if order:
-                        NotificationService.send_order_assigned_notification(
-                            rider_mobile=nearest_rider.phone,
-                            order_id=order_id,
-                            restaurant_name=order.restaurant_name or "Restaurant",
-                            delivery_fee=order.delivery_fee,
-                            notification_status=NotificationService.RIDER_NOTIFY_ASSIGNED,
-                        )
-                        logger.info(f"[orderId={order_id}] Direct assignment notification sent to rider {nearest_rider.phone}")
-                except Exception as e:
-                    logger.error(f"Failed to send notification to rider: {str(e)}")
-
-                logger.info(f"[orderId={order_id}] Assigned directly to rider {nearest_rider.rider_id}")
-                return nearest_rider.rider_id
+                logger.info(
+                    f"[orderId={order_id}] All {len(available_riders)} nearby riders have "
+                    f"rejected this order; parking in AWAITING_RIDER_ASSIGNMENT for retry "
+                    f"instead of force-assigning"
+                )
+                OrderAssignmentService._mark_order_awaiting_rider_assignment(
+                    order_id, restaurant_lat, restaurant_lng
+                )
+                return None
 
             # Score filtered riders and pick the best
             ranked = _rank_riders(filtered_riders)

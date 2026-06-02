@@ -33,6 +33,48 @@ class RestaurantEarningsService:
             raise Exception(f"Failed to add restaurant earning: {str(e)}")
 
     @staticmethod
+    def add_item_adjustment(
+        restaurant_id: str,
+        order_id: str,
+        adjustment_id: str,
+        delta_amount: float,
+    ):
+        """Add a signed restaurant earnings row for an ops item-adjustment.
+
+        `delta_amount` is `newRestaurantPayout - oldRestaurantPayout`:
+          - negative when items were removed / replaced with cheaper ones (restaurant earns less)
+          - positive when replacement items are more expensive (restaurant earns more)
+
+        Row key is `YYYY-MM-DD#orderId#ADJUSTMENT#adjustmentId` so multiple
+        adjustments on the same order can co-exist without overwriting each
+        other, and a retry of the same adjustment is idempotent via the
+        attribute_not_exists ConditionExpression.
+        """
+        try:
+            date_prefix = datetime.utcnow().strftime('%Y-%m-%d')
+            earnings = RestaurantEarnings(
+                restaurant_id=restaurant_id,
+                date=f"{date_prefix}#{order_id}#ADJUSTMENT#{adjustment_id}",
+                total_orders=0,
+                total_earnings=float(delta_amount),
+                order_id=order_id,
+                settled=False,
+                settled_at=None,
+                settlement_id=None
+            )
+
+            dynamodb_client.put_item(
+                TableName=TABLES['RESTAURANT_EARNINGS'],
+                Item=earnings.to_dynamodb_item(),
+                ConditionExpression='attribute_not_exists(restaurantId) AND attribute_not_exists(#date)',
+                ExpressionAttributeNames={'#date': 'date'}
+            )
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                return
+            raise Exception(f"Failed to add restaurant item adjustment: {str(e)}")
+
+    @staticmethod
     def add_refund_adjustment(
         restaurant_id: str,
         order_id: str,

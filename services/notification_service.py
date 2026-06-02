@@ -490,6 +490,85 @@ class NotificationService:
         return bool(result.get("success"))
 
     @staticmethod
+    def send_order_adjusted_notification(
+        fcm_token: str,
+        order_id: str,
+        restaurant_name: str,
+        delta: float,
+        new_grand_total: float,
+        amount_due_at_delivery: float,
+        settlement_type: str,
+        audience: str,
+    ) -> bool:
+        """Notify customer or rider that ops adjusted items on an in-flight order.
+
+        Args:
+            fcm_token: recipient device FCM token
+            order_id: order id (always included in the data payload so the
+                receiving app can re-fetch the order)
+            restaurant_name: display name of the restaurant
+            delta: newGrandTotal - originalGrandTotal (signed; positive when
+                customer owes more, negative on a refund)
+            new_grand_total: recomputed order total after adjustment
+            amount_due_at_delivery: rupees the rider should collect at delivery
+                (0 for a downward prepaid refund; full new total for COD)
+            settlement_type: one of "COD_IN_PLACE" | "COD_TOPUP" | "REFUND_ADJUSTMENT"
+            audience: "CUSTOMER" or "RIDER" — controls copy only
+
+        The rider app keys off `type=order_adjusted` to re-fetch the order
+        before reaching the customer; the customer app uses the same payload
+        to refresh the order details screen and show the new amount.
+        """
+        try:
+            audience_norm = (audience or "").upper()
+            sign = "+" if delta > 0 else ("-" if delta < 0 else "")
+            amount_abs = abs(round(delta, 2))
+
+            if audience_norm == "RIDER":
+                if settlement_type == "COD_TOPUP":
+                    title = "Order updated — collect extra at delivery"
+                    body = f"{restaurant_name}: collect ₹{amount_due_at_delivery:.0f} (incl. ₹{amount_abs:.0f} top-up)."
+                elif settlement_type == "COD_IN_PLACE":
+                    title = "Order updated — new amount to collect"
+                    body = f"{restaurant_name}: now ₹{amount_due_at_delivery:.0f} at delivery."
+                else:
+                    title = "Order updated"
+                    body = f"{restaurant_name}: items changed. Refund will be handled by ops."
+            else:
+                if delta > 0:
+                    title = "Order updated — extra to pay at delivery"
+                    body = f"{restaurant_name} updated your order (+₹{amount_abs:.0f}). Pay the new total of ₹{new_grand_total:.0f} at delivery."
+                elif delta < 0:
+                    title = "Order updated — refund on the way"
+                    body = f"{restaurant_name} updated your order (-₹{amount_abs:.0f}). We will refund ₹{amount_abs:.0f}."
+                else:
+                    title = "Order updated"
+                    body = f"{restaurant_name} updated items on your order."
+
+            data = {
+                "type": "order_adjusted",
+                "orderId": order_id,
+                "restaurantName": restaurant_name,
+                "delta": str(round(delta, 2)),
+                "deltaSign": sign,
+                "newGrandTotal": str(round(new_grand_total, 2)),
+                "amountDueAtDelivery": str(round(amount_due_at_delivery, 2)),
+                "settlementType": settlement_type or "",
+                "audience": audience_norm,
+                "title": title,
+                "body": body,
+            }
+            return NotificationService.send_via_firebase(
+                fcm_token=fcm_token,
+                title=title,
+                body=body,
+                data=data,
+            )
+        except Exception as e:
+            logger.error(f"Error sending order_adjusted notification: {str(e)}", exc_info=True)
+            return False
+
+    @staticmethod
     def validate_registration_token(fcm_token: str) -> dict:
         """
         Validate an FCM registration token against the configured Firebase project.

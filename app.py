@@ -9,6 +9,7 @@ from aws_lambda_powertools.event_handler import APIGatewayRestResolver, CORSConf
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.middleware_factory import lambda_handler_decorator
 from middleware.jwt_auth import verify_token
+from middleware.api_key_auth import APIKeyAuth
 from utils.ssm import get_secret
 
 # Import route handlers
@@ -32,6 +33,7 @@ from routes.config_routes import register_config_routes
 from routes.food_category_routes import register_food_category_routes
 from routes.restaurant_earnings_routes import register_restaurant_earnings_routes
 from routes.analytics_routes import register_analytics_routes
+from routes.ops_routes import register_ops_routes
 
 # Initialize AWS Lambda Power Tools
 logger = Logger(service="rork-honesteats-api")
@@ -87,6 +89,13 @@ GUEST_PUBLIC_POST_SUFFIXES = [
     "/earnings/settlement/confirm",
 ]
 
+# Routes under these prefixes are gated by the ADMIN_API_KEY (validated via
+# the X-Api-Key header) instead of a customer/rider JWT. Used for internal
+# admin tooling like Retool — never called by customer or restaurant apps.
+ADMIN_API_KEY_PREFIXES = [
+    "/api/v1/ops",
+]
+
 # Retool bypass header and secret value.
 # Rotate by setting RETOOL_BYPASS_VALUE in Lambda environment.
 AUTH_BYPASS_HEADER = "x-retool-header"
@@ -124,6 +133,7 @@ register_config_routes(app)
 register_food_category_routes(app)
 register_restaurant_earnings_routes(app)
 register_analytics_routes(app)
+register_ops_routes(app)
 
 
 @app.get("/health")
@@ -187,7 +197,32 @@ def auth_middleware(handler, event, context):
     if bypass_value and bypass_value == AUTH_BYPASS_VALUE:
         logger.info(f"Auth bypassed via retool header for {method} {path}")
         return handler(event, context)
-    
+
+    # Admin-only ops routes: gated by ADMIN_API_KEY (X-Api-Key header) instead
+    # of customer/rider JWT. Reject if no admin key is present.
+    is_admin_route = any(
+        path == p or path.startswith(p + '/') for p in ADMIN_API_KEY_PREFIXES
+    )
+    if is_admin_route:
+        api_key = (
+            headers.get('X-Api-Key')
+            or headers.get('x-api-key')
+            or headers.get('X-API-KEY')
+        )
+        if APIKeyAuth.get_api_key_type(api_key) != 'admin':
+            logger.warning(f"Admin route rejected (missing/invalid admin key): {method} {path}")
+            return {
+                'statusCode': 401,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Api-Key',
+                },
+                'body': '{"error": "Unauthorized", "message": "Admin API key required"}'
+            }
+        logger.info(f"Admin route authorized via ADMIN_API_KEY for {method} {path}")
+        return handler(event, context)
+
     if not is_public:
         # Get Authorization header
         auth_header = headers.get('authorization') or headers.get('Authorization')

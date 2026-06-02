@@ -1,7 +1,12 @@
 """Restaurant routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.restaurant_service import RestaurantService
+from services.order_service import OrderService
 from services.notification_service import NotificationService
+from services.order_adjustment_service import (
+    OrderAdjustmentService,
+    OrderAdjustmentError,
+)
 from models.restaurant import Restaurant
 from utils.dynamodb import generate_id, dynamodb_client, TABLES
 from utils.geohash import encode as geohash_encode
@@ -516,7 +521,74 @@ def register_restaurant_routes(app):
         except Exception as e:
             logger.error("Error fetching restaurant FCM token status", exc_info=True)
             return {"error": "Failed to fetch FCM token status", "message": str(e)}, 500
-    
+
+    @app.post("/api/v1/restaurants/<restaurant_id>/orders/<order_id>/adjust-items")
+    @tracer.capture_method
+    def restaurant_adjust_order_items(restaurant_id: str, order_id: str):
+        """Restaurant app: swap/remove/add items on an in-flight order (same logic as ops).
+
+        Auth: restaurant login JWT (Bearer). Token restaurantId must match URL and order.
+
+        Body:
+          - removeItemIds: list of itemIds to remove
+          - addItems: list of {itemId, quantity, addOnTotal?, addOns?}
+          - reason: required audit note
+          - opsUser: optional; defaults to restaurant login identity
+        """
+        try:
+            payload, auth_error = _authorize_restaurant_token(restaurant_id)
+            if auth_error:
+                return auth_error
+
+            body = app.current_event.json_body or {}
+            remove_item_ids = body.get("removeItemIds") or []
+            add_items = body.get("addItems") or []
+            reason = body.get("reason") or ""
+            ops_user = (
+                str(body.get("opsUser") or "").strip()
+                or str(payload.get("phone") or "").strip()
+                or f"restaurant:{restaurant_id}"
+            )
+
+            order = OrderService.get_order(order_id)
+            if not order:
+                return {"error": "Order not found"}, 404
+            if order.restaurant_id != restaurant_id:
+                return {
+                    "error": "Forbidden",
+                    "message": "Order does not belong to this restaurant",
+                }, 403
+
+            logger.info(
+                f"[orderId={order_id}] Restaurant adjust-items request "
+                f"restaurantId={restaurant_id} opsUser={ops_user} "
+                f"remove={remove_item_ids} addCount={len(add_items)} "
+                f"reason='{str(reason)[:60]}'"
+            )
+
+            result = OrderAdjustmentService.adjust_items(
+                order_id=order_id,
+                remove_item_ids=remove_item_ids,
+                add_items=add_items,
+                reason=reason,
+                ops_user=ops_user,
+            )
+
+            metrics.add_metric(name="RestaurantOrderAdjusted", unit="Count", value=1)
+            return result, 200
+        except OrderAdjustmentError as e:
+            logger.warning(
+                f"[orderId={order_id}] Restaurant adjust-items rejected: "
+                f"code={e.code} msg={e.message}"
+            )
+            metrics.add_metric(name="RestaurantOrderAdjustRejected", unit="Count", value=1)
+            return {"error": e.code, "message": e.message}, e.http_status
+        except Exception as e:
+            logger.error(
+                f"[orderId={order_id}] Restaurant adjust-items failed", exc_info=True
+            )
+            return {"error": "AdjustItemsFailed", "message": str(e)}, 500
+
     @app.put("/api/v1/restaurants/<restaurant_id>")
     @tracer.capture_method
     def update_restaurant(restaurant_id: str):

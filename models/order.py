@@ -2,6 +2,7 @@
 import time
 from typing import List, Optional, Dict, Any, Union
 from utils.datetime_ist import now_ist_iso, epoch_ms_to_ist_iso
+from utils.dynamodb_helpers import dynamodb_to_python, python_to_dynamodb
 
 
 class Order:
@@ -113,7 +114,13 @@ class Order:
         # Theater / pickup mode
         order_type: str = ORDER_TYPE_DELIVERY,
         pickup_token: Optional[str] = None,
-        inventory_reverted: bool = False
+        inventory_reverted: bool = False,
+        # Ops-initiated item adjustments (see services/order_adjustment_service.py)
+        original_grand_total: Optional[float] = None,
+        prepaid_amount: Optional[float] = None,
+        amount_due_at_delivery: Optional[float] = None,
+        adjustments: Optional[List[Dict[str, Any]]] = None,
+        was_adjusted: bool = False,
     ):
         self.order_id = order_id
         self.customer_phone = customer_phone
@@ -165,6 +172,12 @@ class Order:
         self.order_type = order_type if order_type in (self.ORDER_TYPE_DELIVERY, self.ORDER_TYPE_PICKUP) else self.ORDER_TYPE_DELIVERY
         self.pickup_token = pickup_token
         self.inventory_reverted = bool(inventory_reverted)
+        # Ops adjustments
+        self.original_grand_total = float(original_grand_total) if original_grand_total is not None else None
+        self.prepaid_amount = float(prepaid_amount) if prepaid_amount is not None else None
+        self.amount_due_at_delivery = float(amount_due_at_delivery) if amount_due_at_delivery is not None else None
+        self.adjustments = adjustments or []
+        self.was_adjusted = bool(was_adjusted)
         # Store as IST ISO string; support int (legacy) for backward compatibility
         self.created_at = created_at if created_at is not None else now_ist_iso()
 
@@ -263,7 +276,34 @@ class Order:
             result["pickupToken"] = self.pickup_token
         if self.inventory_reverted:
             result["inventoryReverted"] = True
+        # Ops adjustments — always include amountDueAtDelivery so client apps
+        # (especially the rider app) can drive collection UI from a single
+        # canonical field regardless of whether an adjustment ever happened.
+        if self.original_grand_total is not None:
+            result["originalGrandTotal"] = self.original_grand_total
+        if self.prepaid_amount is not None:
+            result["prepaidAmount"] = self.prepaid_amount
+        # Default the field even when unset so rider/customer apps don't have
+        # to special-case missing values. COD orders => grandTotal; prepaid => 0.
+        if self.amount_due_at_delivery is not None:
+            result["amountDueAtDelivery"] = self.amount_due_at_delivery
+        else:
+            result["amountDueAtDelivery"] = self._infer_amount_due_at_delivery()
+        if self.adjustments:
+            result["adjustments"] = self.adjustments
+        if self.was_adjusted:
+            result["wasAdjusted"] = True
         return result
+
+    def _infer_amount_due_at_delivery(self) -> float:
+        """Fallback used when amountDueAtDelivery hasn't been explicitly stamped
+        on the order (legacy rows or pre-adjustment state). COD orders owe the
+        full grandTotal at delivery; prepaid orders owe nothing."""
+        pm = (self.payment_method or "").upper()
+        pc = (self.payment_channel or "").upper()
+        if pm == "COD" or pc in ("COD_AT_DELIVERY", "UPI_QR_AT_RIDER"):
+            return float(self.grand_total or 0)
+        return 0.0
     
     @classmethod
     def from_dynamodb_item(cls, item: dict) -> "Order":
@@ -341,6 +381,12 @@ class Order:
             order_type=item.get("orderType", {}).get("S", cls.ORDER_TYPE_DELIVERY) if "orderType" in item else cls.ORDER_TYPE_DELIVERY,
             pickup_token=item.get("pickupToken", {}).get("S") if "pickupToken" in item else None,
             inventory_reverted=bool(item.get("inventoryReverted", {}).get("BOOL", False)) if "inventoryReverted" in item else False,
+            # Ops adjustments
+            original_grand_total=float(item["originalGrandTotal"]["N"]) if "originalGrandTotal" in item and "N" in item["originalGrandTotal"] else None,
+            prepaid_amount=float(item["prepaidAmount"]["N"]) if "prepaidAmount" in item and "N" in item["prepaidAmount"] else None,
+            amount_due_at_delivery=float(item["amountDueAtDelivery"]["N"]) if "amountDueAtDelivery" in item and "N" in item["amountDueAtDelivery"] else None,
+            adjustments=dynamodb_to_python(item["adjustments"]) if "adjustments" in item and "L" in item["adjustments"] else [],
+            was_adjusted=bool(item.get("wasAdjusted", {}).get("BOOL", False)) if "wasAdjusted" in item else False,
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -443,4 +489,15 @@ class Order:
             item["pickupToken"] = {"S": self.pickup_token}
         if self.inventory_reverted:
             item["inventoryReverted"] = {"BOOL": True}
+        # Ops adjustments — persist only when explicitly set so old rows don't churn.
+        if self.original_grand_total is not None:
+            item["originalGrandTotal"] = {"N": str(self.original_grand_total)}
+        if self.prepaid_amount is not None:
+            item["prepaidAmount"] = {"N": str(self.prepaid_amount)}
+        if self.amount_due_at_delivery is not None:
+            item["amountDueAtDelivery"] = {"N": str(self.amount_due_at_delivery)}
+        if self.adjustments:
+            item["adjustments"] = python_to_dynamodb(self.adjustments)
+        if self.was_adjusted:
+            item["wasAdjusted"] = {"BOOL": True}
         return item

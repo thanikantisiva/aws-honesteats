@@ -392,6 +392,11 @@ Resources:
             Path: /api/v1/riders/list
             Method: GET
             RestApiId: !Ref RorkHonestEatsApi
+        # Ops routes (admin-key gated) are served via the catch-all Proxy
+        # event below — we deliberately do NOT add explicit Api events for
+        # them because each explicit event creates an AWS::Lambda::Permission
+        # resource and the function's resource policy is already close to
+        # the 20KB Lambda hard limit.
         Proxy:
           Type: Api
           Properties:

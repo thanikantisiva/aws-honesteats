@@ -11,7 +11,10 @@ class Payment:
     STATUS_SUCCESS = "SUCCESS"
     STATUS_FAILED = "FAILED"
     STATUS_REFUNDED = "REFUNDED"
-    
+    # Ops-created downward adjustment row awaiting an out-of-band refund.
+    # Flips to STATUS_REFUNDED once ops confirms the refund via mark-refunded endpoint.
+    STATUS_ADJUSTMENT_PENDING_REFUND = "ADJUSTMENT_PENDING_REFUND"
+
     # Payment methods
     METHOD_UPI = "UPI"
     METHOD_CARD = "CARD"
@@ -22,6 +25,9 @@ class Payment:
     # `payment.fetch` API returns method="sodexo" for these; we uppercase
     # in the verify/webhook handlers so the persisted value matches.
     METHOD_SODEXO = "SODEXO"
+    # Tag for the synthetic delta row created when an originally-prepaid
+    # order is downward-adjusted by ops; not a real payment instrument.
+    METHOD_REFUND_ADJUSTMENT = "REFUND_ADJUSTMENT"
 
     # How checkout is completed: in-app Standard vs pay at delivery (cash or rider UPI QR)
     PAYMENT_CHANNEL_STANDARD = "STANDARD"
@@ -53,6 +59,8 @@ class Payment:
         razorpay_qr_code_id: Optional[str] = None,
         qr_image_url: Optional[str] = None,
         qr_close_by: Optional[int] = None,
+        parent_payment_id: Optional[str] = None,
+        adjustment_id: Optional[str] = None,
     ):
         self.payment_id = payment_id
         self.customer_phone = customer_phone
@@ -74,6 +82,8 @@ class Payment:
         self.razorpay_qr_code_id = razorpay_qr_code_id
         self.qr_image_url = qr_image_url
         self.qr_close_by = qr_close_by
+        self.parent_payment_id = parent_payment_id
+        self.adjustment_id = adjustment_id
         _now = now_ist_iso()
         self.created_at = created_at if created_at is not None else _now
         self.updated_at = updated_at if updated_at is not None else self.created_at
@@ -102,6 +112,8 @@ class Payment:
             'razorpayQrCodeId': self.razorpay_qr_code_id,
             'qrImageUrl': self.qr_image_url,
             'qrCloseBy': self.qr_close_by,
+            'parentPaymentId': self.parent_payment_id,
+            'adjustmentId': self.adjustment_id,
         }
     
     def to_dynamodb_item(self) -> dict:
@@ -165,6 +177,10 @@ class Payment:
             item['qrImageUrl'] = {'S': self.qr_image_url}
         if self.qr_close_by is not None:
             item['qrCloseBy'] = {'N': str(int(self.qr_close_by))}
+        if self.parent_payment_id:
+            item['parentPaymentId'] = {'S': self.parent_payment_id}
+        if self.adjustment_id:
+            item['adjustmentId'] = {'S': self.adjustment_id}
 
         return item
     
@@ -210,4 +226,6 @@ class Payment:
             razorpay_qr_code_id=item.get('razorpayQrCodeId', {}).get('S'),
             qr_image_url=item.get('qrImageUrl', {}).get('S'),
             qr_close_by=int(float(item['qrCloseBy']['N'])) if 'qrCloseBy' in item and 'N' in item['qrCloseBy'] else None,
+            parent_payment_id=item.get('parentPaymentId', {}).get('S'),
+            adjustment_id=item.get('adjustmentId', {}).get('S'),
         )
