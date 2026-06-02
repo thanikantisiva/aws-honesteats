@@ -173,7 +173,11 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                     skipped_invalid_format += 1
 
             if not fcm_tokens:
-                logger.info(
+                # WARNING-level: a confirmed order arrived but no device can be
+                # notified. Actionable operational signal — must survive log
+                # level cuts so we can still spot silently-broken restaurants
+                # in CloudWatch.
+                logger.warning(
                     f"[orderId={order_id}] No valid mobile FCM token registered for restaurant {restaurant_id} "
                     f"(skippedInvalidFormat={skipped_invalid_format})"
                 )
