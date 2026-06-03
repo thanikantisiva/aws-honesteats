@@ -427,6 +427,7 @@ class NotificationService:
             order_tail = (order_id or "").strip()[-4:] or "----"
             title_text = f"Rs.{amount:.0f} New Order"
             body_text = f"{item_label} | #{order_tail}"
+            channel_id = "new_orders_critical"
             data = {
                 "type": "restaurant_new_order",
                 "orderId": order_id,
@@ -438,21 +439,36 @@ class NotificationService:
                 "orderTail": order_tail,
                 "status": "CONFIRMED",
                 "createdAt": created_at or now_ist_iso(),
-                "channelId": "new_orders",
+                "channelId": channel_id,
                 "title": title_text,
                 "body": body_text
             }
 
-            # Data-only high priority lets the native Android receiver run even
-            # when the Capacitor WebView is backgrounded/killed. The app's
-            # OrderPollingService owns fetching confirmed orders and ringing.
+            # Notification block alongside data: Play Services renders the
+            # high-importance system notification (with sound) even when the
+            # app process is dead or stopped by an OEM task killer, removing
+            # the dependency on the foreground OrderPollingService being alive
+            # for the ring path. Data block is preserved so the in-app handler
+            # can still refresh the orders list and launch OrderAlarmActivity
+            # when the process is alive.
             message = messaging.Message(
                 token=fcm_token,
                 data=data,
+                notification=messaging.Notification(title=title_text, body=body_text),
                 android=messaging.AndroidConfig(
                     priority="high",
-                    ttl=timedelta(seconds=300),
-                    collapse_key=order_id
+                    ttl=timedelta(seconds=900),
+                    collapse_key=order_id,
+                    notification=messaging.AndroidNotification(
+                        title=title_text,
+                        body=body_text,
+                        channel_id=channel_id,
+                        sound="telephone_ring",
+                        icon="ic_launcher",
+                        priority="max",
+                        visibility="public",
+                        default_vibrate_timings=True
+                    )
                 )
             )
 

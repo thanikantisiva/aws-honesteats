@@ -2,17 +2,25 @@
 
 Single entry point: `OrderAdjustmentService.adjust_items(...)`.
 
-API shape (diff, not canonical):
-  - `remove_item_ids`: list of `itemId`s to take OFF the order. They must
-    already be on the order.
-  - `add_items`: list of `{itemId, quantity, ...}` to PUT on the order.
-    They must NOT already be on the order (use remove+add to change quantity).
+API shape (canonical, not diff):
+  - `items`: the desired FINAL list of items on the order after the
+    adjustment, each as `{itemId, quantity, ...}`. Internally we diff this
+    against the order's current items to figure out what was removed, what
+    was added, and what changed quantity. Each itemId must appear at most
+    once; quantity must be > 0. To remove an item, simply leave it out of
+    the list.
+
+Example: order has 1x2, 2x3, 3x5. Customer swaps 1x1 for 4x1.
+  -> input items = [1x1, 2x3, 3x5, 4x1]
 
 Flow:
   1. Load + validate order (must be in a status that allows adjustment).
-  2. Apply the diff (remove ids, append enriched additions) — kept items
-     retain their original price snapshot; only the newly added items are
-     re-enriched against `MenuService` for authoritative pricing.
+  2. Diff current items vs requested:
+       - Same itemId on both sides         → keep original price snapshot
+         (only update `quantity` if it changed)
+       - Requested but not currently on    → re-enrich from `MenuService`
+         for authoritative pricing
+       - On the order but not requested    → dropped
   3. Recompute foodTotal, grandTotal and revenue using `services.revenue_service`.
   4. Settle the delta on Payments:
        - original COD             → update the existing Payment.amount in place
@@ -79,23 +87,48 @@ class OrderAdjustmentService:
     @staticmethod
     def adjust_items(
         order_id: str,
-        remove_item_ids: List[str],
-        add_items: List[Dict[str, Any]],
+        items: List[Dict[str, Any]],
         reason: str,
         ops_user: str,
     ) -> Dict[str, Any]:
-        """Apply an ops adjustment (diff-style). See module docstring for the full flow."""
-        remove_item_ids = [str(i) for i in (remove_item_ids or []) if i]
-        add_items = list(add_items or [])
-        if not remove_item_ids and not add_items:
+        """Apply an ops adjustment (canonical-list style).
+
+        `items` is the FINAL desired state of the order's items after the
+        adjustment. See the module docstring for the full flow.
+        """
+        items = list(items or [])
+        if not items:
             raise OrderAdjustmentError(
-                "EMPTY_DIFF",
-                "Provide at least one of removeItemIds or addItems",
+                "EMPTY_ITEMS",
+                "items list is required and must contain at least one entry",
             )
         if not reason or not str(reason).strip():
             raise OrderAdjustmentError("MISSING_REASON", "reason is required")
         if not ops_user or not str(ops_user).strip():
             raise OrderAdjustmentError("MISSING_OPS_USER", "opsUser is required")
+
+        # Validate every incoming row + reject duplicate itemIds. The caller
+        # is expected to consolidate duplicate lines (sum quantities) before
+        # calling us; we don't guess intent here.
+        seen_ids: set = set()
+        for raw in items:
+            iid = str(raw.get("itemId") or "").strip()
+            if not iid:
+                raise OrderAdjustmentError("ITEM_ID_REQUIRED", "Every item must have an itemId")
+            if iid in seen_ids:
+                raise OrderAdjustmentError(
+                    "DUPLICATE_ITEM_ID",
+                    f"Item {iid} appears multiple times in items; consolidate into a single entry with summed quantity",
+                )
+            seen_ids.add(iid)
+            try:
+                q = int(raw.get("quantity") or 0)
+            except (TypeError, ValueError):
+                q = 0
+            if q <= 0:
+                raise OrderAdjustmentError(
+                    "INVALID_QUANTITY", f"Quantity for {iid} must be > 0 (use exclusion to remove)"
+                )
 
         order = OrderService.get_order(order_id)
         if not order:
@@ -126,65 +159,83 @@ class OrderAdjustmentService:
             else OrderAdjustmentService._infer_prepaid_amount(order)
         )
 
-        # 1) Validate the diff against the current order.
-        current_items: List[Dict[str, Any]] = list(order.items or [])
-        current_ids_on_order = {
-            str(it.get("itemId") or it.get("item_id") or "")
-            for it in current_items
-            if it.get("itemId") or it.get("item_id")
-        }
+        # 1) Diff requested canonical list against the current order. We never
+        # re-price something the customer already accepted: existing lines
+        # keep their snapshot (only quantity may move). Genuinely-new lines
+        # are enriched fresh against MenuService for authoritative pricing.
+        current_items_list: List[Dict[str, Any]] = list(order.items or [])
+        current_by_id: Dict[str, Dict[str, Any]] = {}
+        for it in current_items_list:
+            iid = str(it.get("itemId") or it.get("item_id") or "").strip()
+            if iid:
+                current_by_id[iid] = it
 
-        unknown_removes = [iid for iid in remove_item_ids if iid not in current_ids_on_order]
-        if unknown_removes:
+        requested_id_set = set(str(r.get("itemId") or "").strip() for r in items)
+        current_id_set = set(current_by_id.keys())
+
+        removed_item_ids: List[str] = sorted(current_id_set - requested_id_set)
+        added_item_ids: List[str] = []
+        quantity_changes: List[Dict[str, Any]] = []
+
+        new_items_to_enrich: List[Dict[str, Any]] = []
+        merged_slots: List[Optional[Dict[str, Any]]] = []
+
+        for raw in items:
+            iid = str(raw.get("itemId") or "").strip()
+            new_qty = int(raw.get("quantity") or 1)
+            existing = current_by_id.get(iid)
+            if existing:
+                old_qty = int(existing.get("quantity") or 1)
+                if old_qty != new_qty:
+                    snapshot = dict(existing)
+                    snapshot["quantity"] = new_qty
+                    merged_slots.append(snapshot)
+                    quantity_changes.append(
+                        {"itemId": iid, "oldQuantity": old_qty, "newQuantity": new_qty}
+                    )
+                else:
+                    merged_slots.append(dict(existing))
+            else:
+                merged_slots.append(None)  # placeholder filled after enrichment
+                new_items_to_enrich.append(raw)
+                added_item_ids.append(iid)
+
+        # No-op guard: if nothing was removed, added, or quantity-changed, the
+        # caller submitted the current state verbatim. Reject so we don't
+        # mint an empty audit row + zero-delta settlement.
+        if not removed_item_ids and not added_item_ids and not quantity_changes:
             raise OrderAdjustmentError(
-                "REMOVE_ITEM_NOT_ON_ORDER",
-                f"Cannot remove items not on this order: {unknown_removes}",
+                "NO_CHANGE",
+                "items list is identical to the current order; nothing to adjust",
             )
 
-        # After removal, anything still on the order that matches an add
-        # itemId would be ambiguous (increase qty? second line?). Reject.
-        remove_set = set(remove_item_ids)
-        kept_items = [
-            it for it in current_items
-            if str(it.get("itemId") or it.get("item_id") or "") not in remove_set
-        ]
-        kept_ids = {
-            str(it.get("itemId") or it.get("item_id") or "")
-            for it in kept_items
-        }
-        duplicate_adds = [
-            str(ai.get("itemId") or "")
-            for ai in add_items
-            if str(ai.get("itemId") or "") in kept_ids
-        ]
-        if duplicate_adds:
-            raise OrderAdjustmentError(
-                "ADD_ITEM_ALREADY_ON_ORDER",
-                (
-                    f"Items already on the order: {duplicate_adds}. To change "
-                    f"quantity, remove the existing line and re-add it."
-                ),
-            )
-
-        # 2) Enrich only the newly added items (kept items keep their original
-        # price snapshot — we don't re-price what the customer already accepted).
-        added_enriched, added_food_total = OrderAdjustmentService._enrich_items(
-            order.restaurant_id, add_items, order.order_type
+        enriched_new_items, _ = OrderAdjustmentService._enrich_items(
+            order.restaurant_id, new_items_to_enrich, order.order_type
         )
+        enriched_by_id = {str(e["itemId"]): e for e in enriched_new_items}
 
-        merged_items = kept_items + added_enriched
+        merged_items: List[Dict[str, Any]] = []
+        for i, slot in enumerate(merged_slots):
+            if slot is not None:
+                merged_items.append(slot)
+            else:
+                iid = str(items[i].get("itemId") or "").strip()
+                merged_items.append(enriched_by_id[iid])
+
         if not merged_items:
             raise OrderAdjustmentError(
                 "ORDER_WOULD_BE_EMPTY",
                 "Adjustment would leave the order with zero items; cancel the order instead",
             )
 
-        kept_food_total = sum(
-            (float(it.get("price") or 0) + float(it.get("addOnTotal") or 0))
-            * int(it.get("quantity") or 1)
-            for it in kept_items
+        new_food_total = round(
+            sum(
+                (float(it.get("price") or 0) + float(it.get("addOnTotal") or 0))
+                * int(it.get("quantity") or 1)
+                for it in merged_items
+            ),
+            2,
         )
-        new_food_total = round(kept_food_total + added_food_total, 2)
 
         delivery_fee = float(order.delivery_fee or 0)
         platform_fee = float(order.platform_fee or 0)
@@ -213,9 +264,11 @@ class OrderAdjustmentService:
             "at": now_ist_iso(),
             "reason": reason,
             "opsUser": ops_user,
-            "removedItemIds": remove_item_ids,
-            "addedItems": added_enriched,
-            "oldItems": current_items,
+            "removedItemIds": removed_item_ids,
+            "addedItemIds": added_item_ids,
+            "addedItems": enriched_new_items,
+            "quantityChanges": quantity_changes,
+            "oldItems": current_items_list,
             "newItems": items_with_commission,
             "oldGrandTotal": original_grand_total,
             "newGrandTotal": new_grand_total,
@@ -242,7 +295,8 @@ class OrderAdjustmentService:
         OrderService.update_order(order_id, order_updates)
         logger.info(
             f"[orderId={order_id}] Ops adjustment {adjustment_id} applied: "
-            f"delta={delta} settlement={settlement_type} newGrandTotal={new_grand_total}"
+            f"delta={delta} settlement={settlement_type} newGrandTotal={new_grand_total} "
+            f"removed={removed_item_ids} added={added_item_ids} qtyChanges={len(quantity_changes)}"
         )
 
         if abs(restaurant_delta) > 0.005:
@@ -359,16 +413,18 @@ class OrderAdjustmentService:
             coupon_issued_by = pricing.get("couponIssuedBy")
             item_discount_amount = float(pricing.get("discountAmount", 0.0) or 0.0)
 
+            # Server-authoritative add-on resolution. Client only sends the
+            # selected optionIds; the menu owns the names + extra prices.
             try:
-                add_on_total = float(raw.get("addOnTotal", 0) or 0)
-            except (TypeError, ValueError):
-                add_on_total = 0.0
+                resolved_addons, add_on_total = menu_item.resolve_requested_addons(
+                    raw.get("addOns")
+                )
+            except ValueError as ve:
+                raise OrderAdjustmentError("INVALID_ADDON", str(ve))
 
             # MenuItem uses `item_name` (DynamoDB field itemName), not `name`.
-            item_display_name = (
-                str(raw.get("name") or raw.get("itemName") or menu_item.item_name or "")
-                .strip()
-            )
+            # Always use the menu's name so the line label can't be spoofed.
+            item_display_name = str(menu_item.item_name or "").strip()
             if not item_display_name:
                 raise OrderAdjustmentError(
                     "MENU_ITEM_NAME_MISSING",
@@ -386,7 +442,7 @@ class OrderAdjustmentService:
                 "itemOfferCouponCode": item_offer_coupon_code,
                 "couponIssuedBy": coupon_issued_by,
                 "itemDiscountAmount": item_discount_amount,
-                "addOns": raw.get("addOns", []),
+                "addOns": resolved_addons,
                 "addOnTotal": add_on_total,
             })
             food_total += (customer_price + add_on_total) * quantity

@@ -27,35 +27,36 @@ def register_ops_routes(app):
     @app.post("/api/v1/ops/orders/<order_id>/adjust-items")
     @tracer.capture_method
     def adjust_order_items(order_id: str):
-        """Apply a diff (remove + add) to items on an in-flight order, recompute
-        revenue, and post the payment-side adjustment (in-place for COD;
-        delta row for prepaid).
+        """Replace the items on an in-flight order with a canonical desired
+        final list, recompute revenue, and post the payment-side adjustment
+        (in-place for COD; delta row for prepaid).
 
         Body:
-          - removeItemIds: list of itemIds currently on the order to remove
-          - addItems: list of `{itemId, quantity, ...}` to add (re-priced from menu)
+          - items: FULL desired final list of items on the order, each
+            `{itemId, quantity, ...}`. To remove an item, omit it. To change
+            quantity, send the new quantity. itemIds must be unique within
+            the list and every quantity must be > 0.
           - reason: free-text justification (audit)
           - opsUser: identifier of the ops user (audit)
 
-        At least one of removeItemIds or addItems must be provided.
+        Example: order currently has 1x2, 2x3, 3x5. To swap 1 unit of item 1
+        for item 4, send items = [1x1, 2x3, 3x5, 4x1].
         """
         try:
             body = app.current_event.json_body or {}
-            remove_item_ids = body.get("removeItemIds") or []
-            add_items = body.get("addItems") or []
+            items = body.get("items") or []
             reason = body.get("reason") or ""
             ops_user = body.get("opsUser") or ""
 
             logger.info(
                 f"[orderId={order_id}] Ops adjust-items request "
-                f"opsUser={ops_user} remove={remove_item_ids} addCount={len(add_items)} "
-                f"reason='{reason[:60]}'"
+                f"opsUser={ops_user} itemCount={len(items)} "
+                f"reason='{str(reason)[:60]}'"
             )
 
             result = OrderAdjustmentService.adjust_items(
                 order_id=order_id,
-                remove_item_ids=remove_item_ids,
-                add_items=add_items,
+                items=items,
                 reason=reason,
                 ops_user=ops_user,
             )

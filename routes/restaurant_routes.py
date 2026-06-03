@@ -525,13 +525,16 @@ def register_restaurant_routes(app):
     @app.post("/api/v1/restaurants/<restaurant_id>/orders/<order_id>/adjust-items")
     @tracer.capture_method
     def restaurant_adjust_order_items(restaurant_id: str, order_id: str):
-        """Restaurant app: swap/remove/add items on an in-flight order (same logic as ops).
+        """Restaurant app: replace order items with a canonical desired final
+        list (same logic as ops). See `/api/v1/ops/orders/{orderId}/adjust-items`
+        for body semantics.
 
         Auth: restaurant login JWT (Bearer). Token restaurantId must match URL and order.
 
         Body:
-          - removeItemIds: list of itemIds to remove
-          - addItems: list of {itemId, quantity, addOnTotal?, addOns?}
+          - items: FULL desired final list of items, each
+            `{itemId, quantity, addOnTotal?, addOns?}`. Omitting an itemId
+            removes it; resending with a different quantity updates it.
           - reason: required audit note
           - opsUser: optional; defaults to restaurant login identity
         """
@@ -541,8 +544,7 @@ def register_restaurant_routes(app):
                 return auth_error
 
             body = app.current_event.json_body or {}
-            remove_item_ids = body.get("removeItemIds") or []
-            add_items = body.get("addItems") or []
+            items = body.get("items") or []
             reason = body.get("reason") or ""
             ops_user = (
                 str(body.get("opsUser") or "").strip()
@@ -562,14 +564,12 @@ def register_restaurant_routes(app):
             logger.info(
                 f"[orderId={order_id}] Restaurant adjust-items request "
                 f"restaurantId={restaurant_id} opsUser={ops_user} "
-                f"remove={remove_item_ids} addCount={len(add_items)} "
-                f"reason='{str(reason)[:60]}'"
+                f"itemCount={len(items)} reason='{str(reason)[:60]}'"
             )
 
             result = OrderAdjustmentService.adjust_items(
                 order_id=order_id,
-                remove_item_ids=remove_item_ids,
-                add_items=add_items,
+                items=items,
                 reason=reason,
                 ops_user=ops_user,
             )

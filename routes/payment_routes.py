@@ -314,15 +314,32 @@ def register_payment_routes(app):
                     if menu_item and menu_item.theater_mode:
                         return {"error": f"Theater item {item_id} cannot be in a regular delivery order"}, 400
 
-                add_on_total = 0.0
-                try:
-                    add_on_total = float(item.get('addOnTotal', 0) or 0)
-                except (TypeError, ValueError):
-                    add_on_total = 0.0
+                # Server-authoritative add-on resolution: the client only sends
+                # the selected optionIds; the menu owns the names + extra
+                # prices. Falls back to empty when the item is unknown so we
+                # don't crash on legacy clients sending addOns for items that
+                # vanished from the menu.
+                if menu_item:
+                    try:
+                        resolved_addons, add_on_total = menu_item.resolve_requested_addons(
+                            item.get('addOns')
+                        )
+                    except ValueError as ve:
+                        return {"error": "INVALID_ADDON", "message": str(ve)}, 400
+                else:
+                    resolved_addons, add_on_total = [], 0.0
+
+                # Server-authoritative item name: always use the menu's name
+                # so the order line cannot be spoofed by a malicious client.
+                item_name_for_line = (
+                    str(menu_item.item_name or "").strip()
+                    if menu_item
+                    else str(item.get('name') or '').strip()
+                )
 
                 enriched_items.append({
                     'itemId': item_id,
-                    'name': item.get('name'),
+                    'name': item_name_for_line,
                     'quantity': quantity,
                     'price': customer_price,
                     'isVeg': menu_item.is_veg if menu_item else None,
@@ -331,7 +348,7 @@ def register_payment_routes(app):
                     'itemOfferCouponCode': item_offer_coupon_code,
                     'couponIssuedBy': coupon_issued_by,
                     'itemDiscountAmount': item_discount_amount,
-                    'addOns': item.get('addOns', []),
+                    'addOns': resolved_addons,
                     'addOnTotal': add_on_total,
                 })
 

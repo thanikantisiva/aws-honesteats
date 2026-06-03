@@ -1,5 +1,5 @@
 """Menu item model"""
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from config.pricing import calculate_customer_price_from_hike
 from utils.dynamodb_helpers import dynamodb_to_python, python_to_dynamodb
 
@@ -104,6 +104,62 @@ class MenuItem:
             self.inventory_count = int(inventory_count or 0)
         except (TypeError, ValueError):
             self.inventory_count = 0
+
+    def resolve_requested_addons(
+        self, requested_addons: Optional[List[Any]]
+    ) -> Tuple[List[Dict[str, Any]], float]:
+        """Server-authoritative add-on resolution.
+
+        Takes a client-supplied list of selected add-ons (each either a bare
+        `optionId` string or a `{optionId: ...}` dict) and returns
+        `(resolved_addons, add_on_total_per_unit)` where:
+          - `resolved_addons` is built from THIS item's `addOnOptions` on the
+             menu (full `{optionId, name, extraPrice}` triples, all numbers
+             pulled from the menu — client-sent extraPrice is ignored).
+          - `add_on_total_per_unit` is the sum of the menu's `extraPrice`
+             values for the selected options.
+
+        Raises ValueError for unknown or duplicate option ids — the caller
+        should translate that to a 4xx error.
+        """
+        if not requested_addons:
+            return [], 0.0
+
+        menu_options: Dict[str, Dict[str, Any]] = {
+            str(opt.get("optionId") or ""): opt for opt in (self.add_on_options or [])
+        }
+
+        resolved: List[Dict[str, Any]] = []
+        total = 0.0
+        seen: set = set()
+        for raw in requested_addons:
+            if isinstance(raw, str):
+                option_id = raw.strip()
+            elif isinstance(raw, dict):
+                option_id = str(raw.get("optionId") or "").strip()
+            else:
+                continue
+            if not option_id:
+                continue
+            if option_id in seen:
+                raise ValueError(f"Duplicate add-on optionId: {option_id}")
+            seen.add(option_id)
+            opt = menu_options.get(option_id)
+            if not opt:
+                raise ValueError(
+                    f"Add-on optionId '{option_id}' is not defined on item {self.item_id}"
+                )
+            extra_price = float(opt.get("extraPrice") or 0)
+            resolved.append(
+                {
+                    "optionId": option_id,
+                    "name": str(opt.get("name") or ""),
+                    "extraPrice": extra_price,
+                }
+            )
+            total += extra_price
+
+        return resolved, round(total, 2)
 
     @property
     def price(self) -> float:
