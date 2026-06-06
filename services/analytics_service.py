@@ -188,6 +188,27 @@ def _hour_bucket(value) -> int:
     return 0
 
 
+_DAYPARTS = [
+    ("morning", "Morning", "6 AM - 11:59 AM", tuple(range(6, 12))),
+    ("afternoon", "Afternoon", "12 PM - 4:59 PM", tuple(range(12, 17))),
+    ("evening", "Evening", "5 PM - 6:59 PM", tuple(range(17, 19))),
+    ("dinner", "Dinner", "7 PM - 5:59 AM", tuple(list(range(19, 24)) + list(range(0, 6)))),
+]
+
+
+def _daypart_for_hour(hour: int) -> tuple:
+    for daypart in _DAYPARTS:
+        if hour in daypart[3]:
+            return daypart
+    return _DAYPARTS[-1]
+
+
+def _hour_label(hour: int) -> str:
+    suffix = "AM" if hour < 12 else "PM"
+    display = hour % 12 or 12
+    return f"{display} {suffix}"
+
+
 def _r2(x: float) -> float:
     return round(x, 2)
 
@@ -333,6 +354,25 @@ def _build_metrics(
 
     status_breakdown = defaultdict(int)
     hourly_dist = [0] * 24
+    daypart_agg = {
+        key: {
+            "key": key,
+            "label": label,
+            "window": window,
+            "orders": 0,
+            "delivered": 0,
+            "cancelled": 0,
+            "createdGmv": 0.0,
+            "deliveredGmv": 0.0,
+            "cancelledGmv": 0.0,
+            "platformRevenue": 0.0,
+            "restaurantPayout": 0.0,
+            "riderPayout": 0.0,
+            "govtGstTotal": 0.0,
+            "_hourly": {h: 0 for h in hours},
+        }
+        for key, label, window, hours in _DAYPARTS
+    }
     customer_orders = defaultdict(int)
     restaurant_agg: Dict[str, dict] = {}
     coupon_agg: Dict[str, dict] = {}
@@ -367,7 +407,12 @@ def _build_metrics(
         status = o.get("status") or "UNKNOWN"
         status_breakdown[status] += 1
         orders_by_day[day]["orders"] += 1
-        hourly_dist[_hour_bucket(o.get("createdAt"))] += 1
+        hour = _hour_bucket(o.get("createdAt"))
+        hourly_dist[hour] += 1
+        daypart_key = _daypart_for_hour(hour)[0]
+        daypart = daypart_agg[daypart_key]
+        daypart["orders"] += 1
+        daypart["_hourly"][hour] = daypart["_hourly"].get(hour, 0) + 1
 
         phone = o.get("customerPhone")
         if phone:
@@ -425,6 +470,7 @@ def _build_metrics(
         created_gmv += order_gmv
         orders_by_day[day]["createdGmv"] += order_gmv
         ra["createdGmv"] += order_gmv
+        daypart["createdGmv"] += order_gmv
 
         is_delivered = status == "DELIVERED"
         is_cancelled = status == "CANCELLED"
@@ -438,6 +484,8 @@ def _build_metrics(
             ra["delivered"] += 1
             ra["deliveredGmv"] += order_gmv
             ra["gmv"] += order_gmv
+            daypart["delivered"] += 1
+            daypart["deliveredGmv"] += order_gmv
         if is_cancelled:
             cancelled += 1
             cancelled_gmv += order_gmv
@@ -445,6 +493,8 @@ def _build_metrics(
             orders_by_day[day]["cancelledGmv"] += order_gmv
             ra["cancelled"] += 1
             ra["cancelledGmv"] += order_gmv
+            daypart["cancelled"] += 1
+            daypart["cancelledGmv"] += order_gmv
 
         # Realized money metrics are based on delivered orders only. Created
         # and cancelled value stay visible as demand/leakage signals above.
@@ -480,6 +530,10 @@ def _build_metrics(
         revenue_by_day[day]["restaurant"] += rr_final
         revenue_by_day[day]["rider"] += rdr_final
         revenue_by_day[day]["govt"] += gr_final
+        daypart["platformRevenue"] += pr_final
+        daypart["restaurantPayout"] += rr_final
+        daypart["riderPayout"] += rdr_final
+        daypart["govtGstTotal"] += gr_final
 
         ra["restaurantPayout"] += rr_final
         ra["platformEarnings"] += pr_final
@@ -684,6 +738,30 @@ def _build_metrics(
                 else abs(amt)
             )
 
+    # ---- Time-of-day analytics -------------------------------------------
+    daypart_stats: List[dict] = []
+    for key, _label, _window, _hours in _DAYPARTS:
+        dp = daypart_agg[key]
+        hourly_rows = [
+            {"hour": hour, "label": _hour_label(hour), "orders": count}
+            for hour, count in sorted(dp["_hourly"].items())
+        ]
+        peak = max(hourly_rows, key=lambda x: x["orders"], default=None)
+        dp.pop("_hourly", None)
+        dp["sharePct"] = _r2(dp["orders"] / len(orders) * 100) if orders else 0.0
+        dp["conversionPct"] = _r2(dp["delivered"] / dp["orders"] * 100) if dp["orders"] else 0.0
+        dp["cancelRatePct"] = _r2(dp["cancelled"] / dp["orders"] * 100) if dp["orders"] else 0.0
+        dp["aov"] = _r2(dp["deliveredGmv"] / dp["delivered"]) if dp["delivered"] else 0.0
+        dp["peakHour"] = peak["hour"] if peak else None
+        dp["peakHourLabel"] = peak["label"] if peak else "-"
+        dp["hourly"] = hourly_rows
+        for k in (
+            "createdGmv", "deliveredGmv", "cancelledGmv",
+            "platformRevenue", "restaurantPayout", "riderPayout", "govtGstTotal",
+        ):
+            dp[k] = _r2(dp[k])
+        daypart_stats.append(dp)
+
     # ---- Pack response ---------------------------------------------------
     return {
         "range": {
@@ -774,6 +852,7 @@ def _build_metrics(
             "topRiders": sorted(rider_agg.values(), key=lambda x: -x["earnings"])[:10],
             "couponUsage": sorted(coupon_agg.values(), key=lambda x: -x["uses"]),
             "hourlyDistribution": [{"hour": h, "orders": c} for h, c in enumerate(hourly_dist)],
+            "daypartBreakdown": daypart_stats,
             "revenueComposition": [
                 {"source": "Platform", "amount": _r2(platform_final)},
                 {"source": "Restaurant payout", "amount": _r2(restaurant_final_from_orders)},
