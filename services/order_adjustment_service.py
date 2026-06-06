@@ -240,25 +240,35 @@ class OrderAdjustmentService:
 
         delivery_fee = float(order.delivery_fee or 0)
         platform_fee = float(order.platform_fee or 0)
-        new_grand_total = round(new_food_total + delivery_fee + platform_fee, 2)
-        delta = round(new_grand_total - original_grand_total, 2)
 
-        new_amount_due_at_delivery = round(max(new_grand_total - prepaid_amount, 0.0), 2)
-
-        # Recompute GST on the adjusted food total. An item adjustment leaves the
-        # delivery + platform fees untouched, but GST-on-food must track the new
-        # food total — the original calculate-fee response carried a stale GST
-        # snapshot keyed to the original items, so it was never updated before.
+        # Recompute GST on the adjusted food total (delivery + platform fees are
+        # untouched by an item change). The customer-facing grand total is
+        # food + delivery + platform + GST — the SAME formula checkout uses when
+        # it stamps grandTotal at order creation. Previously adjust-items both
+        # (a) reused the stale GST snapshot and (b) left GST out of the grand
+        # total, so the recomputed bill undercharged by the GST amount.
         old_gst = (
             order.calculated_fee_response.get("gst")
             if isinstance(order.calculated_fee_response, dict)
             else None
         )
-        updated_fee_response = dict(order.calculated_fee_response or {})
         new_gst = compute_gst_breakdown(new_food_total, delivery_fee, platform_fee)
+        total_gst = round(
+            float(new_gst.get("gstOnFood", 0))
+            + float(new_gst.get("gstOnDeliveryFee", 0))
+            + float(new_gst.get("gstOnPlatformFee", 0)),
+            2,
+        )
+        updated_fee_response = dict(order.calculated_fee_response or {})
         updated_fee_response["gst"] = new_gst
 
-        synthetic_order = OrderAdjustmentService._make_synthetic_order(order, merged_items, new_grand_total)
+        new_grand_total = round(new_food_total + delivery_fee + platform_fee + total_gst, 2)
+        delta = round(new_grand_total - original_grand_total, 2)
+        new_amount_due_at_delivery = round(max(new_grand_total - prepaid_amount, 0.0), 2)
+
+        synthetic_order = OrderAdjustmentService._make_synthetic_order(
+            order, merged_items, new_grand_total, new_food_total
+        )
         # Feed the refreshed GST into revenue so govtRevenue reflects the new bill.
         synthetic_order.calculated_fee_response = updated_fee_response
         new_revenue, items_with_commission = compute_revenue(synthetic_order)
@@ -269,6 +279,7 @@ class OrderAdjustmentService:
             adjustment_id=adjustment_id,
             delta=delta,
             new_grand_total=new_grand_total,
+            new_revenue=new_revenue,
         )
 
         old_restaurant_payout = OrderAdjustmentService._restaurant_payout(order.revenue)
@@ -471,16 +482,22 @@ class OrderAdjustmentService:
         return enriched, round(food_total, 2)
 
     @staticmethod
-    def _make_synthetic_order(order: Order, items: List[Dict[str, Any]], grand_total: float) -> Order:
+    def _make_synthetic_order(
+        order: Order, items: List[Dict[str, Any]], grand_total: float, food_total: float
+    ) -> Order:
         """Build a transient Order with the new items/totals so we can hand
-        it to `compute_revenue` without mutating the persisted row first."""
+        it to `compute_revenue` without mutating the persisted row first.
+
+        food_total is passed explicitly (not derived from grand_total) because
+        grand_total now includes GST.
+        """
         return Order(
             order_id=order.order_id,
             customer_phone=order.customer_phone,
             receiver_phone=order.receiver_phone,
             restaurant_id=order.restaurant_id,
             items=items,
-            food_total=float(grand_total - (order.delivery_fee or 0) - (order.platform_fee or 0)),
+            food_total=float(food_total),
             delivery_fee=float(order.delivery_fee or 0),
             platform_fee=float(order.platform_fee or 0),
             grand_total=grand_total,
@@ -511,8 +528,13 @@ class OrderAdjustmentService:
         adjustment_id: str,
         delta: float,
         new_grand_total: float,
+        new_revenue: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, List[str]]:
-        """Write the payment-side of the adjustment. Returns (settlement_type, [paymentIds])."""
+        """Write the payment-side of the adjustment. Returns (settlement_type, [paymentIds]).
+
+        The order's primary payment row also carries the revenue snapshot, so it is
+        replaced with `new_revenue` here (not just the amount) whenever it's touched.
+        """
         original_payment_id = order.payment_id
         is_cod_order = OrderAdjustmentService._is_cod_order(order)
 
@@ -525,17 +547,24 @@ class OrderAdjustmentService:
                     "COD order has no linked payment row to update",
                     http_status=409,
                 )
-            PaymentService.update_payment(
-                original_payment_id,
-                {"amount": float(new_grand_total)},
-            )
+            cod_updates: Dict[str, Any] = {"amount": float(new_grand_total)}
+            if new_revenue is not None:
+                cod_updates["revenue"] = new_revenue
+            PaymentService.update_payment(original_payment_id, cod_updates)
             logger.info(
                 f"[orderId={order.order_id}] COD payment {original_payment_id} amount "
-                f"updated in place to {new_grand_total}"
+                f"updated in place to {new_grand_total} (revenue refreshed)"
             )
             return SETTLEMENT_COD_IN_PLACE, [original_payment_id]
 
-        # Prepaid path
+        # Prepaid path — the original payment's amount stays (already paid), but its
+        # revenue snapshot is stale after an item change, so refresh it in place.
+        if original_payment_id and new_revenue is not None:
+            PaymentService.update_payment(original_payment_id, {"revenue": new_revenue})
+            logger.info(
+                f"[orderId={order.order_id}] Prepaid payment {original_payment_id} revenue refreshed"
+            )
+
         if abs(delta) < 0.005:
             return SETTLEMENT_COD_IN_PLACE, [original_payment_id] if original_payment_id else []
 
