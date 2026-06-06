@@ -82,11 +82,28 @@ def get_platform_commission(customer_price: float, restaurant_price: float) -> f
 def get_markup_percentage(category: str = None) -> float:
     """
     Get markup percentage for a category
-    
+
     Args:
         category: Menu item category
-    
+
     Returns:
         Markup percentage as decimal (e.g., 0.20 for 20%)
     """
     return CATEGORY_MARKUP.get(category, CATEGORY_MARKUP['default'])
+
+
+# GST rates — single source of truth (used by calculate-fee and ops item adjustments).
+GST_RATE_FOOD = 0.05   # 5% GST on food
+GST_RATE_FEE = 0.18    # 18% GST on the customer delivery charge and the platform fee
+
+
+def compute_gst_breakdown(food_total: float, delivery_fee: float, platform_fee: float) -> dict:
+    """GST breakdown: 5% on food, 18% each on the customer delivery charge and platform fee.
+
+    Pure function so the calculate-fee endpoint and the ops adjustment path stay in sync.
+    """
+    return {
+        "gstOnFood": round(float(food_total or 0) * GST_RATE_FOOD, 2),
+        "gstOnDeliveryFee": round(round(float(delivery_fee or 0), 2) * GST_RATE_FEE, 2),
+        "gstOnPlatformFee": round(round(float(platform_fee or 0), 2) * GST_RATE_FEE, 2),
+    }

@@ -46,6 +46,7 @@ from services.menu_service import MenuService
 from services.coupon_service import CouponService
 from services.revenue_service import compute_revenue
 from services.restaurant_earnings_service import RestaurantEarningsService
+from config.pricing import compute_gst_breakdown
 from services.notification_service import NotificationService
 from utils.dynamodb import generate_id
 from utils.datetime_ist import now_ist_iso
@@ -244,7 +245,22 @@ class OrderAdjustmentService:
 
         new_amount_due_at_delivery = round(max(new_grand_total - prepaid_amount, 0.0), 2)
 
+        # Recompute GST on the adjusted food total. An item adjustment leaves the
+        # delivery + platform fees untouched, but GST-on-food must track the new
+        # food total — the original calculate-fee response carried a stale GST
+        # snapshot keyed to the original items, so it was never updated before.
+        old_gst = (
+            order.calculated_fee_response.get("gst")
+            if isinstance(order.calculated_fee_response, dict)
+            else None
+        )
+        updated_fee_response = dict(order.calculated_fee_response or {})
+        new_gst = compute_gst_breakdown(new_food_total, delivery_fee, platform_fee)
+        updated_fee_response["gst"] = new_gst
+
         synthetic_order = OrderAdjustmentService._make_synthetic_order(order, merged_items, new_grand_total)
+        # Feed the refreshed GST into revenue so govtRevenue reflects the new bill.
+        synthetic_order.calculated_fee_response = updated_fee_response
         new_revenue, items_with_commission = compute_revenue(synthetic_order)
 
         adjustment_id = generate_id("ADJ")
@@ -277,6 +293,8 @@ class OrderAdjustmentService:
             "settlementType": settlement_type,
             "paymentIdsAffected": payment_ids_affected,
             "restaurantPayoutDelta": restaurant_delta,
+            "oldGst": old_gst,
+            "newGst": new_gst,
         }
 
         appended_adjustments = list(order.adjustments or []) + [adjustment_record]
@@ -286,6 +304,9 @@ class OrderAdjustmentService:
             "foodTotal": round(new_food_total, 2),
             "grandTotal": new_grand_total,
             "revenue": new_revenue,
+            # Persist the refreshed fee response so the customer-facing bill shows
+            # the recomputed GST (not the stale snapshot from order creation).
+            "calculatedFeeResponse": updated_fee_response,
             "originalGrandTotal": original_grand_total,
             "prepaidAmount": prepaid_amount,
             "amountDueAtDelivery": new_amount_due_at_delivery,

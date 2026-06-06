@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from aws_lambda_powertools import Logger, Tracer, Metrics
+from config.pricing import compute_gst_breakdown
 from services.coupon_service import CouponService
 from services.restaurant_service import RestaurantService
 from utils.dynamodb import dynamodb_client, TABLES
@@ -83,14 +84,12 @@ def _fetch_global_delivery_config():
 def _build_gst_breakdown(
     item_total: float, customer_delivery_fee: float, platform_fee: float
 ) -> dict:
-    """GST on food (5%), on customer delivery charge and platform fee (18% each)."""
-    rounded_delivery = round(customer_delivery_fee, 2)
-    rounded_platform = round(platform_fee, 2)
-    return {
-        "gstOnFood": round(item_total * 0.05, 2),
-        "gstOnDeliveryFee": round(rounded_delivery * 0.18, 2),
-        "gstOnPlatformFee": round(rounded_platform * 0.18, 2),
-    }
+    """GST on food (5%), on customer delivery charge and platform fee (18% each).
+
+    Delegates to the shared `compute_gst_breakdown` so calculate-fee and the ops
+    item-adjustment path use one source of truth for the rates.
+    """
+    return compute_gst_breakdown(item_total, customer_delivery_fee, platform_fee)
 
 
 def _build_safe_zero_response(
