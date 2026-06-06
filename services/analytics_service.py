@@ -314,7 +314,16 @@ def _build_metrics(
         d += timedelta(days=1)
 
     orders_by_day = {
-        dk: {"date": dk, "orders": 0, "delivered": 0, "cancelled": 0, "gmv": 0.0}
+        dk: {
+            "date": dk,
+            "orders": 0,
+            "delivered": 0,
+            "cancelled": 0,
+            "createdGmv": 0.0,
+            "deliveredGmv": 0.0,
+            "cancelledGmv": 0.0,
+            "gmv": 0.0,  # Back-compat alias for deliveredGmv.
+        }
         for dk in daily_keys
     }
     revenue_by_day = {
@@ -329,6 +338,8 @@ def _build_metrics(
     coupon_agg: Dict[str, dict] = {}
 
     gmv = 0.0
+    created_gmv = 0.0
+    cancelled_gmv = 0.0
     delivered = cancelled = 0
     coupons_used = 0
     coupon_discount_total = 0.0
@@ -341,7 +352,16 @@ def _build_metrics(
     for o in orders:
         day = _day_bucket(o.get("createdAt"))
         if day not in orders_by_day:
-            orders_by_day[day] = {"date": day, "orders": 0, "delivered": 0, "cancelled": 0, "gmv": 0.0}
+            orders_by_day[day] = {
+                "date": day,
+                "orders": 0,
+                "delivered": 0,
+                "cancelled": 0,
+                "createdGmv": 0.0,
+                "deliveredGmv": 0.0,
+                "cancelledGmv": 0.0,
+                "gmv": 0.0,
+            }
             revenue_by_day[day] = {"date": day, "platform": 0.0, "restaurant": 0.0, "rider": 0.0, "govt": 0.0}
 
         status = o.get("status") or "UNKNOWN"
@@ -365,6 +385,9 @@ def _build_metrics(
                 "cancelled": 0,
                 # Money flow attributable to this restaurant
                 "gmv": 0.0,
+                "createdGmv": 0.0,
+                "deliveredGmv": 0.0,
+                "cancelledGmv": 0.0,
                 "restaurantPayout": 0.0,       # rev.restaurantRevenue.finalPayout
                 "platformEarnings": 0.0,       # rev.platformRevenue.finalPayout
                 "platformFee": 0.0,
@@ -399,18 +422,34 @@ def _build_metrics(
             ra["_customerOrders"][phone] = ra["_customerOrders"].get(phone, 0) + 1
 
         order_gmv = _num(o.get("grandTotal"))
-        gmv += order_gmv
-        orders_by_day[day]["gmv"] += order_gmv
-        ra["gmv"] += order_gmv
+        created_gmv += order_gmv
+        orders_by_day[day]["createdGmv"] += order_gmv
+        ra["createdGmv"] += order_gmv
 
-        if status == "DELIVERED":
+        is_delivered = status == "DELIVERED"
+        is_cancelled = status == "CANCELLED"
+
+        if is_delivered:
             delivered += 1
+            gmv += order_gmv
             orders_by_day[day]["delivered"] += 1
+            orders_by_day[day]["deliveredGmv"] += order_gmv
+            orders_by_day[day]["gmv"] += order_gmv
             ra["delivered"] += 1
-        if status == "CANCELLED":
+            ra["deliveredGmv"] += order_gmv
+            ra["gmv"] += order_gmv
+        if is_cancelled:
             cancelled += 1
+            cancelled_gmv += order_gmv
             orders_by_day[day]["cancelled"] += 1
+            orders_by_day[day]["cancelledGmv"] += order_gmv
             ra["cancelled"] += 1
+            ra["cancelledGmv"] += order_gmv
+
+        # Realized money metrics are based on delivered orders only. Created
+        # and cancelled value stay visible as demand/leakage signals above.
+        if not is_delivered:
+            continue
 
         rev = o.get("revenue") or {}
         pr = rev.get("platformRevenue") or {}
@@ -496,7 +535,7 @@ def _build_metrics(
             agg["revenue"] += line_rev
             ra["itemsSold"] += qty
 
-    aov = _r2(gmv / len(orders)) if orders else 0.0
+    aov = _r2(gmv / delivered) if delivered else 0.0
 
     # ---- Payments --------------------------------------------------------
     payment_methods: Dict[str, dict] = {}
@@ -583,12 +622,13 @@ def _build_metrics(
             {"itemId": i["itemId"], "name": i["name"], "quantity": i["quantity"], "revenue": _r2(i["revenue"])}
             for i in items[:5]
         ]
-        ra_f["aov"] = _r2(ra_f["gmv"] / ra_f["orders"]) if ra_f["orders"] else 0.0
+        ra_f["aov"] = _r2(ra_f["deliveredGmv"] / ra_f["delivered"]) if ra_f["delivered"] else 0.0
         ra_f["conversionPct"] = (
             _r2(ra_f["delivered"] / ra_f["orders"] * 100) if ra_f["orders"] else 0.0
         )
         for k in (
-            "gmv", "restaurantPayout", "platformEarnings", "platformFee",
+            "gmv", "createdGmv", "deliveredGmv", "cancelledGmv",
+            "restaurantPayout", "platformEarnings", "platformFee",
             "foodCommission", "riderPayout", "govtGstTotal", "gstOnFood",
             "gstOnDelivery", "gstOnPlatform", "codValue", "couponDiscount",
             "settledEarnings", "unsettledEarnings",
@@ -658,6 +698,9 @@ def _build_metrics(
                 "cancelled": cancelled,
                 "conversionPct": _r2(delivered / len(orders) * 100) if orders else 0,
                 "gmv": _r2(gmv),
+                "deliveredGmv": _r2(gmv),
+                "cancelledGmv": _r2(cancelled_gmv),
+                "createdGmv": _r2(created_gmv),
                 "aov": aov,
                 "ordersPerDay": _r2(len(orders) / days),
             },
