@@ -22,7 +22,7 @@ the table).
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 
 from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
@@ -94,6 +94,19 @@ def _query_all(params: dict) -> List[dict]:
     return items
 
 
+def _scan_all(params: dict) -> List[dict]:
+    """Paginated Scan. Use only for low-cardinality/admin analytics dimensions."""
+    items: List[dict] = []
+    while True:
+        response = dynamodb_client.scan(**params)
+        for raw in response.get("Items", []):
+            items.append(_unmarshal(raw))
+        if "LastEvaluatedKey" not in response:
+            break
+        params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+    return items
+
+
 def _fetch_orders_by_status(status: str, start_iso: str, end_iso: str) -> List[dict]:
     """Query orders via status-createdAtIso-index for one status, date-bounded."""
     return _query_all({
@@ -106,6 +119,34 @@ def _fetch_orders_by_status(status: str, start_iso: str, end_iso: str) -> List[d
             ":s": {"S": status},
             ":start": {"S": start_iso},
             ":end": {"S": end_iso},
+        },
+    })
+
+
+def _fetch_all_delivered_customer_phones() -> Set[str]:
+    """All customers who have ever completed a delivered order."""
+    rows = _query_all({
+        "TableName": TABLES["ORDERS"],
+        "IndexName": "status-createdAtIso-index",
+        "KeyConditionExpression": "#st = :s",
+        "ExpressionAttributeNames": {"#st": "status"},
+        "ExpressionAttributeValues": {
+            ":s": {"S": "DELIVERED"},
+        },
+        "ProjectionExpression": "customerPhone",
+    })
+    return {str(row.get("customerPhone")) for row in rows if row.get("customerPhone")}
+
+
+def _fetch_customer_users() -> List[dict]:
+    """Customer signup rows from the Users table."""
+    return _scan_all({
+        "TableName": TABLES["USERS"],
+        "FilterExpression": "#role = :role",
+        "ProjectionExpression": "phone, #role, createdAt",
+        "ExpressionAttributeNames": {"#role": "role"},
+        "ExpressionAttributeValues": {
+            ":role": {"S": "CUSTOMER"},
         },
     })
 
@@ -244,14 +285,16 @@ def generate_dashboard_metrics(start_date: str, end_date: str) -> Dict[str, Any]
     logger.info(
         f"[analytics] {start_only}..{end_only} ({days}d) "
         f"phase1: {len(_ALL_ORDER_STATUSES)} status queries + "
-        f"{len(_ALL_PAYMENT_METHODS)} payment-method queries"
+        f"{len(_ALL_PAYMENT_METHODS)} payment-method queries + customer signup reads"
     )
 
     # ---------- Phase 1: orders (per status) + payments (per method) ---------
     orders: List[dict] = []
     payments: List[dict] = []
+    customer_users: List[dict] = []
+    all_delivered_customer_phones: Set[str] = set()
     try:
-        with ThreadPoolExecutor(max_workers=20) as ex:
+        with ThreadPoolExecutor(max_workers=22) as ex:
             order_futures = [
                 ex.submit(_fetch_orders_by_status, s, start_iso, end_iso)
                 for s in _ALL_ORDER_STATUSES
@@ -260,10 +303,14 @@ def generate_dashboard_metrics(start_date: str, end_date: str) -> Dict[str, Any]
                 ex.submit(_fetch_payments_by_method, m, start_iso, end_iso)
                 for m in _ALL_PAYMENT_METHODS
             ]
+            customer_users_future = ex.submit(_fetch_customer_users)
+            delivered_customers_future = ex.submit(_fetch_all_delivered_customer_phones)
             for f in as_completed(order_futures):
                 orders.extend(f.result())
             for f in as_completed(payment_futures):
                 payments.extend(f.result())
+            customer_users = customer_users_future.result()
+            all_delivered_customer_phones = delivered_customers_future.result()
     except ClientError as e:
         raise Exception(f"Failed Phase 1 GSI queries: {e}")
 
@@ -307,11 +354,20 @@ def generate_dashboard_metrics(start_date: str, end_date: str) -> Dict[str, Any]
 
     logger.info(
         f"[analytics] fetched orders={len(orders)} payments={len(payments)} "
-        f"restEarn={len(rest_earn)} riderEarn={len(rider_earn)}"
+        f"restEarn={len(rest_earn)} riderEarn={len(rider_earn)} "
+        f"customerUsers={len(customer_users)} allDeliveredCustomers={len(all_delivered_customer_phones)}"
     )
 
     return _build_metrics(
-        orders, payments, rest_earn, rider_earn, start_day, end_day, days
+        orders,
+        payments,
+        rest_earn,
+        rider_earn,
+        customer_users,
+        all_delivered_customer_phones,
+        start_day,
+        end_day,
+        days,
     )
 
 
@@ -323,6 +379,8 @@ def _build_metrics(
     payments: List[dict],
     rest_earn: List[dict],
     rider_earn: List[dict],
+    customer_users: List[dict],
+    all_delivered_customer_phones: Set[str],
     start_day,
     end_day,
     days: int,
@@ -414,10 +472,6 @@ def _build_metrics(
         daypart["orders"] += 1
         daypart["_hourly"][hour] = daypart["_hourly"].get(hour, 0) + 1
 
-        phone = o.get("customerPhone")
-        if phone:
-            customer_orders[phone] += 1
-
         rest_id = o.get("restaurantId") or "UNKNOWN"
         ra = restaurant_agg.setdefault(
             rest_id,
@@ -463,9 +517,6 @@ def _build_metrics(
         )
         ra["orders"] += 1
 
-        if phone:
-            ra["_customerOrders"][phone] = ra["_customerOrders"].get(phone, 0) + 1
-
         order_gmv = _num(o.get("grandTotal"))
         created_gmv += order_gmv
         orders_by_day[day]["createdGmv"] += order_gmv
@@ -500,6 +551,11 @@ def _build_metrics(
         # and cancelled value stay visible as demand/leakage signals above.
         if not is_delivered:
             continue
+
+        phone = o.get("customerPhone")
+        if phone:
+            customer_orders[phone] += 1
+            ra["_customerOrders"][phone] = ra["_customerOrders"].get(phone, 0) + 1
 
         rev = o.get("revenue") or {}
         pr = rev.get("platformRevenue") or {}
@@ -629,6 +685,42 @@ def _build_metrics(
             cohort_buckets["4-9"] += 1
         else:
             cohort_buckets["10+"] += 1
+
+    customer_signup_phones = {
+        str(u.get("phone"))
+        for u in customer_users
+        if u.get("phone")
+    }
+    range_signup_phones = {
+        str(u.get("phone"))
+        for u in customer_users
+        if u.get("phone") and start_day.isoformat() <= _day_bucket(u.get("createdAt")) <= end_day.isoformat()
+    }
+    range_delivered_customer_phones = set(customer_orders.keys())
+    range_signup_ordered_in_range = range_signup_phones & range_delivered_customer_phones
+    range_signup_ordered_ever = range_signup_phones & all_delivered_customer_phones
+    overall_ordered_customers = customer_signup_phones & all_delivered_customer_phones
+    signup_conversion = {
+        "range": {
+            "signups": len(range_signup_phones),
+            "orderedInRange": len(range_signup_ordered_in_range),
+            "orderedEver": len(range_signup_ordered_ever),
+            "notOrderedInRange": max(len(range_signup_phones) - len(range_signup_ordered_in_range), 0),
+            "notOrderedEver": max(len(range_signup_phones) - len(range_signup_ordered_ever), 0),
+            "orderRatePct": _r2(len(range_signup_ordered_in_range) / len(range_signup_phones) * 100)
+            if range_signup_phones else 0.0,
+            "everOrderRatePct": _r2(len(range_signup_ordered_ever) / len(range_signup_phones) * 100)
+            if range_signup_phones else 0.0,
+        },
+        "overall": {
+            "signups": len(customer_signup_phones),
+            "orderedEver": len(overall_ordered_customers),
+            "neverOrdered": max(len(customer_signup_phones) - len(overall_ordered_customers), 0),
+            "orderRatePct": _r2(len(overall_ordered_customers) / len(customer_signup_phones) * 100)
+            if customer_signup_phones else 0.0,
+            "deliveredCustomersWithoutSignupRow": len(all_delivered_customer_phones - customer_signup_phones),
+        },
+    }
 
     # ---- Restaurant earnings (settlement ledger) -------------------------
     rest_earn_total = rest_earn_settled = rest_earn_unsettled = 0.0
@@ -797,13 +889,16 @@ def _build_metrics(
                 "unique": unique_customers,
                 "repeatInWindow": repeat_customers,
                 "repeatRatePct": _r2(repeat_customers / unique_customers * 100) if unique_customers else 0,
-                "avgOrdersPerCustomer": _r2(len(orders) / unique_customers) if unique_customers else 0,
+                "avgOrdersPerCustomer": _r2(delivered / unique_customers) if unique_customers else 0,
+                "basis": "DELIVERED_ORDERS",
             },
+            "signupConversion": signup_conversion,
             "coupons": {
                 "ordersUsed": coupons_used,
                 "uniqueCodes": len(coupon_agg),
                 "discountValue": _r2(coupon_discount_total),
-                "penetrationPct": _r2(coupons_used / len(orders) * 100) if orders else 0,
+                "penetrationPct": _r2(coupons_used / delivered * 100) if delivered else 0,
+                "basis": "DELIVERED_ORDERS",
             },
             "platformRevenue": {
                 "finalPayout": _r2(platform_final),
