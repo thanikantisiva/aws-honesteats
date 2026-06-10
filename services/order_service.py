@@ -382,7 +382,8 @@ class OrderService:
         status: str,
         rider_id: Optional[str] = None,
         preparation_time: Optional[int] = None,
-        expected_current_status: Optional[str] = None
+        expected_current_status: Optional[str] = None,
+        internal_status: Optional[str] = None
     ) -> Order:
         """Update order status and regenerate composite keys"""
         try:
@@ -422,6 +423,15 @@ class OrderService:
             if preparation_time is not None:
                 update_expressions.append('preparationTime = :prepTime')
                 expression_attribute_values[':prepTime'] = {'N': str(preparation_time)}
+
+            if internal_status:
+                update_expressions.append('#internalStatus = :internalStatus')
+                expression_attribute_names['#internalStatus'] = 'internalStatus'
+                expression_attribute_values[':internalStatus'] = {'S': internal_status}
+            elif status == Order.READY_FOR_PICKUP:
+                update_expressions.append('#internalStatus = :internalStatus')
+                expression_attribute_names['#internalStatus'] = 'internalStatus'
+                expression_attribute_values[':internalStatus'] = {'S': 'FOOD_READY'}
             
             update_params = {
                 'TableName': TABLES['ORDERS'],

@@ -378,3 +378,32 @@ def register_menu_routes(app):
         except Exception as e:
             logger.error("Error applying price hike", exc_info=True)
             return {"error": "Failed to apply price hike", "message": str(e)}, 500
+
+    @app.post("/api/v1/restaurants/<restaurant_id>/menu/dine-in-coupons")
+    @tracer.capture_method
+    def create_dine_in_coupons(restaurant_id: str):
+        """Create item-level YUMDUDE coupons to match display prices back to dine-in prices.
+
+        Body: { "itemBannerText": "<optional string>" }
+        """
+        try:
+            body = app.current_event.json_body or {}
+            item_banner_text, banner_error = _normalize_top_offer_banner(
+                body.get('itemBannerText', body.get('topOfferBanner'))
+            )
+            if banner_error:
+                return banner_error
+
+            logger.info(f"Creating dine-in price match coupons for restaurant: {restaurant_id}")
+
+            result = CouponService.create_dine_in_price_match_item_coupons(
+                restaurant_id,
+                item_banner_text=item_banner_text,
+            )
+            metrics.add_metric(name="DineInItemCouponsCreated", unit="Count", value=1)
+            return result, 200
+        except ValueError as e:
+            return {"error": str(e)}, 400
+        except Exception as e:
+            logger.error("Error creating dine-in item coupons", exc_info=True)
+            return {"error": "Failed to create dine-in item coupons", "message": str(e)}, 500

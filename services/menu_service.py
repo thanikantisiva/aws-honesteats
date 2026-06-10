@@ -61,17 +61,24 @@ class MenuService:
         """List all menu items for a restaurant"""
         try:
             pk = f"RESTAURANT#{restaurant_id}"
-            response = dynamodb_client.query(
-                TableName=TABLES['MENU_ITEMS'],
-                KeyConditionExpression='PK = :pk',
-                ExpressionAttributeValues={
+            menu_items = []
+            query_kwargs = {
+                'TableName': TABLES['MENU_ITEMS'],
+                'KeyConditionExpression': 'PK = :pk',
+                'ExpressionAttributeValues': {
                     ':pk': {'S': pk}
                 }
-            )
-            
-            menu_items = []
-            for item in response.get('Items', []):
-                menu_items.append(MenuItem.from_dynamodb_item(item))
+            }
+
+            while True:
+                response = dynamodb_client.query(**query_kwargs)
+                for item in response.get('Items', []):
+                    menu_items.append(MenuItem.from_dynamodb_item(item))
+
+                last_key = response.get('LastEvaluatedKey')
+                if not last_key:
+                    break
+                query_kwargs['ExclusiveStartKey'] = last_key
             
             return menu_items
         except ClientError as e:

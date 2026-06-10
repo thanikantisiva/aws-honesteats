@@ -356,12 +356,22 @@ def register_rider_order_routes(app):
                 return {"error": "Order not found"}, 404
             
             
+            headers = app.current_event.headers or {}
+            has_retool_header = any(
+                key.lower() == 'x-retool-header' and value
+                for key, value in headers.items()
+            )
+
             # Update order status to requested status from path param
             new_status = status or Order.RIDER_ASSIGNED
-            OrderService.update_order(order_id, {
+            order_update = {
                 'status': new_status,
                 'riderId': rider_id
-            })
+            }
+            if has_retool_header:
+                order_update['internalStatus'] = 'RIDER_FORCE_ASSIGNED'
+
+            OrderService.update_order(order_id, order_update)
             
             # Update rider working_on_order
             RiderService.set_working_on_order(rider_id, order_id)

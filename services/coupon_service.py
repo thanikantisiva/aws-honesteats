@@ -83,6 +83,87 @@ class CouponService:
         }
 
     @staticmethod
+    def create_dine_in_price_match_item_coupons(
+        restaurant_id: str,
+        item_banner_text: Optional[str] = None,
+    ) -> dict:
+        """Create fixed item coupons that reduce display price back to restaurantPrice.
+
+        Coupon codes are deterministic per restaurant/item so repeated runs update
+        the same coupon instead of generating duplicates.
+        """
+        from services.menu_service import MenuService
+
+        normalized_restaurant_id = str(restaurant_id or "").strip()
+        if not normalized_restaurant_id:
+            raise ValueError("restaurantId is required")
+
+        menu_items = [
+            item for item in MenuService.list_menu_items(normalized_restaurant_id)
+            if item.item_id and item.restaurant_price is not None
+        ]
+
+        created_items = []
+        skipped_items = []
+
+        for item in menu_items:
+            restaurant_price = float(item.restaurant_price or 0.0)
+            display_price = float(item.price)
+            hiked_amount = round(display_price - restaurant_price, 2)
+
+            if restaurant_price <= 0 or hiked_amount <= 0:
+                skipped_items.append({
+                    "itemId": item.item_id,
+                    "itemName": item.item_name,
+                    "restaurantPrice": restaurant_price,
+                    "displayPrice": display_price,
+                    "reason": "No positive hiked amount",
+                })
+                continue
+
+            coupon_code = f"YUMDINE-{normalized_restaurant_id}-{item.item_id}"
+            coupon_item = {
+                "partitionkey": {"S": f"COUPON#{coupon_code}"},
+                "sortKey": {"S": "DETAILS"},
+                "couponType": {"S": "fixed"},
+                "couponValue": {"N": str(hiked_amount)},
+                "issuedBy": {"S": "YUMDUDE"},
+                "couponRestaurant": {"S": normalized_restaurant_id},
+                "couponItem": {"S": item.item_id},
+                "couponTarget": {"S": "item"},
+                "isOncePerUser": {"BOOL": False},
+                "isOncePerDay": {"BOOL": False},
+                "description": {"S": "Dine-in price match funded by YUMDUDE"},
+            }
+
+            dynamodb_client.put_item(
+                TableName=TABLES["CONFIG"],
+                Item=coupon_item,
+            )
+
+            item_updates = {"itemOfferCouponCode": coupon_code}
+            if item_banner_text:
+                item_updates["topOfferBanner"] = item_banner_text
+            MenuService.update_menu_item(normalized_restaurant_id, item.item_id, item_updates)
+
+            created_items.append({
+                "itemId": item.item_id,
+                "itemName": item.item_name,
+                "restaurantPrice": restaurant_price,
+                "displayPrice": display_price,
+                "hikedAmount": hiked_amount,
+                "couponCode": coupon_code,
+            })
+
+        return {
+            "restaurantId": normalized_restaurant_id,
+            "createdCount": len(created_items),
+            "skippedCount": len(skipped_items),
+            "items": created_items,
+            "skippedItems": skipped_items,
+        }
+
+    @staticmethod
     def get_coupon(coupon_code: Optional[str]) -> Optional[dict]:
         """Fetch a coupon record from the config table."""
         normalized_code = str(coupon_code or "").strip()
@@ -151,6 +232,13 @@ class CouponService:
             return default_result
 
         if not CouponService.is_coupon_active(coupon.get("startDate"), coupon.get("endDate")):
+            return default_result
+
+        if not CouponService.is_coupon_valid_for_restaurant(coupon, getattr(menu_item, "restaurant_id", None)):
+            return default_result
+
+        coupon_item = str(coupon.get("couponItem") or "").strip()
+        if coupon_item and coupon_item != str(getattr(menu_item, "item_id", "") or "").strip():
             return default_result
 
         # Menu pricing has no customer identity today, so targeted coupons must

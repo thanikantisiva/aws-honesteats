@@ -380,6 +380,64 @@ class NotificationService:
             return False
 
     @staticmethod
+    def send_rider_food_ready_notification(
+        rider_mobile: str,
+        order_id: str,
+        restaurant_name: str,
+    ) -> bool:
+        """Tell an already-assigned rider that the restaurant has marked food ready."""
+        try:
+            from utils.dynamodb import dynamodb_client
+
+            phone_key = normalize_phone(rider_mobile)
+            if not phone_key:
+                logger.warning(f"Invalid rider phone for food-ready notification: {rider_mobile!r}")
+                return False
+
+            users_table = os.environ.get(
+                "USERS_TABLE_NAME",
+                f"food-delivery-users-{os.environ.get('ENVIRONMENT', 'dev')}",
+            )
+            user_response = dynamodb_client.get_item(
+                TableName=users_table,
+                Key={
+                    "phone": {"S": phone_key},
+                    "role": {"S": "RIDER"},
+                },
+            )
+
+            if "Item" not in user_response:
+                logger.warning(f"Rider not found for food-ready notification: {phone_key}")
+                return False
+
+            fcm_token = user_response["Item"].get("fcmToken", {}).get("S")
+            if not fcm_token:
+                logger.warning(f"No FCM token for rider food-ready notification: {phone_key}")
+                return False
+
+            title = "Food is ready"
+            body = f"{restaurant_name}: go to the counter and collect the order."
+            notification_data = {
+                "type": "order_food_ready",
+                "status": "FOOD_READY",
+                "orderId": order_id,
+                "restaurantName": restaurant_name,
+                "title": title,
+                "body": body,
+                "channelId": "rider_order_updates",
+            }
+
+            return NotificationService.send_via_firebase(
+                fcm_token=fcm_token,
+                title=title,
+                body=body,
+                data=notification_data,
+            )
+        except Exception as e:
+            logger.error(f"Error sending rider food-ready notification: {str(e)}", exc_info=True)
+            return False
+
+    @staticmethod
     def is_invalid_fcm_token_error(error: Exception) -> bool:
         """Best-effort classifier for invalid/unregistered FCM registration tokens."""
         text = str(error or "").lower()

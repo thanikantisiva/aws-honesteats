@@ -121,6 +121,7 @@ class Order:
         amount_due_at_delivery: Optional[float] = None,
         adjustments: Optional[List[Dict[str, Any]]] = None,
         was_adjusted: bool = False,
+        internal_status: Optional[str] = None,
     ):
         self.order_id = order_id
         self.customer_phone = customer_phone
@@ -178,6 +179,7 @@ class Order:
         self.amount_due_at_delivery = float(amount_due_at_delivery) if amount_due_at_delivery is not None else None
         self.adjustments = adjustments or []
         self.was_adjusted = bool(was_adjusted)
+        self.internal_status = internal_status
         # Store as IST ISO string; support int (legacy) for backward compatibility
         self.created_at = created_at if created_at is not None else now_ist_iso()
 
@@ -293,6 +295,8 @@ class Order:
             result["adjustments"] = self.adjustments
         if self.was_adjusted:
             result["wasAdjusted"] = True
+        if self.internal_status:
+            result["internalStatus"] = self.internal_status
         return result
 
     def _infer_amount_due_at_delivery(self) -> float:
@@ -387,6 +391,7 @@ class Order:
             amount_due_at_delivery=float(item["amountDueAtDelivery"]["N"]) if "amountDueAtDelivery" in item and "N" in item["amountDueAtDelivery"] else None,
             adjustments=dynamodb_to_python(item["adjustments"]) if "adjustments" in item and "L" in item["adjustments"] else [],
             was_adjusted=bool(item.get("wasAdjusted", {}).get("BOOL", False)) if "wasAdjusted" in item else False,
+            internal_status=item.get("internalStatus", {}).get("S") if "internalStatus" in item else None,
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -500,4 +505,6 @@ class Order:
             item["adjustments"] = python_to_dynamodb(self.adjustments)
         if self.was_adjusted:
             item["wasAdjusted"] = {"BOOL": True}
+        if self.internal_status:
+            item["internalStatus"] = {"S": self.internal_status}
         return item

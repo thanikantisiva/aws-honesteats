@@ -7,6 +7,7 @@ from services.order_service import OrderStatusConflictError
 from services.user_service import UserService
 from services.restaurant_service import RestaurantService
 from services.address_service import AddressService
+from services.notification_service import NotificationService
 from models.order import Order
 from utils.dynamodb import generate_id
 from middleware.jwt_auth import require_auth, get_current_user_phone
@@ -284,6 +285,7 @@ def register_order_routes(app):
             status = body.get('status')
             rider_id = body.get('riderId')
             expected_current_status = body.get('expectedCurrentStatus')
+            internal_status = body.get('internalStatus')
             preparation_time_raw = body.get('preparationTime')
             preparation_time = int(preparation_time_raw) if preparation_time_raw is not None else None
             
@@ -294,16 +296,45 @@ def register_order_routes(app):
             
             if status not in valid_statuses:
                 return {"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}, 400
+
+            if internal_status and internal_status != 'FOOD_READY':
+                return {"error": "Invalid internalStatus. Must be FOOD_READY"}, 400
             
-            logger.info(f"[orderId={order_id}] Updating order status to {status} riderId={rider_id} preparationTime={preparation_time}")
+            previous_order = OrderService.get_order(order_id)
+
+            logger.info(
+                f"[orderId={order_id}] Updating order status to {status} riderId={rider_id} "
+                f"preparationTime={preparation_time} internalStatus={internal_status}"
+            )
             
             updated_order = OrderService.update_order_status(
                 order_id,
                 status,
                 rider_id,
                 preparation_time,
-                expected_current_status
+                expected_current_status,
+                internal_status
             )
+
+            if (
+                updated_order.internal_status == 'FOOD_READY'
+                and previous_order
+                and previous_order.internal_status != 'FOOD_READY'
+                and updated_order.rider_id
+            ):
+                try:
+                    from services.rider_service import RiderService
+
+                    rider = RiderService.get_rider(updated_order.rider_id)
+                    if rider and rider.phone:
+                        NotificationService.send_rider_food_ready_notification(
+                            rider_mobile=rider.phone,
+                            order_id=updated_order.order_id,
+                            restaurant_name=updated_order.restaurant_name or "Restaurant",
+                        )
+                except Exception:
+                    logger.error(f"[orderId={order_id}] Failed to send rider food-ready notification", exc_info=True)
+
             metrics.add_metric(name="OrderStatusUpdated", unit="Count", value=1)
             
             return updated_order.to_dict(), 200
