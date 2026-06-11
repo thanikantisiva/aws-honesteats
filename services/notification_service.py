@@ -10,6 +10,8 @@ from aws_lambda_powertools import Logger
 logger = Logger()
 RIDER_NOTIFICATION_CHANNEL_ID = "rider_orders_ring_v2"
 RIDER_NOTIFICATION_SOUND = "new_order_ring"
+RESTAURANT_NOTIFICATION_CHANNEL_ID = "new_orders_critical_v2"
+RESTAURANT_NOTIFICATION_SOUND = "telephone_ring"
 
 # Import Firebase Admin SDK
 try:
@@ -485,7 +487,7 @@ class NotificationService:
             order_tail = (order_id or "").strip()[-4:] or "----"
             title_text = f"Rs.{amount:.0f} New Order"
             body_text = f"{item_label} | #{order_tail}"
-            channel_id = "new_orders_critical"
+            channel_id = RESTAURANT_NOTIFICATION_CHANNEL_ID
             data = {
                 "type": "restaurant_new_order",
                 "orderId": order_id,
@@ -498,34 +500,35 @@ class NotificationService:
                 "status": "CONFIRMED",
                 "createdAt": created_at or now_ist_iso(),
                 "channelId": channel_id,
+                "sound": RESTAURANT_NOTIFICATION_SOUND,
                 "title": title_text,
                 "body": body_text
             }
 
-            # Notification block alongside data: Play Services renders the
-            # high-importance system notification (with sound) even when the
-            # app process is dead or stopped by an OEM task killer, removing
-            # the dependency on the foreground OrderPollingService being alive
-            # for the ring path. Data block is preserved so the in-app handler
-            # can still refresh the orders list and launch OrderAlarmActivity
-            # when the process is alive.
+            # Android receives a high-priority data message so
+            # YumDudeMessagingService is invoked in the background and can wake
+            # the native OrderPollingService. That service owns the ntfy-style
+            # looping alarm. iOS still receives a visible APNS alert.
             message = messaging.Message(
                 token=fcm_token,
                 data=data,
-                notification=messaging.Notification(title=title_text, body=body_text),
                 android=messaging.AndroidConfig(
                     priority="high",
                     ttl=timedelta(seconds=900),
-                    collapse_key=order_id,
-                    notification=messaging.AndroidNotification(
-                        title=title_text,
-                        body=body_text,
-                        channel_id=channel_id,
-                        sound="telephone_ring",
-                        icon="ic_launcher",
-                        priority="max",
-                        visibility="public",
-                        default_vibrate_timings=True
+                    collapse_key=order_id
+                ),
+                apns=messaging.APNSConfig(
+                    headers={
+                        "apns-priority": "10",
+                        "apns-push-type": "alert",
+                    },
+                    payload=messaging.APNSPayload(
+                        aps=messaging.Aps(
+                            alert=messaging.ApsAlert(title=title_text, body=body_text),
+                            sound="default",
+                            badge=1,
+                            mutable_content=True,
+                        )
                     )
                 )
             )
