@@ -133,17 +133,17 @@ def compute_revenue(order) -> Tuple[dict, list]:
         except (TypeError, ValueError):
             quantity = 1
         customer_price = _safe_float(item.get("price"))
-        gross_price = _safe_float(item.get("grossPrice"))
         add_on_total = _safe_float(item.get("addOnTotal"))
         stored_discount_amount = max(_safe_float(item.get("itemDiscountAmount")), 0.0)
         restaurant_price = _safe_float(item.get("restaurantPrice"))
+        gross_price = _get_gross_item_price(item, customer_price, stored_discount_amount)
         item_discount_amount = round(max(gross_price - customer_price, 0.0), 2)
         coupon_issued_by = _normalize_coupon_issuer(item.get("couponIssuedBy"))
         item_restaurant_owed = restaurant_price if restaurant_price > 0 else gross_price
         total_items_restaurant_price += item_restaurant_owed * quantity
 
         commission_pct = _resolve_commission_pct(item_id, restaurant_config, global_default_commission)
-        commission_base = gross_price
+        commission_base = customer_price if coupon_issued_by == "YUMDUDE" else gross_price
         item_commission_per_unit = round(commission_base * commission_pct / 100.0, 4)
         item_commission = item_commission_per_unit * quantity
 
