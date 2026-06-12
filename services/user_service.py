@@ -202,6 +202,11 @@ class UserService:
             expression_attribute_names['#upiId'] = 'upiId'
             expression_attribute_values[':upiId'] = {'S': updates['upiId']}
 
+        if 'referralCode' in updates:
+            update_expressions.append('#referralCode = :referralCode')
+            expression_attribute_names['#referralCode'] = 'referralCode'
+            expression_attribute_values[':referralCode'] = {'S': updates['referralCode']}
+
         if not update_expressions and not remove_expressions:
             return UserService.get_user_by_role(phone, role)
 
