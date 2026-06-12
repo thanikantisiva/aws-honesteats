@@ -46,6 +46,43 @@ def _fetch_wallet_conversion_rate() -> float:
     return DEFAULT_CONVERSION_RATE
 
 
+def _fetch_redemption_config() -> dict:
+    """Read coin-redemption settings from CONFIG#GLOBAL.config.walletConfig.
+
+    Returns a dict with redemption-OFF defaults so a missing/partial config can
+    never let coins be spent unexpectedly:
+      {enabled, rate, maxCoinsPerOrder, maxRedemptionsPerDay, minOrderValue}
+    """
+    cfg = {
+        "enabled": False,
+        "rate": DEFAULT_CONVERSION_RATE,
+        "maxCoinsPerOrder": 0,
+        "maxRedemptionsPerDay": 0,
+        "minOrderValue": 0.0,
+    }
+    try:
+        response = dynamodb_client.get_item(
+            TableName=TABLES["CONFIG"],
+            Key={"partitionkey": {"S": CONFIG_PK}, "sortKey": {"S": CONFIG_SK}},
+        )
+        item = response.get("Item")
+        if not item:
+            return cfg
+        config = dynamodb_to_python(item.get("config", {"NULL": True}))
+        wallet_cfg = config.get("walletConfig") if isinstance(config, dict) else None
+        if not isinstance(wallet_cfg, dict):
+            return cfg
+        rate = float(wallet_cfg.get("yumConversionRate", DEFAULT_CONVERSION_RATE) or DEFAULT_CONVERSION_RATE)
+        cfg["rate"] = rate if rate > 0 else DEFAULT_CONVERSION_RATE
+        cfg["enabled"] = bool(wallet_cfg.get("redemptionEnabled", False))
+        cfg["maxCoinsPerOrder"] = int(float(wallet_cfg.get("maxCoinsPerOrder", 0) or 0))
+        cfg["maxRedemptionsPerDay"] = int(float(wallet_cfg.get("maxRedemptionsPerDay", 0) or 0))
+        cfg["minOrderValue"] = float(wallet_cfg.get("minOrderValueToRedeem", 0) or 0)
+    except Exception as e:
+        logger.warning(f"Failed to fetch redemption config: {e}")
+    return cfg
+
+
 class WalletService:
     """Customer YumCoins wallet operations."""
 
