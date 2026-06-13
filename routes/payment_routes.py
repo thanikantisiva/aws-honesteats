@@ -170,16 +170,6 @@ def _apply_payment_failed_updates(
         updates['razorpayPaymentId'] = razorpay_payment_id
     PaymentService.update_payment(payment.payment_id, updates)
 
-    # Return any redeemed YumCoins (and free the daily slot) for the failed order.
-    try:
-        if payment.order_id:
-            order = OrderService.get_order(payment.order_id)
-            if order and getattr(order, 'coins_spent', 0):
-                from services.redemption_service import RedemptionService
-                RedemptionService.reverse(order.customer_phone, order.order_id, order.coins_spent)
-    except Exception as e:
-        logger.warning(f"[paymentId={payment.payment_id}] coin reversal on payment failure failed: {e}")
-
 
 def register_payment_routes(app):
     """Register payment routes"""
@@ -410,28 +400,6 @@ def register_payment_routes(app):
                     f"pickupToken={pickup_token}"
                 )
 
-            # ── YumCoins redemption (server-authoritative) ───────────────────
-            # The client sends the PRE-coin `amount`; the server validates the
-            # caps, debits the coins, and charges `charged_amount`. The order
-            # keeps its gross food_total (restaurant settles on full food); the
-            # coin discount is a platform-funded line (see revenue_service.py).
-            # Skipped for theater/pickup (coupons are likewise blocked there).
-            coins_spent = 0
-            coin_discount = 0.0
-            if not is_pickup and customer_phone:
-                try:
-                    from services.redemption_service import RedemptionService
-                    redeem = RedemptionService.commit(
-                        customer_phone, order_id, body.get('coinsToRedeem', 0), round(total_customer_amount, 2)
-                    )
-                    coins_spent = int(redeem.get('coinsApplied', 0) or 0)
-                    coin_discount = float(redeem.get('coinDiscount', 0.0) or 0.0)
-                    if coins_spent:
-                        logger.info(f"[orderId={order_id}] Redeemed {coins_spent} coins (₹{coin_discount} off food)")
-                except Exception as coin_err:
-                    logger.error(f"[orderId={order_id}] Coin redemption failed (non-fatal): {coin_err}", exc_info=True)
-            charged_amount = round(max(0.0, amount - coin_discount), 2)
-
             # Create Order in DB with INITIATED status (revenue is computed later by revenue_calculator Lambda)
             order = Order(
                 order_id=order_id,
@@ -442,9 +410,7 @@ def register_payment_routes(app):
                 food_total=round(total_customer_amount, 2),
                 delivery_fee=delivery_fee,
                 platform_fee=platform_fee,
-                grand_total=charged_amount,
-                coins_spent=coins_spent,
-                coin_discount=coin_discount,
+                grand_total=amount,
                 status=Order.STATUS_INITIATED,
                 restaurant_name=restaurant_name,
                 restaurant_image=restaurant_image,
@@ -471,7 +437,7 @@ def register_payment_routes(app):
                     customer_phone=customer_phone,
                     restaurant_id=restaurant_id,
                     restaurant_name=restaurant_name,
-                    amount=charged_amount,
+                    amount=amount,
                     razorpay_order_id=None,
                     payment_status=Payment.STATUS_INITIATED,
                     order_id=order_id,
@@ -491,7 +457,7 @@ def register_payment_routes(app):
                 )
                 metrics.add_metric(name="PaymentInitiated", unit="Count", value=1)
                 metrics.add_metric(name="OrderConfirmed", unit="Count", value=1)
-                amount_paise = max(1, int(round(charged_amount * 100)))
+                amount_paise = max(1, int(round(amount * 100)))
                 return {
                     'paymentId': payment_id,
                     'orderId': order_id,
@@ -503,7 +469,7 @@ def register_payment_routes(app):
 
             # STANDARD: Razorpay order + in-app checkout
             razorpay_order = PaymentService.create_razorpay_order(
-                amount_in_rupees=charged_amount,
+                amount_in_rupees=amount,
                 receipt_id=payment_id,
                 customer_phone=customer_phone,
                 notes={
@@ -518,7 +484,7 @@ def register_payment_routes(app):
                 customer_phone=customer_phone,
                 restaurant_id=restaurant_id,
                 restaurant_name=restaurant_name,
-                amount=charged_amount,
+                amount=amount,
                 razorpay_order_id=razorpay_order['id'],
                 payment_status=Payment.STATUS_INITIATED,
                 order_id=order_id,
@@ -543,17 +509,8 @@ def register_payment_routes(app):
             
         except Exception as e:
             logger.error("Error initiating payment", exc_info=True)
-            # If coins were already debited before the failure, return them so a
-            # failed/abandoned initiate never silently eats the customer's coins.
-            try:
-                _cs = locals().get('coins_spent', 0)
-                if _cs:
-                    from services.redemption_service import RedemptionService
-                    RedemptionService.reverse(locals().get('customer_phone'), locals().get('order_id'), _cs)
-            except Exception:
-                logger.error("Coin reversal after initiate-payment failure also failed", exc_info=True)
             return {"error": "Failed to initiate payment", "message": str(e)}, 500
-
+    
     @app.post("/api/v1/payments/verify")
     @tracer.capture_method
     def verify_payment():
@@ -1030,19 +987,6 @@ def register_payment_routes(app):
                                 # via OrderService when transitioning to CANCELLED on a PICKUP order.
                                 OrderService.update_order_status(payment.order_id, Order.STATUS_CANCELLED, None)
                                 logger.info(f"✅ Order {payment.order_id} marked as CANCELLED")
-
-                                # Return any redeemed YumCoins for the cancelled order.
-                                try:
-                                    refunded_order = OrderService.get_order(payment.order_id)
-                                    if refunded_order and getattr(refunded_order, 'coins_spent', 0):
-                                        from services.redemption_service import RedemptionService
-                                        RedemptionService.reverse(
-                                            refunded_order.customer_phone,
-                                            refunded_order.order_id,
-                                            refunded_order.coins_spent,
-                                        )
-                                except Exception as cre:
-                                    logger.warning(f"[orderId={payment.order_id}] coin reversal on refund failed: {cre}")
                         else:
                             logger.warning(
                                 f"Payment not found for refund webhook: "

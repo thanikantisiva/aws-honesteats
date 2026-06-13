@@ -451,7 +451,6 @@ Resources:
                 - !Sub '${PaymentsTable.Arn}/index/orderId-index'
                 - !Sub '${RiderEarningsTable.Arn}/index/riderId-date-index'
                 - !Sub '${RestaurantEarningsTable.Arn}/index/restaurantId-date-index'
-                - !GetAtt WalletTable.Arn
             - Effect: Allow
               Action:
                 - s3:PutObject
@@ -498,7 +497,6 @@ Resources:
           CONFIG_TABLE_NAME: !Ref ConfigTable
           OTP_TABLE_NAME: !Ref OTPStorageTable
           RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
-          WALLET_TABLE_NAME: !Ref WalletTable
           RIDER_DOCUMENTS_BUCKET: !Ref RiderDocumentsBucket
           RESTAURANT_IMAGES_BUCKET: !Ref RestaurantImagesBucket
           IMAGE_CDN_BASE_URL: !Sub "https://${ImageCdnDistribution.DomainName}"
@@ -1685,25 +1683,6 @@ Resources:
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-
-  WalletTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub 'food-delivery-wallet-${Environment}'
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: walletId
-          AttributeType: S
-        - AttributeName: entryKey
-          AttributeType: S
-      KeySchema:
-        - AttributeName: walletId
-          KeyType: HASH
-        - AttributeName: entryKey
-          KeyType: RANGE
       Tags:
         - Key: Environment
           Value: !Ref Environment

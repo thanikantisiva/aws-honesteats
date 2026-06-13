@@ -25,10 +25,6 @@ class User:
         lat: Optional[float] = None,
         lng: Optional[float] = None,
         geohash: Optional[str] = None,
-        # Refer-and-earn (customer) fields
-        referral_code: Optional[str] = None,
-        referred_by_code: Optional[str] = None,
-        referred_by_phone: Optional[str] = None,
         # Rider-specific fields (only when role="RIDER")
         rider_id: Optional[str] = None,
         first_name: Optional[str] = None,
@@ -57,12 +53,7 @@ class User:
         self.lat = lat
         self.lng = lng
         self.geohash = geohash
-
-        # Refer-and-earn (customer) fields
-        self.referral_code = referral_code
-        self.referred_by_code = referred_by_code
-        self.referred_by_phone = referred_by_phone
-
+        
         # Rider-specific fields
         self.rider_id = rider_id
         self.first_name = first_name
@@ -105,15 +96,7 @@ class User:
             result["lng"] = self.lng
         if self.geohash:
             result["geohash"] = self.geohash
-
-        # Refer-and-earn fields
-        if self.referral_code:
-            result["referralCode"] = self.referral_code
-        if self.referred_by_code:
-            result["referredByCode"] = self.referred_by_code
-        if self.referred_by_phone:
-            result["referredByPhone"] = self.referred_by_phone
-
+        
         # Rider fields
         if self.rider_id:
             result["riderId"] = self.rider_id
@@ -162,10 +145,6 @@ class User:
             lat=float(item.get("lat", {}).get("N")) if "lat" in item else None,
             lng=float(item.get("lng", {}).get("N")) if "lng" in item else None,
             geohash=item.get("geohash", {}).get("S") if "geohash" in item else None,
-            # Refer-and-earn fields
-            referral_code=item.get("referralCode", {}).get("S") if "referralCode" in item else None,
-            referred_by_code=item.get("referredByCode", {}).get("S") if "referredByCode" in item else None,
-            referred_by_phone=item.get("referredByPhone", {}).get("S") if "referredByPhone" in item else None,
             # Rider fields
             rider_id=item.get("riderId", {}).get("S") if "riderId" in item else None,
             first_name=item.get("firstName", {}).get("S") if "firstName" in item else None,
@@ -209,15 +188,7 @@ class User:
             item["lng"] = {"N": str(self.lng)}
         if self.geohash:
             item["geohash"] = {"S": self.geohash}
-
-        # Refer-and-earn fields
-        if self.referral_code:
-            item["referralCode"] = {"S": self.referral_code}
-        if self.referred_by_code:
-            item["referredByCode"] = {"S": self.referred_by_code}
-        if self.referred_by_phone:
-            item["referredByPhone"] = {"S": self.referred_by_phone}
-
+        
         # Rider fields
         if self.rider_id:
             item["riderId"] = {"S": self.rider_id}

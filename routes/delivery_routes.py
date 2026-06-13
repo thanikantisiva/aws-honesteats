@@ -599,27 +599,6 @@ def register_delivery_routes(app):
             if mobile_number:
                 result['mobileNumber'] = mobile_number
 
-            # YumCoins redemption preview (informational; authoritatively
-            # re-applied at checkout). Reduces the FOOD value the customer pays.
-            try:
-                coins_to_redeem = body.get('coinsToRedeem', 0)
-                if coins_to_redeem and mobile_number:
-                    from services.redemption_service import RedemptionService
-                    rq = RedemptionService.quote(mobile_number, coins_to_redeem, item_total)
-                    coin_discount = float(rq.get('coinDiscount', 0.0) or 0.0)
-                    result['coinsRedeemed'] = rq.get('coinsApplied', 0)
-                    result['coinDiscount'] = coin_discount
-                    result['coinConversionRate'] = rq.get('rate')
-                    if rq.get('reason'):
-                        result['coinRejectedReason'] = rq.get('reason')
-                    result['breakdown']['coinDiscount'] = round(coin_discount, 2)
-                    result['breakdown']['totalDiscount'] = round(
-                        result['breakdown'].get('totalDiscount', 0) + coin_discount, 2
-                    )
-                    result['breakdown']['discount'] = result['breakdown']['totalDiscount']
-            except Exception as coin_err:
-                logger.warning(f"Coin redemption preview failed: {coin_err}")
-
             logger.info(
                 "Delivery fee calculation completed: "
                 f"deliveryFee={result['deliveryFee']}, platformFee={result['platformFee']}, "

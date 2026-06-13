@@ -122,9 +122,6 @@ class Order:
         adjustments: Optional[List[Dict[str, Any]]] = None,
         was_adjusted: bool = False,
         internal_status: Optional[str] = None,
-        # YumCoins redemption (platform-funded discount on food)
-        coins_spent: int = 0,
-        coin_discount: float = 0.0,
     ):
         self.order_id = order_id
         self.customer_phone = customer_phone
@@ -183,9 +180,6 @@ class Order:
         self.adjustments = adjustments or []
         self.was_adjusted = bool(was_adjusted)
         self.internal_status = internal_status
-        # YumCoins redemption
-        self.coins_spent = int(coins_spent or 0)
-        self.coin_discount = float(coin_discount or 0.0)
         # Store as IST ISO string; support int (legacy) for backward compatibility
         self.created_at = created_at if created_at is not None else now_ist_iso()
 
@@ -303,10 +297,6 @@ class Order:
             result["wasAdjusted"] = True
         if self.internal_status:
             result["internalStatus"] = self.internal_status
-        if self.coins_spent:
-            result["coinsSpent"] = self.coins_spent
-        if self.coin_discount:
-            result["coinDiscount"] = self.coin_discount
         return result
 
     def _infer_amount_due_at_delivery(self) -> float:
@@ -402,8 +392,6 @@ class Order:
             adjustments=dynamodb_to_python(item["adjustments"]) if "adjustments" in item and "L" in item["adjustments"] else [],
             was_adjusted=bool(item.get("wasAdjusted", {}).get("BOOL", False)) if "wasAdjusted" in item else False,
             internal_status=item.get("internalStatus", {}).get("S") if "internalStatus" in item else None,
-            coins_spent=int(item["coinsSpent"]["N"]) if "coinsSpent" in item else 0,
-            coin_discount=float(item["coinDiscount"]["N"]) if "coinDiscount" in item else 0.0,
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -519,8 +507,4 @@ class Order:
             item["wasAdjusted"] = {"BOOL": True}
         if self.internal_status:
             item["internalStatus"] = {"S": self.internal_status}
-        if self.coins_spent:
-            item["coinsSpent"] = {"N": str(self.coins_spent)}
-        if self.coin_discount:
-            item["coinDiscount"] = {"N": str(self.coin_discount)}
         return item

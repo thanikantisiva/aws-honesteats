@@ -30,7 +30,6 @@ TABLES = {
     or _default_table('food-delivery-restaurant-earnings'),
     'RESTAURANT_LOGIN': os.environ.get('RESTAURANT_LOGIN_TABLE_NAME') or _default_table('food-delivery-login'),
     'CONFIG': os.environ.get('CONFIG_TABLE_NAME') or _default_table('food-delivery-config'),
-    'WALLET': os.environ.get('WALLET_TABLE_NAME') or _default_table('food-delivery-wallet'),
 }
 
 
