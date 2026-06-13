@@ -4,6 +4,7 @@ from services.coupon_service import CouponService
 from services.menu_service import MenuService
 from utils import normalize_phone
 from utils.dynamodb import dynamodb_client, TABLES
+from utils.dynamodb_helpers import dynamodb_to_python
 
 logger = Logger()
 tracer = Tracer()
@@ -77,6 +78,110 @@ def register_coupon_routes(app):
         if not normalized:
             return [], True, ({"error": "targetCustomerPhones must include at least one phone when provided"}, 400)
         return normalized, True, None
+
+    def _scan_all(scan_kwargs: dict):
+        items = []
+        while True:
+            resp = dynamodb_client.scan(**scan_kwargs)
+            items.extend(resp.get('Items', []))
+            last_key = resp.get('LastEvaluatedKey')
+            if not last_key:
+                return items
+            scan_kwargs['ExclusiveStartKey'] = last_key
+
+    def _coupon_code_from_item(item: dict) -> str:
+        raw_pk = item.get('partitionkey', {}).get('S', '')
+        return raw_pk[len('COUPON#'):] if raw_pk.startswith('COUPON#') else ''
+
+    def _coupon_from_item(item: dict, usage_counts=None):
+        coupon_code = _coupon_code_from_item(item)
+        if not coupon_code:
+            return None
+
+        coupon_value_raw = item.get('couponValue', {}).get('N')
+        try:
+            coupon_value = float(coupon_value_raw) if coupon_value_raw is not None else 0
+        except (TypeError, ValueError):
+            coupon_value = 0
+
+        target_customer_phones = item.get('targetCustomerPhones', {}).get('SS', [])
+        coupon = {
+            'couponCode': coupon_code,
+            'couponType': str(item.get('couponType', {}).get('S') or '').strip().lower(),
+            'couponValue': coupon_value,
+            'isOncePerUser': bool(item.get('isOncePerUser', {}).get('BOOL', False)),
+            'isOncePerDay': bool(item.get('isOncePerDay', {}).get('BOOL', False)),
+            'couponTarget': str(item.get('couponTarget', {}).get('S') or 'delivery').strip().lower(),
+            'uses': int((usage_counts or {}).get(coupon_code, 0)),
+            'targetCustomerCount': len(target_customer_phones),
+        }
+
+        optional_string_fields = (
+            'startDate',
+            'endDate',
+            'issuedBy',
+            'couponRestaurant',
+            'couponItem',
+            'description',
+        )
+        for field in optional_string_fields:
+            value = str(item.get(field, {}).get('S') or '').strip()
+            if value:
+                coupon[field] = value
+
+        min_order_value_raw = item.get('minOrderValue', {}).get('N')
+        if min_order_value_raw is not None:
+            try:
+                coupon['minOrderValue'] = float(min_order_value_raw)
+            except (TypeError, ValueError):
+                pass
+        if target_customer_phones:
+            coupon['targetCustomerPhones'] = target_customer_phones
+        return coupon
+
+    def _coupon_usage_counts() -> dict:
+        counts: dict[str, int] = {}
+        orders = _scan_all({
+            'TableName': TABLES['ORDERS'],
+            'ProjectionExpression': '#rev, couponCode',
+            'ExpressionAttributeNames': {'#rev': 'revenue'},
+        })
+        for order in orders:
+            code = ''
+            if 'revenue' in order:
+                revenue = dynamodb_to_python(order.get('revenue'))
+                if isinstance(revenue, dict) and revenue.get('couponApplied'):
+                    code = str(revenue.get('couponCode') or '').strip()
+            if not code:
+                code = str(order.get('couponCode', {}).get('S') or '').strip()
+            if code:
+                counts[code] = counts.get(code, 0) + 1
+        return counts
+
+    @app.get("/api/v1/coupons")
+    @tracer.capture_method
+    def list_coupons():
+        """Return the admin coupon inventory with scope fields and total usage counts."""
+        try:
+            all_items = _scan_all({
+                'TableName': TABLES['CONFIG'],
+                'FilterExpression': 'begins_with(partitionkey, :prefix) AND sortKey = :sk',
+                'ExpressionAttributeValues': {
+                    ':prefix': {'S': 'COUPON#'},
+                    ':sk': {'S': 'DETAILS'},
+                },
+            })
+            usage_counts = _coupon_usage_counts()
+            coupons = [
+                coupon for coupon in
+                (_coupon_from_item(item, usage_counts) for item in all_items)
+                if coupon is not None
+            ]
+            coupons.sort(key=lambda c: c.get('couponCode', ''))
+            return {'coupons': coupons}, 200
+        except Exception as e:
+            logger.error("Error listing coupons", exc_info=True)
+            return {'error': 'Failed to list coupons', 'message': str(e)}, 500
 
     @app.post("/api/v1/coupons")
     @tracer.capture_method
@@ -383,6 +488,8 @@ def register_coupon_routes(app):
                     entry['minOrderValue'] = min_order_value
                 if issued_by:
                     entry['issuedBy'] = issued_by
+                if coupon_restaurant:
+                    entry['couponRestaurant'] = coupon_restaurant
                 if end_date:
                     entry['endDate'] = end_date
                 if description:

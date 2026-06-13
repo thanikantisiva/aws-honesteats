@@ -626,3 +626,47 @@ class EarningsService:
             return updated_order_ids
         except ClientError as e:
             raise Exception(f"Failed to settle earnings: {str(e)}")
+
+    @staticmethod
+    def settle_cod_for_orders(
+        rider_id: str,
+        order_ids: List[str],
+        start_date: str,
+        end_date: str,
+        settlement_id: str,
+    ) -> List[str]:
+        """Mark COD cash-collected rows as returned/settled for matching orders."""
+        try:
+            earnings_list = EarningsService.get_earnings_for_date_range(
+                rider_id, start_date, end_date
+            )
+
+            settled_at = datetime.utcnow().isoformat()
+            updated_order_ids: List[str] = []
+
+            for earning in earnings_list:
+                if not earning.order_id:
+                    continue
+                if earning.order_id not in order_ids:
+                    continue
+                if not _is_cod_row(earning):
+                    continue
+
+                dynamodb_client.update_item(
+                    TableName=TABLES["EARNINGS"],
+                    Key={
+                        "riderId": {"S": rider_id},
+                        "date": {"S": earning.date},
+                    },
+                    UpdateExpression="SET settled = :settled, settledAt = :settledAt, settlementId = :settlementId",
+                    ExpressionAttributeValues={
+                        ":settled": {"BOOL": True},
+                        ":settledAt": {"S": settled_at},
+                        ":settlementId": {"S": settlement_id},
+                    },
+                )
+                updated_order_ids.append(earning.order_id)
+
+            return updated_order_ids
+        except ClientError as e:
+            raise Exception(f"Failed to settle COD cash: {str(e)}")

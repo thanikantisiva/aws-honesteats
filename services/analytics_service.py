@@ -470,7 +470,6 @@ def _build_metrics(
         daypart_key = _daypart_for_hour(hour)[0]
         daypart = daypart_agg[daypart_key]
         daypart["orders"] += 1
-        daypart["_hourly"][hour] = daypart["_hourly"].get(hour, 0) + 1
 
         rest_id = o.get("restaurantId") or "UNKNOWN"
         ra = restaurant_agg.setdefault(
@@ -537,6 +536,7 @@ def _build_metrics(
             ra["gmv"] += order_gmv
             daypart["delivered"] += 1
             daypart["deliveredGmv"] += order_gmv
+            daypart["_hourly"][hour] = daypart["_hourly"].get(hour, 0) + 1
         if is_cancelled:
             cancelled += 1
             cancelled_gmv += order_gmv
