@@ -25,6 +25,9 @@ class User:
         lat: Optional[float] = None,
         lng: Optional[float] = None,
         geohash: Optional[str] = None,
+        # Customer COD controls (risk-control flags set by admin tooling)
+        disable_cod: bool = False,
+        force_cod: bool = False,
         # Rider-specific fields (only when role="RIDER")
         rider_id: Optional[str] = None,
         first_name: Optional[str] = None,
@@ -53,7 +56,9 @@ class User:
         self.lat = lat
         self.lng = lng
         self.geohash = geohash
-        
+        self.disable_cod = disable_cod
+        self.force_cod = force_cod
+
         # Rider-specific fields
         self.rider_id = rider_id
         self.first_name = first_name
@@ -96,7 +101,11 @@ class User:
             result["lng"] = self.lng
         if self.geohash:
             result["geohash"] = self.geohash
-        
+        if self.disable_cod:
+            result["disableCod"] = True
+        if self.force_cod:
+            result["forceCod"] = True
+
         # Rider fields
         if self.rider_id:
             result["riderId"] = self.rider_id
@@ -145,6 +154,8 @@ class User:
             lat=float(item.get("lat", {}).get("N")) if "lat" in item else None,
             lng=float(item.get("lng", {}).get("N")) if "lng" in item else None,
             geohash=item.get("geohash", {}).get("S") if "geohash" in item else None,
+            disable_cod=item.get("disableCod", {}).get("BOOL", False) if "disableCod" in item else False,
+            force_cod=item.get("forceCod", {}).get("BOOL", False) if "forceCod" in item else False,
             # Rider fields
             rider_id=item.get("riderId", {}).get("S") if "riderId" in item else None,
             first_name=item.get("firstName", {}).get("S") if "firstName" in item else None,
@@ -188,7 +199,11 @@ class User:
             item["lng"] = {"N": str(self.lng)}
         if self.geohash:
             item["geohash"] = {"S": self.geohash}
-        
+        if self.disable_cod:
+            item["disableCod"] = {"BOOL": True}
+        if self.force_cod:
+            item["forceCod"] = {"BOOL": True}
+
         # Rider fields
         if self.rider_id:
             item["riderId"] = {"S": self.rider_id}

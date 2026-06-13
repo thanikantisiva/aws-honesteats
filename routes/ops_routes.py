@@ -15,10 +15,21 @@ from services.order_adjustment_service import (
     OrderAdjustmentService,
     OrderAdjustmentError,
 )
+from services.user_service import UserService
+from utils import normalize_phone
 
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+
+
+def _coerce_bool(value) -> bool:
+    """Coerce JSON / admin-tool values to a real bool (handles "false" strings)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "on"}
+    return bool(value)
 
 
 def register_ops_routes(app):
@@ -114,3 +125,59 @@ def register_ops_routes(app):
                 f"[paymentId={payment_id}] Ops mark-refunded failed", exc_info=True
             )
             return {"error": "MarkRefundedFailed", "message": str(e)}, 500
+
+    @app.post("/api/v1/ops/users/<phone>/cod-toggles")
+    @tracer.capture_method
+    def set_user_cod_toggles(phone: str):
+        """Set a customer's COD risk-control flags (disableCod / forceCod).
+
+        Admin-only: gated by the ADMIN_API_KEY in the app.py auth middleware
+        (the `/api/v1/ops` prefix). These flags must never be settable by the
+        customer themselves — forceCod would let a customer bypass COD limits.
+
+        Body:
+          - disableCod: optional bool — deny COD for this customer
+          - forceCod:   optional bool — always allow COD for this customer
+                        (wins over disableCod and all global rules)
+          - opsUser:    identifier of the ops user (audit)
+
+        At least one of disableCod / forceCod must be present.
+        """
+        try:
+            normalized = normalize_phone(phone)
+            if not normalized:
+                return {"error": "Invalid phone number"}, 400
+
+            body = app.current_event.json_body or {}
+            ops_user = body.get("opsUser") or ""
+
+            updates = {}
+            if "disableCod" in body:
+                updates["disableCod"] = _coerce_bool(body.get("disableCod"))
+            if "forceCod" in body:
+                updates["forceCod"] = _coerce_bool(body.get("forceCod"))
+
+            if not updates:
+                return {
+                    "error": "At least one of disableCod or forceCod is required"
+                }, 400
+
+            # 404 on a missing customer — update_user would otherwise upsert a
+            # phantom CUSTOMER row from these toggle-only updates.
+            existing = UserService.get_user_by_role(normalized, "CUSTOMER")
+            if not existing:
+                return {"error": "Customer not found"}, 404
+
+            logger.info(
+                f"[phone={normalized[:5]}***] Ops set COD toggles "
+                f"opsUser={ops_user} updates={updates}"
+            )
+
+            updated_user = UserService.update_user(normalized, "CUSTOMER", updates)
+            metrics.add_metric(name="OpsCodTogglesUpdated", unit="Count", value=1)
+            return updated_user.to_dict(), 200
+        except Exception as e:
+            logger.error(
+                f"[phone={phone}] Ops set COD toggles failed", exc_info=True
+            )
+            return {"error": "SetCodTogglesFailed", "message": str(e)}, 500

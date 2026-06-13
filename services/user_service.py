@@ -148,6 +148,16 @@ class UserService:
             expression_attribute_names['#isActive'] = 'isActive'
             expression_attribute_values[':isActive'] = {'BOOL': updates['isActive']}
 
+        if 'disableCod' in updates:
+            update_expressions.append('#disableCod = :disableCod')
+            expression_attribute_names['#disableCod'] = 'disableCod'
+            expression_attribute_values[':disableCod'] = {'BOOL': bool(updates['disableCod'])}
+
+        if 'forceCod' in updates:
+            update_expressions.append('#forceCod = :forceCod')
+            expression_attribute_names['#forceCod'] = 'forceCod'
+            expression_attribute_values[':forceCod'] = {'BOOL': bool(updates['forceCod'])}
+
         if 'dateOfBirth' in updates:
             update_expressions.append('#dateOfBirth = :dateOfBirth')
             expression_attribute_names['#dateOfBirth'] = 'dateOfBirth'
