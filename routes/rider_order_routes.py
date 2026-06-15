@@ -5,6 +5,7 @@ from services.order_assignment_service import OrderAssignmentService
 from services.rider_service import RiderService
 from services.earnings_service import EarningsService
 from services.restaurant_earnings_service import RestaurantEarningsService
+from services.referral_service import ReferralService
 from services.restaurant_service import RestaurantService
 from services.notification_service import NotificationService
 from services.address_service import AddressService
@@ -606,7 +607,17 @@ def register_rider_order_routes(app):
                     restaurant_payout,
                     date_override=delivered_at.strftime('%Y-%m-%d'),
                 )
-            
+
+                # Order cashback (YumCoins) + refer-and-earn fulfilment. Mirrors
+                # the milestone-bonus guard: wallet/referral side effects MUST
+                # NEVER block delivery completion.
+                try:
+                    ReferralService.on_order_delivered(order)
+                except Exception as reward_err:
+                    logger.warning(
+                        f"[orderId={order_id}] Cashback/referral credit failed (non-fatal): {reward_err}"
+                    )
+
             # Update order status
             OrderService.update_order_status(order_id, new_status)
             

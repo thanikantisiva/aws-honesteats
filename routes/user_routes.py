@@ -2,6 +2,7 @@
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from services.address_service import AddressService
 from services.user_service import UserService
+from services.referral_service import ReferralService
 from utils import normalize_phone
 from utils.geohash import encode as geohash_encode
 from utils.datetime_ist import now_ist_iso
@@ -47,32 +48,89 @@ def register_user_routes(app):
             name = body.get('name', 'User')
             email = body.get('email')
             date_of_birth = body.get('dateOfBirth')
-            
+            reference_code = (body.get('referenceCode') or '').strip().upper() or None
+
             if not phone:
                 return {"error": "Phone number is required"}, 400
-            
+
             logger.info(f"Creating user: {phone}")
-            
+
             # Check if CUSTOMER role already exists (RIDER role is OK)
             existing_customer = UserService.get_user_by_role(phone, "CUSTOMER")
             if existing_customer:
                 return {"error": "User already exists"}, 409
-            
+
+            # Resolve the referral code to a referrer. Non-fatal: a bad/unknown
+            # code (or self-referral) must never block signup.
+            referred_by_phone = None
+            referred_by_code = None
+            if reference_code:
+                try:
+                    referrer = ReferralService.resolve_referrer(reference_code)
+                    if referrer and referrer != phone:
+                        referred_by_phone = referrer
+                        referred_by_code = reference_code
+                except Exception:
+                    logger.warning("referenceCode resolution failed (non-fatal)", exc_info=True)
+
+            # Mint this customer's own shareable referral code (non-fatal).
+            own_code = None
+            try:
+                own_code = ReferralService.mint_code_for(phone)
+            except Exception:
+                logger.warning("referral code minting failed (non-fatal)", exc_info=True)
+
             user = User(
                 phone=phone,
                 name=name,
                 email=email,
-                date_of_birth=date_of_birth
+                date_of_birth=date_of_birth,
+                referral_code=own_code,
+                referred_by_code=referred_by_code,
+                referred_by_phone=referred_by_phone,
             )
-            
+
             created_user = UserService.create_user(user)
             metrics.add_metric(name="UserCreated", unit="Count", value=1)
-            
+
+            # Refer-and-earn: reward both the referrer and the new user right
+            # away. Non-fatal — a wallet hiccup must not fail account creation.
+            if referred_by_phone:
+                try:
+                    ReferralService.credit_signup_referral(
+                        referrer_phone=referred_by_phone,
+                        referee_phone=phone,
+                    )
+                except Exception:
+                    logger.warning("signup referral credit failed (non-fatal)", exc_info=True)
+
             return created_user.to_dict(), 201
         except Exception as e:
             logger.error("Error creating user", exc_info=True)
             return {"error": "Failed to create user", "message": str(e)}, 500
-    
+
+    @app.get("/api/v1/users/<phone>/referral-code")
+    @tracer.capture_method
+    def get_referral_code(phone: str):
+        """Return the customer's shareable referral code, minting one on first call."""
+        try:
+            phone = normalize_phone(phone)
+            if not phone:
+                return {"error": "Phone number is required"}, 400
+
+            user = UserService.get_user_by_role(phone, "CUSTOMER")
+            if not user:
+                return {"error": "User not found"}, 404
+
+            code = ReferralService.ensure_code(user)
+            if not code:
+                return {"error": "Failed to generate referral code"}, 500
+
+            return {"phone": phone, "referralCode": code}, 200
+        except Exception as e:
+            logger.error("Error getting referral code", exc_info=True)
+            return {"error": "Failed to get referral code", "message": str(e)}, 500
+
     @app.put("/api/v1/users/<phone>")
     @tracer.capture_method
     def update_user(phone: str):

@@ -28,6 +28,10 @@ class User:
         # Customer COD controls (risk-control flags set by admin tooling)
         disable_cod: bool = False,
         force_cod: bool = False,
+        # Refer-and-earn (customer) fields
+        referral_code: Optional[str] = None,
+        referred_by_code: Optional[str] = None,
+        referred_by_phone: Optional[str] = None,
         # Rider-specific fields (only when role="RIDER")
         rider_id: Optional[str] = None,
         first_name: Optional[str] = None,
@@ -58,6 +62,11 @@ class User:
         self.geohash = geohash
         self.disable_cod = disable_cod
         self.force_cod = force_cod
+
+        # Refer-and-earn (customer) fields
+        self.referral_code = referral_code
+        self.referred_by_code = referred_by_code
+        self.referred_by_phone = referred_by_phone
 
         # Rider-specific fields
         self.rider_id = rider_id
@@ -105,6 +114,14 @@ class User:
             result["disableCod"] = True
         if self.force_cod:
             result["forceCod"] = True
+
+        # Refer-and-earn fields
+        if self.referral_code:
+            result["referralCode"] = self.referral_code
+        if self.referred_by_code:
+            result["referredByCode"] = self.referred_by_code
+        if self.referred_by_phone:
+            result["referredByPhone"] = self.referred_by_phone
 
         # Rider fields
         if self.rider_id:
@@ -156,6 +173,10 @@ class User:
             geohash=item.get("geohash", {}).get("S") if "geohash" in item else None,
             disable_cod=item.get("disableCod", {}).get("BOOL", False) if "disableCod" in item else False,
             force_cod=item.get("forceCod", {}).get("BOOL", False) if "forceCod" in item else False,
+            # Refer-and-earn fields
+            referral_code=item.get("referralCode", {}).get("S") if "referralCode" in item else None,
+            referred_by_code=item.get("referredByCode", {}).get("S") if "referredByCode" in item else None,
+            referred_by_phone=item.get("referredByPhone", {}).get("S") if "referredByPhone" in item else None,
             # Rider fields
             rider_id=item.get("riderId", {}).get("S") if "riderId" in item else None,
             first_name=item.get("firstName", {}).get("S") if "firstName" in item else None,
@@ -203,6 +224,14 @@ class User:
             item["disableCod"] = {"BOOL": True}
         if self.force_cod:
             item["forceCod"] = {"BOOL": True}
+
+        # Refer-and-earn fields
+        if self.referral_code:
+            item["referralCode"] = {"S": self.referral_code}
+        if self.referred_by_code:
+            item["referredByCode"] = {"S": self.referred_by_code}
+        if self.referred_by_phone:
+            item["referredByPhone"] = {"S": self.referred_by_phone}
 
         # Rider fields
         if self.rider_id:

@@ -245,6 +245,14 @@ def compute_revenue(order) -> Tuple[dict, list]:
             restaurant_settlement = round(restaurant_settlement - coupon_discount, 2)
             restaurant_revenue["couponDiscount"] = coupon_discount
 
+    # YumCoins redemption is always platform-funded: the customer paid less for
+    # food, but the restaurant still settles on the gross food value, so the
+    # platform absorbs the coin discount (same shape as a YUMDUDE coupon).
+    coin_discount_amt = _safe_float(getattr(order, "coin_discount", 0))
+    if coin_discount_amt > 0:
+        total_platform_revenue = round(total_platform_revenue - coin_discount_amt, 2)
+        platform_revenue["coinDiscount"] = round(coin_discount_amt, 2)
+
     if platform_item_coupon_discount > 0:
         platform_revenue["itemCouponDiscount"] = round(platform_item_coupon_discount, 2)
     if restaurant_item_coupon_discount > 0:
@@ -263,6 +271,7 @@ def compute_revenue(order) -> Tuple[dict, list]:
         - platform_revenue.get("riderDeliverySubsidy", 0)
         - platform_revenue.get("couponDiscount", 0)
         - platform_revenue.get("itemCouponDiscount", 0)
+        - platform_revenue.get("coinDiscount", 0)
         - long_distance_bonus,
         2,
     )
