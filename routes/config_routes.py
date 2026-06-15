@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.dynamodb_helpers import python_to_dynamodb, dynamodb_to_python
-from utils.datetime_ist import now_ist_iso
+from utils.datetime_ist import now_ist_iso, now_ist_strftime
 
 logger = Logger()
 tracer = Tracer()
@@ -70,6 +70,42 @@ def _normalize_home_hero_banner(banner: dict) -> dict:
     """Return a banner copy with defaults expected by the customer app."""
     normalized = dict(banner)
     normalized["mask"] = _coerce_bool(normalized.get("mask"), True)
+    return normalized
+
+
+def _is_active_in_date(config: dict, today: str) -> bool:
+    """Return true when a config object is active and inside its date window."""
+    if not isinstance(config, dict):
+        return False
+    is_active = _coerce_bool(config.get("isActive"), True)
+    starts_ok = not config.get("startDate") or config["startDate"] <= today
+    ends_ok = not config.get("endDate") or config["endDate"] >= today
+    return bool(is_active and starts_ok and ends_ok)
+
+
+def _normalize_daily_deal_popup(popup: dict) -> dict:
+    """Normalize popup and slide content types while preserving admin-authored content."""
+    normalized = dict(popup)
+    content_type = str(normalized.get("contentType") or "image").lower()
+    if content_type not in {"image", "html", "video"}:
+        content_type = "image"
+    normalized["contentType"] = content_type
+
+    slides = normalized.get("slides")
+    if isinstance(slides, list):
+        clean_slides = []
+        for index, slide in enumerate(slides):
+            if not isinstance(slide, dict):
+                continue
+            clean_slide = dict(slide)
+            slide_type = str(clean_slide.get("contentType") or content_type).lower()
+            if slide_type not in {"image", "html", "video"}:
+                slide_type = content_type
+            clean_slide["contentType"] = slide_type
+            clean_slide["id"] = str(clean_slide.get("id") or f"slide-{index + 1}")
+            clean_slides.append(clean_slide)
+        normalized["slides"] = clean_slides
+
     return normalized
 
 
@@ -324,6 +360,80 @@ def register_config_routes(app):
             return {"cards": sanitized}, 200
         except Exception as e:
             logger.error("Error fetching promo cards", exc_info=True)
+            return {"error": str(e)}, 500
+
+    @app.get("/api/v1/config/daily-deal-popup")
+    @tracer.capture_method
+    def get_daily_deal_popup():
+        """Return the active daily deal popup payload for the customer app."""
+        try:
+            query_params = app.current_event.query_string_parameters or {}
+            admin_mode = str(query_params.get("admin", "")).lower() == "true"
+
+            item = _fetch_config_item("POPUP#DAILY_DEAL", "ACTIVE")
+            if not item:
+                return {"popup": None}, 200
+
+            config = dynamodb_to_python(item.get("config", {"NULL": True}))
+            if isinstance(config, str):
+                try:
+                    config = json.loads(config)
+                except json.JSONDecodeError:
+                    config = {}
+            if not isinstance(config, dict):
+                return {"popup": None}, 200
+
+            popup = _normalize_daily_deal_popup(config)
+            popup["id"] = str(popup.get("id") or now_ist_strftime("%Y-%m-%d"))
+
+            if admin_mode:
+                return {"popup": popup}, 200
+
+            today = now_ist_strftime("%Y-%m-%d")
+            if not _is_active_in_date(config, today):
+                return {"popup": None}, 200
+
+            return {"popup": popup}, 200
+        except Exception as e:
+            logger.error("Error fetching daily deal popup", exc_info=True)
+            return {"error": str(e)}, 500
+
+    @app.post("/api/v1/config/daily-deal-popup")
+    @tracer.capture_method
+    def save_daily_deal_popup():
+        """Save/replace the daily deal popup payload."""
+        try:
+            import uuid as _uuid
+
+            body = app.current_event.json_body or {}
+            popup = body.get("popup") if isinstance(body.get("popup"), dict) else body
+            if not isinstance(popup, dict):
+                return {"error": "popup must be an object"}, 400
+
+            content_type = str(popup.get("contentType") or "image").lower()
+            if content_type not in {"image", "html", "video"}:
+                return {"error": "contentType must be image, html, or video"}, 400
+
+            normalized = _normalize_daily_deal_popup(popup)
+            normalized["id"] = str(normalized.get("id") or _uuid.uuid4().hex[:8])
+            normalized["isActive"] = _coerce_bool(normalized.get("isActive"), True)
+
+            item = {
+                "partitionkey": {"S": "POPUP#DAILY_DEAL"},
+                "sortKey": {"S": "ACTIVE"},
+                "config": python_to_dynamodb(normalized),
+                "updatedAt": {"S": now_ist_iso()}
+            }
+
+            dynamodb_client.put_item(
+                TableName=TABLES["CONFIG"],
+                Item=item
+            )
+
+            metrics.add_metric(name="DailyDealPopupSaved", unit="Count", value=1)
+            return {"message": "Daily deal popup saved", "popup": normalized}, 200
+        except Exception as e:
+            logger.error("Error saving daily deal popup", exc_info=True)
             return {"error": str(e)}, 500
 
     @app.get("/api/v1/config/theatre-show-timings")
