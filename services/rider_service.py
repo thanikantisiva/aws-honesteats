@@ -19,6 +19,11 @@ RIDER_LAST_SEEN_STALE_SECONDS = 90
 # to neighbouring regions whose 2-char prefix differs, each region keeps its own partition.
 GSI3_GEOHASH_PRECISION = 2
 
+# GSI3 partition value for the current deployment region. "td" is the 2-char geohash prefix
+# covering the operating area, so a single Query against it returns the whole fleet without a
+# table Scan. Overridable per-call when the deployment spans more than one region.
+DEFAULT_RIDER_GSI3_PARTITION = "td"
+
 logger = Logger()
 
 
@@ -316,6 +321,10 @@ class RiderService:
                     'lng = :lng',
                     'geohash = :geohash',
                     'GSI3PK = :gsi3pk', 'GSI3SK = :gsi3sk',
+                    # Stamp the login time only on the offline->online transition.
+                    # Heartbeats re-call this with isActive=True; if_not_exists keeps
+                    # the original session start so slot-compliance presence is accurate.
+                    'currentSessionStart = if_not_exists(currentSessionStart, :sessStart)',
                 ] + name_clauses
 
                 values = {
@@ -326,6 +335,7 @@ class RiderService:
                     ':geohash': {'S': geohash_p7},
                     ':gsi3pk': {'S': geohash_p2},
                     ':gsi3sk': {'S': f'RIDER#{rider_id}'},
+                    ':sessStart': {'S': timestamp},
                 }
                 values.update(name_values)
 
@@ -341,10 +351,15 @@ class RiderService:
             else:
                 # No location provided — split by direction to handle workingOnOrder correctly
                 if is_active:
-                    set_clauses = ['isActive = :active', 'lastSeen = :lastSeen'] + name_clauses
+                    set_clauses = [
+                        'isActive = :active',
+                        'lastSeen = :lastSeen',
+                        'currentSessionStart = if_not_exists(currentSessionStart, :sessStart)',
+                    ] + name_clauses
                     values = {
                         ':active': {'BOOL': is_active},
                         ':lastSeen': {'S': timestamp},
+                        ':sessStart': {'S': timestamp},
                     }
                     values.update(name_values)
                     # Going online without a GPS fix yet: still clear any stale order lock
@@ -356,6 +371,9 @@ class RiderService:
                     )
                     logger.info(f"[riderId={rider_id}] Went online (no GPS) — cleared any stale workingOnOrder")
                 else:
+                    # Going offline: close the open online session for compliance,
+                    # then clear the session marker.
+                    RiderService._record_session_close(rider_id, timestamp)
                     set_clauses = ['isActive = :active', 'lastSeen = :lastSeen'] + name_clauses
                     values = {
                         ':active': {'BOOL': is_active},
@@ -365,7 +383,7 @@ class RiderService:
                     dynamodb_client.update_item(
                         TableName=TABLES['RIDERS'],
                         Key={'riderId': {'S': rider_id}},
-                        UpdateExpression='SET ' + ', '.join(set_clauses),
+                        UpdateExpression='SET ' + ', '.join(set_clauses) + ' REMOVE currentSessionStart',
                         ExpressionAttributeValues=values,
                     )
             
@@ -373,6 +391,39 @@ class RiderService:
         except ClientError as e:
             raise Exception(f"Failed to set active status: {str(e)}")
     
+    @staticmethod
+    def _record_session_close(rider_id: str, logout_at: str) -> None:
+        """Close the rider's open online session into the per-day session log.
+
+        Reads ``currentSessionStart`` (set on go-online) and appends a
+        ``{loginAt, logoutAt}`` interval to ``RIDER_SESSIONS#<rider>/<loginDate>``
+        in the CONFIG table. Used by slot-compliance to measure presence.
+        Best-effort: never raises into the status-toggle path.
+        """
+        try:
+            resp = dynamodb_client.get_item(
+                TableName=TABLES['RIDERS'],
+                Key={'riderId': {'S': rider_id}},
+                ProjectionExpression='currentSessionStart',
+            )
+            start = resp.get('Item', {}).get('currentSessionStart', {}).get('S')
+            if not start:
+                return
+            date_key = start[:10]  # IST date (currentSessionStart is an IST ISO string)
+            new_session = {'M': {'loginAt': {'S': start}, 'logoutAt': {'S': logout_at}}}
+            dynamodb_client.update_item(
+                TableName=TABLES['CONFIG'],
+                Key={
+                    'partitionkey': {'S': f'RIDER_SESSIONS#{rider_id}'},
+                    'sortKey': {'S': date_key},
+                },
+                UpdateExpression='SET sessions = list_append(if_not_exists(sessions, :empty), :new)',
+                ExpressionAttributeValues={':empty': {'L': []}, ':new': {'L': [new_session]}},
+            )
+            logger.info(f"[riderId={rider_id}] Closed online session {start} -> {logout_at}")
+        except Exception as e:
+            logger.warning(f"[riderId={rider_id}] _record_session_close failed: {e}")
+
     @staticmethod
     def set_working_on_order(rider_id: str, order_id: Optional[str]) -> Rider:
         """Add or clear the order(s) rider is working on"""
@@ -530,6 +581,26 @@ class RiderService:
             if not last_evaluated_key:
                 break
         return riders
+
+    @staticmethod
+    def list_active_riders(gsi3_partition: str = DEFAULT_RIDER_GSI3_PARTITION) -> List[Rider]:
+        """List riders that are currently active (online).
+
+        Queries GSI3 for the given partition (a 2-char geohash prefix, default "td" for the
+        current deployment region) so the fleet is read with a Query instead of a table Scan,
+        then keeps only riders whose isActive flag is set.
+        """
+        try:
+            all_riders = RiderService._query_riders_by_gsi3(gsi3_partition)
+            active_riders = [rider for rider in all_riders if rider.is_active]
+            logger.info(
+                f"GSI3 partition '{gsi3_partition}' returned {len(all_riders)} riders, "
+                f"{len(active_riders)} active"
+            )
+            return active_riders
+        except ClientError as e:
+            logger.error(f"Failed to list active riders: {str(e)}", exc_info=True)
+            raise Exception(f"Failed to list active riders: {str(e)}")
 
     @staticmethod
     def find_available_riders_near(lat: float, lng: float, radius_km: float = 5) -> List[Tuple[Rider, float]]:

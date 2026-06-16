@@ -412,6 +412,13 @@ def register_rider_order_routes(app):
 
             RiderService.increment_assignment_count(rider_id)
 
+            # Slot compliance: count this acceptance against the rider's active booked slot.
+            try:
+                from services.rider_slots_service import RiderSlotsService
+                RiderSlotsService.bump_offer_counter(rider_id, "accept")
+            except Exception:
+                pass
+
             logger.info(f"[orderId={order_id}] Accepted by rider {rider_id}")
             metrics.add_metric(name="OrderAcceptedByRider", unit="Count", value=1)
             
@@ -428,6 +435,13 @@ def register_rider_order_routes(app):
         try:
             body = app.current_event.json_body
             reason = body.get('reason', 'Rider unavailable')
+
+            # Slot compliance: count this explicit rejection against the rider's active slot.
+            try:
+                from services.rider_slots_service import RiderSlotsService
+                RiderSlotsService.bump_offer_counter(rider_id, "reject")
+            except Exception:
+                pass
             
             logger.info(f"[orderId={order_id}] Rider {rider_id} rejecting order: {reason}")
             

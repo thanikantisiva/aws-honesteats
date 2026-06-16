@@ -77,6 +77,12 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         # Deduct rating for no-response rejection
         if order.rider_id:
             RiderService.apply_rejection_penalty(order.rider_id)
+            # Slot compliance: count this no-response as a rejection on the rider's active slot.
+            try:
+                from services.rider_slots_service import RiderSlotsService
+                RiderSlotsService.bump_offer_counter(order.rider_id, "reject")
+            except Exception:
+                pass
 
         # Remove order from rider's workingOnOrder if set
         if order.rider_id:

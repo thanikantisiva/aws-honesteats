@@ -11,12 +11,18 @@ Equivalent of:
          -H "Title: 🚨 NEW ORDER" \
          -H "Priority: max" \
          -H "Tags: rotating_light,shopping_cart" \
+         -H "Click: https://www.yumdude.com/dashboard/orders" \
          -d "Order #ORD-123 • Paradise Biryani • ₹450"
+
+The `Click` deep link opens the restaurant app's orders tab when the
+notification is tapped: installed apps open it natively via Android App Links
+/ iOS Universal Links, everyone else falls back to the web orders page.
 
 Environment variables:
     ENVIRONMENT             — must be 'prod' for the call to actually fire
     NTFY_TOPIC_URL          — full topic URL (default: https://ntfy.sh/yumdudeneworders)
     NTFY_NEW_ORDER_ENABLED  — 'true'/'false' kill switch (default: true)
+    NTFY_CLICK_URL          — tap target (default: https://www.yumdude.com/dashboard/orders; empty disables)
     NTFY_TIMEOUT_SECONDS    — HTTP timeout (default: 3)
 """
 from __future__ import annotations
@@ -39,6 +45,11 @@ _DEFAULT_TITLE = "🚨 NEW ORDER"
 _DEFAULT_PRIORITY = 5
 # Tags MUST be a list for the ntfy JSON publish API.
 _DEFAULT_TAGS: list[str] = ["rotating_light", "shopping_cart"]
+# Deep link opened when the notification is tapped. Points at the restaurant
+# app's orders tab; installed apps open it natively via Android App Links /
+# iOS Universal Links, everyone else falls back to the web orders page.
+# https://docs.ntfy.sh/publish/#click-action
+_DEFAULT_CLICK_URL = "https://www.yumdude.com/dashboard/orders"
 
 
 def _is_prod() -> bool:
@@ -48,6 +59,24 @@ def _is_prod() -> bool:
 def _is_enabled() -> bool:
     raw = (os.environ.get("NTFY_NEW_ORDER_ENABLED", "true") or "").strip().lower()
     return raw in ("true", "1", "yes", "on")
+
+
+def _resolve_click_url() -> Optional[str]:
+    """URL opened when the notification is tapped, or None to omit it.
+
+    Defaults to the orders deep link; an explicit empty NTFY_CLICK_URL disables
+    the tap action. Only http(s) is accepted — App / Universal Links require an
+    https URL, and a malformed value is dropped rather than sent.
+    """
+    raw = os.environ.get("NTFY_CLICK_URL")
+    raw = (_DEFAULT_CLICK_URL if raw is None else raw).strip()
+    if not raw:
+        return None
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        logger.warning(f"ntfy: ignoring invalid NTFY_CLICK_URL '{raw}'")
+        return None
+    return raw
 
 
 def _format_amount(value: Optional[float]) -> str:
@@ -153,6 +182,9 @@ def publish_new_order_alert(
         "priority": _DEFAULT_PRIORITY,
         "tags": _DEFAULT_TAGS,
     }
+    click_url = _resolve_click_url()
+    if click_url:
+        payload["click"] = click_url
     req = urllib.request.Request(
         publish_url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),

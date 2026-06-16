@@ -196,6 +196,13 @@ class OrderAssignmentService:
             RiderService.set_working_on_order(nearest_rider.rider_id, order_id)
             RiderService.increment_assignment_count(nearest_rider.rider_id)
 
+            # Slot compliance: count this offer against the rider's active booked slot (best-effort).
+            try:
+                from services.rider_slots_service import RiderSlotsService
+                RiderSlotsService.bump_offer_counter(nearest_rider.rider_id, "offer")
+            except Exception:
+                pass
+
             # Send notification to rider
             try:
                 # Get order details

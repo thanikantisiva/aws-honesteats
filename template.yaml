@@ -25,6 +25,14 @@ Parameters:
     Type: String
     Default: Z06343073NNIU2UCIW6XC
     Description: Route53 hosted zone ID for api.yumdude.com
+  EodSettlementSchedule:
+    Type: String
+    Default: cron(25 18 * * ? *)
+    Description: >-
+      Schedule (UTC) for the nightly rider slot guarantee settlement.
+      Default 18:25 UTC = 23:55 IST — settles the SAME day's slots that night,
+      so amounts are ready for the next day's rider settlement.
+      For testing, override at deploy time, e.g. "rate(5 minutes)".
 
 Mappings:
   ApiDomainByEnv:
@@ -433,6 +441,7 @@ Resources:
                 - !GetAtt RestaurantEarningsTable.Arn
                 - !GetAtt ConfigTable.Arn
                 - !Sub '${ConfigTable.Arn}/index/isDisplayItem-index'
+                - !Sub '${ConfigTable.Arn}/index/slotDate-index'
                 - !Sub '${OrdersTable.Arn}/index/customer-phone-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/restaurantId-statusCreatedAt-index'
                 - !Sub '${OrdersTable.Arn}/index/riderId-statusCreatedAt-index'
@@ -483,6 +492,18 @@ Resources:
                 - ssm:GetParametersByPath
               Resource:
                 - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rork-honesteats/${Environment}/*'
+            # Rider slots: release_slot() schedules the slot-end compliance check.
+            - Effect: Allow
+              Action:
+                - scheduler:CreateSchedule
+                - scheduler:DeleteSchedule
+                - scheduler:GetSchedule
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource:
+                - !GetAtt SlotComplianceInvokeRole.Arn
       Environment:
         Variables:
           USERS_TABLE_NAME: !Ref UsersTableV2
@@ -497,6 +518,9 @@ Resources:
           RESTAURANT_LOGIN_TABLE_NAME: !Ref RestaurantLoginTable
           CONFIG_TABLE_NAME: !Ref ConfigTable
           OTP_TABLE_NAME: !Ref OTPStorageTable
+          # Rider slots: ARNs used by release_slot() to schedule the slot-end compliance check.
+          SLOT_COMPLIANCE_HANDLER_ARN: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-slot-compliance-${Environment}'
+          SLOT_COMPLIANCE_HANDLER_ROLE_ARN: !GetAtt SlotComplianceInvokeRole.Arn
           RATE_LIMIT_TABLE_NAME: !Ref RateLimitTable
           WALLET_TABLE_NAME: !Ref WalletTable
           RIDER_DOCUMENTS_BUCKET: !Ref RiderDocumentsBucket
@@ -706,6 +730,127 @@ Resources:
                   - lambda:InvokeFunction
                 Resource:
                   - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-order-confirmed-alert-${Environment}'
+
+  # ---------------- RIDER SLOT COMPLIANCE (scheduled at slot end) ----------------
+  SlotComplianceHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-slot-compliance-${Environment}'
+      CodeUri: .
+      Handler: slot_compliance_handler.lambda_handler
+      Runtime: python3.11
+      Architectures:
+        - x86_64
+      Timeout: 60
+      MemorySize: 256
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt ConfigTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+              Resource:
+                - !GetAtt RiderEarningsTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource:
+                - !GetAtt RidersTable.Arn
+      Environment:
+        Variables:
+          CONFIG_TABLE_NAME: !Ref ConfigTable
+          EARNINGS_TABLE_NAME: !Ref RiderEarningsTable
+          RIDERS_TABLE_NAME: !Ref RidersTable
+          ENVIRONMENT: !Ref Environment
+
+  SlotComplianceInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeSlotCompliance
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-slot-compliance-${Environment}'
+
+  # ---------------- EOD RIDER SLOT GUARANTEE SETTLEMENT (daily schedule) ----------------
+  EodSlotSettlementHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'rork-honesteats-eod-slot-settlement-${Environment}'
+      CodeUri: .
+      Handler: eod_slot_settlement_handler.lambda_handler
+      Runtime: python3.11
+      Architectures:
+        - x86_64
+      Timeout: 300
+      MemorySize: 512
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt ConfigTable.Arn
+                - !Sub '${ConfigTable.Arn}/index/slotDate-index'
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+              Resource:
+                - !GetAtt RiderEarningsTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource:
+                - !GetAtt RidersTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt OrdersTable.Arn
+                - !Sub '${OrdersTable.Arn}/index/riderId-statusCreatedAt-index'
+      Environment:
+        Variables:
+          CONFIG_TABLE_NAME: !Ref ConfigTable
+          EARNINGS_TABLE_NAME: !Ref RiderEarningsTable
+          RIDERS_TABLE_NAME: !Ref RidersTable
+          ORDERS_TABLE_NAME: !Ref OrdersTable
+          ENVIRONMENT: !Ref Environment
+      Events:
+        DailyEod:
+          Type: Schedule
+          Properties:
+            # Configurable via the EodSettlementSchedule parameter (UTC).
+            # Default = 18:25 UTC = 23:55 IST → settles the same day's slots that night.
+            Schedule: !Ref EodSettlementSchedule
+            Description: Nightly rider slot guarantee settlement
 
   RestaurantMenuChangeHandlerFunction:
     Type: AWS::Serverless::Function
@@ -1735,6 +1880,11 @@ Resources:
           AttributeType: S
         - AttributeName: isDisplayItem
           AttributeType: S
+        # Rider-slot date index keys (only present on RIDER_SLOT#<id>/DEF items).
+        - AttributeName: slotBucket
+          AttributeType: S
+        - AttributeName: slotDateSk
+          AttributeType: S
       KeySchema:
         - AttributeName: partitionkey
           KeyType: HASH
@@ -1745,6 +1895,15 @@ Resources:
           KeySchema:
             - AttributeName: isDisplayItem
               KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        # Range-query rider slots by date (T-7..T+7) without bloating the global config row.
+        - IndexName: slotDate-index
+          KeySchema:
+            - AttributeName: slotBucket
+              KeyType: HASH
+            - AttributeName: slotDateSk
+              KeyType: RANGE
           Projection:
             ProjectionType: ALL
       Tags:

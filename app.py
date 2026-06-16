@@ -19,6 +19,7 @@ from routes.restaurant_routes import register_restaurant_routes
 from routes.menu_routes import register_menu_routes
 from routes.order_routes import register_order_routes
 from routes.rider_routes import register_rider_routes
+from routes.rider_slots_routes import register_rider_slots_routes
 from routes.rider_signup_routes import register_rider_signup_routes
 from routes.rider_order_routes import register_rider_order_routes
 from routes.earnings_routes import register_earnings_routes
@@ -121,6 +122,7 @@ register_restaurant_routes(app)
 register_menu_routes(app)
 register_order_routes(app)
 register_rider_routes(app)
+register_rider_slots_routes(app)
 register_rider_signup_routes(app)
 register_rider_order_routes(app)
 register_earnings_routes(app)

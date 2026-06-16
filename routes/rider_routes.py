@@ -1,6 +1,6 @@
 """Rider routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
-from services.rider_service import RiderService
+from services.rider_service import RiderService, DEFAULT_RIDER_GSI3_PARTITION
 from models.rider import Rider
 from utils import normalize_phone
 from utils.dynamodb import generate_id
@@ -30,6 +30,30 @@ def register_rider_routes(app):
             logger.error("Error listing riders", exc_info=True)
             return {"error": "Failed to list riders", "message": str(e)}, 500
     
+    # NOTE: must be registered before "/api/v1/riders/<rider_id>" so the resolver
+    # matches the static "active" path instead of capturing it as a rider_id.
+    @app.get("/api/v1/riders/active")
+    @tracer.capture_method
+    def list_active_riders():
+        """List currently active (online) riders via a GSI3 query."""
+        try:
+            # Optional ?partition= override; defaults to the "td" deployment region.
+            partition = app.current_event.get_query_string_value(
+                name="partition", default=DEFAULT_RIDER_GSI3_PARTITION
+            ) or DEFAULT_RIDER_GSI3_PARTITION
+
+            logger.info(f"Listing active riders (GSI3 partition '{partition}')")
+            riders = RiderService.list_active_riders(partition)
+            metrics.add_metric(name="ActiveRidersListed", unit="Count", value=1)
+
+            return {
+                "riders": [r.to_dict() for r in riders],
+                "total": len(riders)
+            }, 200
+        except Exception as e:
+            logger.error("Error listing active riders", exc_info=True)
+            return {"error": "Failed to list active riders", "message": str(e)}, 500
+
     @app.get("/api/v1/riders/<rider_id>")
     @tracer.capture_method
     def get_rider(rider_id: str):

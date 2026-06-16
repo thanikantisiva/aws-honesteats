@@ -81,6 +81,8 @@ class EarningsService:
     ENTRY_TYPE_ORDER_EARNING = "ORDER_EARNING"
     ENTRY_TYPE_MILESTONE_BONUS = "MILESTONE_BONUS"
     ENTRY_TYPE_COD_AMOUNT_COLLECTED = "COD_AMOUNT_COLLECTED"
+    ENTRY_TYPE_SLOT_GUARANTEE = "SLOT_GUARANTEE"
+    ENTRY_TYPE_SLOT_PENALTY = "SLOT_PENALTY"
     BONUS_TYPE_RIDER_TARGET = "RIDER_TARGET"
 
     @staticmethod
@@ -286,12 +288,22 @@ class EarningsService:
             sum(e.cash_collected for e in earnings_list),
             2,
         )
+        # Net of slot guarantees (positive) and no-show/non-compliance penalties (negative).
+        slot_entry_types = (
+            EarningsService.ENTRY_TYPE_SLOT_GUARANTEE,
+            EarningsService.ENTRY_TYPE_SLOT_PENALTY,
+        )
+        total_slot_earnings = round(
+            sum(e.total_earnings for e in earnings_list if (e.entry_type or "") in slot_entry_types),
+            2,
+        )
         return {
             "totalDeliveries": total_deliveries,
             "totalEarnings": total_earnings,
             "totalTips": total_tips,
             "totalIncentives": total_incentives,
             "totalBonusEarnings": total_bonus_earnings,
+            "totalSlotEarnings": total_slot_earnings,
             "deliveryEarnings": delivery_earnings,
             "totalCashCollected": total_cash_collected,
             "dailyBreakdown": [e.to_dict() for e in earnings_list],
@@ -407,6 +419,79 @@ class EarningsService:
             if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
                 return False
             raise Exception(f"Failed to add milestone bonus: {str(e)}")
+
+    @staticmethod
+    def _slot_label(slot: dict) -> str:
+        base = slot.get("label") or slot.get("date") or "Slot"
+        window = f"{slot.get('startTime', '')}-{slot.get('endTime', '')}".strip("-")
+        return f"{base} {window}".strip()
+
+    @staticmethod
+    def credit_slot_guarantee(rider_id: str, slot: dict, amount: Optional[float] = None) -> bool:
+        """Credit a complied slot's guarantee to the rider (idempotent per slot).
+
+        The guarantee is a FLOOR, so `amount` is the top-up shortfall computed by the
+        caller (guarantee − earnings already made during the slot). Falls back to the
+        full slot price if not provided. A non-positive top-up writes nothing.
+        """
+        amount = round(float(slot.get("price", 0) or 0) if amount is None else float(amount), 2)
+        if amount <= 0:
+            return False
+        credited_at = now_ist_iso()
+        date_key = f"{credited_at[:10]}#SLOT#{slot.get('slotId')}"
+        earning = RiderEarnings(
+            rider_id=rider_id,
+            date=date_key,
+            total_earnings=amount,
+            created_at=credited_at,
+            settled=False,
+            entry_type=EarningsService.ENTRY_TYPE_SLOT_GUARANTEE,
+            bonus_label=f"Slot guarantee top-up — {EarningsService._slot_label(slot)}",
+        )
+        try:
+            dynamodb_client.put_item(
+                TableName=TABLES["EARNINGS"],
+                Item=earning.to_dynamodb_item(),
+                ConditionExpression="attribute_not_exists(#date)",
+                ExpressionAttributeNames={"#date": "date"},
+            )
+            return True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return False
+            raise Exception(f"Failed to credit slot guarantee: {str(e)}")
+
+    @staticmethod
+    def apply_slot_penalty(rider_id: str, slot: dict, penalty: float) -> bool:
+        """Deduct a flat no-show / non-compliance penalty (idempotent per slot).
+
+        Stored as a NEGATIVE ``total_earnings`` row so the period rollup nets the
+        penalty out of the rider's payout — same convention as COD liability rows.
+        """
+        amount = round(abs(float(penalty or 0)), 2)
+        credited_at = now_ist_iso()
+        date_key = f"{credited_at[:10]}#SLOT_PENALTY#{slot.get('slotId')}"
+        earning = RiderEarnings(
+            rider_id=rider_id,
+            date=date_key,
+            total_earnings=-amount,
+            created_at=credited_at,
+            settled=False,
+            entry_type=EarningsService.ENTRY_TYPE_SLOT_PENALTY,
+            bonus_label=f"Slot penalty — {EarningsService._slot_label(slot)}",
+        )
+        try:
+            dynamodb_client.put_item(
+                TableName=TABLES["EARNINGS"],
+                Item=earning.to_dynamodb_item(),
+                ConditionExpression="attribute_not_exists(#date)",
+                ExpressionAttributeNames={"#date": "date"},
+            )
+            return True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return False
+            raise Exception(f"Failed to apply slot penalty: {str(e)}")
 
     @staticmethod
     def apply_milestone_bonuses(rider_id: str) -> List[dict]:
