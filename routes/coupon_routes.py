@@ -364,6 +364,7 @@ def register_coupon_routes(app):
         try:
             restaurant_id = app.current_event.get_query_string_value('restaurantId')
             mobile_number = normalize_phone(app.current_event.get_query_string_value('mobileNumber'))
+            blocked_coupon_codes = CouponService.get_blocked_coupon_codes_for_restaurant(restaurant_id)
 
             # Scan ConfigTable for all COUPON# records (handles DynamoDB pagination)
             scan_kwargs = {
@@ -440,6 +441,10 @@ def register_coupon_routes(app):
 
                 # Must be within active date window
                 if not CouponService.is_coupon_active(start_date, end_date):
+                    continue
+
+                # Hide globally blocked coupons for this restaurant from the customer app.
+                if coupon_code.upper() in blocked_coupon_codes:
                     continue
 
                 # Must match this restaurant, or be a global coupon (no restriction)

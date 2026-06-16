@@ -8,12 +8,120 @@ from aws_lambda_powertools import Logger
 from config.pricing import round_nearest_half
 from utils import normalize_phone
 from utils.dynamodb import TABLES, dynamodb_client
+from utils.dynamodb_helpers import dynamodb_to_python
 
 logger = Logger()
+
+CONFIG_PK = "CONFIG#GLOBAL"
+CONFIG_SK = "CONFIG"
 
 
 class CouponService:
     """Shared coupon lookup and discount helpers."""
+
+    @staticmethod
+    def _fetch_global_config() -> dict:
+        """Read the global config row used by admin-managed coupon controls."""
+        try:
+            response = dynamodb_client.get_item(
+                TableName=TABLES["CONFIG"],
+                Key={
+                    "partitionkey": {"S": CONFIG_PK},
+                    "sortKey": {"S": CONFIG_SK},
+                },
+            )
+            config = dynamodb_to_python(response.get("Item", {}).get("config", {"NULL": True}))
+            return config if isinstance(config, dict) else {}
+        except Exception as exc:
+            logger.warning(f"Failed to fetch global coupon config: {exc}")
+            return {}
+
+    @staticmethod
+    def _coupon_code_set(value) -> set:
+        """Normalize coupon code config values to an uppercase set."""
+        if isinstance(value, dict):
+            for key in ("couponCodes", "codes", "blockedCoupons"):
+                if key in value:
+                    return CouponService._coupon_code_set(value.get(key))
+            return set()
+
+        if isinstance(value, str):
+            raw_codes = value.replace("\n", ",").split(",")
+        elif isinstance(value, (list, tuple, set)):
+            raw_codes = value
+        else:
+            return set()
+
+        return {
+            str(code).strip().upper()
+            for code in raw_codes
+            if str(code or "").strip()
+        }
+
+    @staticmethod
+    def get_blocked_coupon_codes_for_restaurant(
+        restaurant_id: Optional[str],
+        config: Optional[dict] = None,
+    ) -> set:
+        """Return globally configured coupon codes blocked for a restaurant.
+
+        Supported global config shape:
+        {
+          "blockedCouponsByRestaurant": {
+            "RES-123": ["SAVE20", "FREEDEL"]
+          }
+        }
+        """
+        normalized_restaurant_id = str(restaurant_id or "").strip()
+        if not normalized_restaurant_id:
+            return set()
+
+        config_payload = config if isinstance(config, dict) else CouponService._fetch_global_config()
+        field_names = (
+            "blockedCouponsByRestaurant",
+            "couponBlocklistByRestaurant",
+            "restaurantCouponBlocklist",
+        )
+
+        for field_name in field_names:
+            block_config = config_payload.get(field_name)
+            if isinstance(block_config, dict):
+                if normalized_restaurant_id in block_config:
+                    return CouponService._coupon_code_set(block_config.get(normalized_restaurant_id))
+
+                normalized_lookup = normalized_restaurant_id.lower()
+                for key, value in block_config.items():
+                    if str(key or "").strip().lower() == normalized_lookup:
+                        return CouponService._coupon_code_set(value)
+
+            if isinstance(block_config, list):
+                for entry in block_config:
+                    if not isinstance(entry, dict):
+                        continue
+                    entry_restaurant_id = str(
+                        entry.get("restaurantId")
+                        or entry.get("restaurant_id")
+                        or entry.get("id")
+                        or ""
+                    ).strip()
+                    if entry_restaurant_id.lower() == normalized_restaurant_id.lower():
+                        return CouponService._coupon_code_set(entry)
+
+        return set()
+
+    @staticmethod
+    def is_coupon_blocked_for_restaurant(
+        coupon_code: Optional[str],
+        restaurant_id: Optional[str],
+        config: Optional[dict] = None,
+    ) -> bool:
+        normalized_code = str(coupon_code or "").strip().upper()
+        if not normalized_code:
+            return False
+        return normalized_code in CouponService.get_blocked_coupon_codes_for_restaurant(
+            restaurant_id,
+            config,
+        )
 
     @staticmethod
     def _parse_iso_or_date(value: Optional[str]):
@@ -235,6 +343,12 @@ class CouponService:
             return default_result
 
         if not CouponService.is_coupon_valid_for_restaurant(coupon, getattr(menu_item, "restaurant_id", None)):
+            return default_result
+
+        if CouponService.is_coupon_blocked_for_restaurant(
+            coupon.get("couponCode"),
+            getattr(menu_item, "restaurant_id", None),
+        ):
             return default_result
 
         coupon_item = str(coupon.get("couponItem") or "").strip()

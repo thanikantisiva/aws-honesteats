@@ -471,6 +471,14 @@ def register_delivery_routes(app):
                                 f"couponCode={coupon_code}, reason=inactive_or_invalid"
                             )
                             result['couponRejectedReason'] = 'inactive_or_invalid'
+                        elif CouponService.is_coupon_blocked_for_restaurant(coupon_code, restaurant_id):
+                            logger.info(
+                                "Coupon rejected due to restaurant blocklist: "
+                                f"couponCode={coupon_code}, restaurantId={restaurant_id}"
+                            )
+                            result['couponRejectedReason'] = 'coupon_blocked_for_restaurant'
+                            result['couponApplied'] = False
+                            return result, 200
                         elif not CouponService.is_coupon_valid_for_customer(coupon, mobile_number):
                             logger.info(
                                 "Coupon rejected due to targeted-customer mismatch: "

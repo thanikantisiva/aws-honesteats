@@ -264,6 +264,8 @@ def register_payment_routes(app):
                 coupon = CouponService.get_coupon(coupon_code)
                 if not coupon or not CouponService.is_coupon_active(coupon.get("startDate"), coupon.get("endDate")):
                     return {"error": "Coupon is inactive or invalid"}, 400
+                if CouponService.is_coupon_blocked_for_restaurant(coupon_code, restaurant_id):
+                    return {"error": "Coupon is blocked for this restaurant"}, 400
                 if not CouponService.is_coupon_valid_for_restaurant(coupon, restaurant_id):
                     return {"error": "Coupon is not valid for this restaurant"}, 400
                 if not CouponService.is_coupon_valid_for_customer(coupon, customer_phone):
