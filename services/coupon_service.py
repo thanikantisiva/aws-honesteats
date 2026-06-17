@@ -194,8 +194,14 @@ class CouponService:
     def create_dine_in_price_match_item_coupons(
         restaurant_id: str,
         item_banner_text: Optional[str] = None,
+        coupon_type: str = "price_match",
+        coupon_value: Optional[float] = None,
+        issued_by: str = "YUMDUDE",
+        description: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> dict:
-        """Create fixed item coupons that reduce display price back to restaurantPrice.
+        """Create item coupons in bulk for a restaurant.
 
         Coupon codes are deterministic per restaurant/item so repeated runs update
         the same coupon instead of generating duplicates.
@@ -205,6 +211,27 @@ class CouponService:
         normalized_restaurant_id = str(restaurant_id or "").strip()
         if not normalized_restaurant_id:
             raise ValueError("restaurantId is required")
+
+        normalized_coupon_type = str(coupon_type or "price_match").strip().lower().replace("-", "_")
+        if normalized_coupon_type in ("pricematch", "dine_in", "dine_in_price_match"):
+            normalized_coupon_type = "price_match"
+        if normalized_coupon_type not in ("price_match", "percentage", "fixed"):
+            raise ValueError("couponType must be price_match, percentage, or fixed")
+
+        normalized_issued_by = str(issued_by or "YUMDUDE").strip().upper()
+        if normalized_issued_by not in ("YUMDUDE", "RESTAURANT"):
+            raise ValueError("issuedBy must be YUMDUDE or RESTAURANT")
+
+        fixed_coupon_value = None
+        if normalized_coupon_type in ("percentage", "fixed"):
+            try:
+                fixed_coupon_value = float(coupon_value)
+            except (TypeError, ValueError):
+                raise ValueError("couponValue must be a number")
+            if fixed_coupon_value <= 0:
+                raise ValueError("couponValue must be greater than 0")
+            if normalized_coupon_type == "percentage" and fixed_coupon_value > 100:
+                raise ValueError("percentage couponValue cannot exceed 100")
 
         menu_items = [
             item for item in MenuService.list_menu_items(normalized_restaurant_id)
@@ -219,13 +246,32 @@ class CouponService:
             display_price = float(item.price)
             hiked_amount = round(display_price - restaurant_price, 2)
 
-            if restaurant_price <= 0 or hiked_amount <= 0:
+            if normalized_coupon_type == "price_match":
+                applied_coupon_type = "fixed"
+                applied_coupon_value = hiked_amount
+                skip_reason = "No positive hiked amount"
+            else:
+                applied_coupon_type = normalized_coupon_type
+                applied_coupon_value = fixed_coupon_value
+                skip_reason = "Invalid coupon value"
+
+            if display_price <= 0 or applied_coupon_value is None or applied_coupon_value <= 0:
                 skipped_items.append({
                     "itemId": item.item_id,
                     "itemName": item.item_name,
                     "restaurantPrice": restaurant_price,
                     "displayPrice": display_price,
-                    "reason": "No positive hiked amount",
+                    "reason": skip_reason,
+                })
+                continue
+
+            if normalized_coupon_type == "price_match" and (restaurant_price <= 0 or hiked_amount <= 0):
+                skipped_items.append({
+                    "itemId": item.item_id,
+                    "itemName": item.item_name,
+                    "restaurantPrice": restaurant_price,
+                    "displayPrice": display_price,
+                    "reason": skip_reason,
                 })
                 continue
 
@@ -233,16 +279,20 @@ class CouponService:
             coupon_item = {
                 "partitionkey": {"S": f"COUPON#{coupon_code}"},
                 "sortKey": {"S": "DETAILS"},
-                "couponType": {"S": "fixed"},
-                "couponValue": {"N": str(hiked_amount)},
-                "issuedBy": {"S": "YUMDUDE"},
+                "couponType": {"S": applied_coupon_type},
+                "couponValue": {"N": str(applied_coupon_value)},
+                "issuedBy": {"S": normalized_issued_by},
                 "couponRestaurant": {"S": normalized_restaurant_id},
                 "couponItem": {"S": item.item_id},
                 "couponTarget": {"S": "item"},
                 "isOncePerUser": {"BOOL": False},
                 "isOncePerDay": {"BOOL": False},
-                "description": {"S": "Dine-in price match funded by YUMDUDE"},
+                "description": {"S": str(description or f"Bulk item coupon funded by {normalized_issued_by}").strip()},
             }
+            if start_date:
+                coupon_item["startDate"] = {"S": str(start_date)}
+            if end_date:
+                coupon_item["endDate"] = {"S": str(end_date)}
 
             dynamodb_client.put_item(
                 TableName=TABLES["CONFIG"],
@@ -260,11 +310,17 @@ class CouponService:
                 "restaurantPrice": restaurant_price,
                 "displayPrice": display_price,
                 "hikedAmount": hiked_amount,
+                "couponType": applied_coupon_type,
+                "couponValue": applied_coupon_value,
+                "issuedBy": normalized_issued_by,
                 "couponCode": coupon_code,
             })
 
         return {
             "restaurantId": normalized_restaurant_id,
+            "couponType": normalized_coupon_type,
+            "couponValue": fixed_coupon_value,
+            "issuedBy": normalized_issued_by,
             "createdCount": len(created_items),
             "skippedCount": len(skipped_items),
             "items": created_items,

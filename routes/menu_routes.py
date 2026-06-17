@@ -382,9 +382,20 @@ def register_menu_routes(app):
     @app.post("/api/v1/restaurants/<restaurant_id>/menu/dine-in-coupons")
     @tracer.capture_method
     def create_dine_in_coupons(restaurant_id: str):
-        """Create item-level YUMDUDE coupons to match display prices back to dine-in prices.
+        """Create item-level coupons in bulk for a restaurant.
 
-        Body: { "itemBannerText": "<optional string>" }
+        Body:
+        {
+          "couponType": "price_match" | "percentage" | "fixed",
+          "couponValue": 10,              # required for percentage/fixed
+          "issuedBy": "YUMDUDE" | "RESTAURANT",
+          "itemBannerText": "10% OFF",
+          "description": "Optional admin context",
+          "startDate": "2026-06-17",
+          "endDate": "2026-06-30"
+        }
+
+        Defaults preserve the original behavior: price_match + YUMDUDE.
         """
         try:
             body = app.current_event.json_body or {}
@@ -394,11 +405,47 @@ def register_menu_routes(app):
             if banner_error:
                 return banner_error
 
-            logger.info(f"Creating dine-in price match coupons for restaurant: {restaurant_id}")
+            coupon_type = str(
+                body.get('couponType') or body.get('type') or body.get('mode') or 'price_match'
+            ).strip().lower().replace('-', '_')
+            if coupon_type in ('pricematch', 'dine_in', 'dine_in_price_match'):
+                coupon_type = 'price_match'
+            if coupon_type not in ('price_match', 'percentage', 'fixed'):
+                return {"error": "couponType must be price_match, percentage, or fixed"}, 400
+
+            coupon_value = body.get('couponValue', body.get('value'))
+            if coupon_type == 'percentage' and coupon_value is None:
+                coupon_value = body.get('percentage')
+            if coupon_type in ('percentage', 'fixed'):
+                if coupon_value is None:
+                    return {"error": "couponValue is required for percentage and fixed coupons"}, 400
+                try:
+                    coupon_value = float(coupon_value)
+                except (TypeError, ValueError):
+                    return {"error": "couponValue must be a number"}, 400
+                if coupon_value <= 0:
+                    return {"error": "couponValue must be greater than 0"}, 400
+                if coupon_type == 'percentage' and coupon_value > 100:
+                    return {"error": "percentage couponValue cannot exceed 100"}, 400
+
+            issued_by = str(body.get('issuedBy') or 'YUMDUDE').strip().upper()
+            if issued_by not in ('YUMDUDE', 'RESTAURANT'):
+                return {"error": "issuedBy must be YUMDUDE or RESTAURANT"}, 400
+
+            logger.info(
+                f"Creating bulk item coupons for restaurant: {restaurant_id}, "
+                f"couponType={coupon_type}, couponValue={coupon_value}, issuedBy={issued_by}"
+            )
 
             result = CouponService.create_dine_in_price_match_item_coupons(
                 restaurant_id,
                 item_banner_text=item_banner_text,
+                coupon_type=coupon_type,
+                coupon_value=coupon_value,
+                issued_by=issued_by,
+                description=body.get('description'),
+                start_date=body.get('startDate'),
+                end_date=body.get('endDate'),
             )
             metrics.add_metric(name="DineInItemCouponsCreated", unit="Count", value=1)
             return result, 200
