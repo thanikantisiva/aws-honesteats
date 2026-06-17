@@ -377,92 +377,65 @@ class CouponService:
         return normalized_mobile in normalized_targets
 
     @staticmethod
-    def get_item_coupon_discount(coupon_code, base_price, restaurant_id=None, item_id=None) -> dict:
-        """Fetch an item-offer coupon by code and compute its discount against ``base_price``.
+    def get_menu_item_prices(menu_item) -> dict:
+        """Return authoritative menu pricing, including coupon discount when valid."""
+        base_price = float(menu_item.price)
+        coupon_code = getattr(menu_item, "item_offer_coupon_code", None)
+        coupon = CouponService.get_coupon(coupon_code)
 
-        Single source of truth for the item-coupon math: same validation
-        (active / restaurant-valid / not-blocked / couponItem match / skip
-        targeted) and the same percentage|fixed + round_nearest_half rules used
-        for menu pricing — but the base price is supplied by the caller, so the
-        revenue calc can re-derive a line's discount from its own price basis.
-
-        Returns ``{discountAmount, discountedPrice, issuedBy, couponCode}``;
-        a zero discount (issuedBy/couponCode = None) when the coupon is
-        missing / expired / invalid / blocked / targeted / item-mismatched.
-        """
-        base_price = float(base_price or 0.0)
-        none_result = {
+        default_result = {
+            "price": base_price,
+            "originalPrice": None,
+            "grossPrice": base_price,
             "discountAmount": 0.0,
-            "discountedPrice": base_price,
-            "issuedBy": None,
             "couponCode": None,
+            "couponIssuedBy": None,
         }
 
-        coupon = CouponService.get_coupon(coupon_code)
         if not coupon:
-            return none_result
+            return default_result
+
         if not CouponService.is_coupon_active(coupon.get("startDate"), coupon.get("endDate")):
-            return none_result
-        if not CouponService.is_coupon_valid_for_restaurant(coupon, restaurant_id):
-            return none_result
-        if CouponService.is_coupon_blocked_for_restaurant(coupon.get("couponCode"), restaurant_id):
-            return none_result
+            return default_result
+
+        if not CouponService.is_coupon_valid_for_restaurant(coupon, getattr(menu_item, "restaurant_id", None)):
+            return default_result
+
+        if CouponService.is_coupon_blocked_for_restaurant(
+            coupon.get("couponCode"),
+            getattr(menu_item, "restaurant_id", None),
+        ):
+            return default_result
 
         coupon_item = str(coupon.get("couponItem") or "").strip()
-        if coupon_item and coupon_item != str(item_id or "").strip():
-            return none_result
+        if coupon_item and coupon_item != str(getattr(menu_item, "item_id", "") or "").strip():
+            return default_result
 
-        # No customer identity in this path, so targeted coupons must not apply.
+        # Menu pricing has no customer identity today, so targeted coupons must
+        # not affect public item prices.
         if coupon.get("targetCustomerPhones"):
-            return none_result
+            return default_result
 
         coupon_type = str(coupon.get("couponType") or "").strip().lower()
         coupon_value = float(coupon.get("couponValue") or 0.0)
+
         if coupon_type == "percentage":
             discounted_price = base_price * (1 - (coupon_value / 100.0))
         elif coupon_type == "fixed":
             discounted_price = base_price - coupon_value
         else:
             logger.info(f"Unsupported menu coupon type: {coupon_type}")
-            return none_result
+            return default_result
 
         discounted_price = round_nearest_half(max(0.0, discounted_price))
         if discounted_price >= base_price:
-            return none_result
+            return default_result
 
         return {
-            "discountAmount": round(base_price - discounted_price, 2),
-            "discountedPrice": discounted_price,
-            "issuedBy": coupon.get("issuedBy"),
-            "couponCode": coupon.get("couponCode"),
-        }
-
-    @staticmethod
-    def get_menu_item_prices(menu_item) -> dict:
-        """Return authoritative menu pricing, including coupon discount when valid."""
-        base_price = float(menu_item.price)
-        disc = CouponService.get_item_coupon_discount(
-            getattr(menu_item, "item_offer_coupon_code", None),
-            base_price,
-            getattr(menu_item, "restaurant_id", None),
-            getattr(menu_item, "item_id", None),
-        )
-
-        if disc["discountAmount"] <= 0:
-            return {
-                "price": base_price,
-                "originalPrice": None,
-                "grossPrice": base_price,
-                "discountAmount": 0.0,
-                "couponCode": None,
-                "couponIssuedBy": None,
-            }
-
-        return {
-            "price": disc["discountedPrice"],
+            "price": discounted_price,
             "originalPrice": base_price,
             "grossPrice": base_price,
-            "discountAmount": disc["discountAmount"],
-            "couponCode": disc["couponCode"],
-            "couponIssuedBy": disc["issuedBy"],
+            "discountAmount": round(base_price - discounted_price, 2),
+            "couponCode": coupon.get("couponCode"),
+            "couponIssuedBy": coupon.get("issuedBy"),
         }

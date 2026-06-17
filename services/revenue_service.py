@@ -103,9 +103,6 @@ def compute_revenue(order) -> Tuple[dict, list]:
 
     Returns (revenue_dict, enriched_items).
     """
-    # Local import avoids a module-level import cycle with coupon_service.
-    from services.coupon_service import CouponService
-
     total_customer_paid = 0.0
     gross_food_value = 0.0
     total_food_commission = 0.0
@@ -137,25 +134,11 @@ def compute_revenue(order) -> Tuple[dict, list]:
             quantity = 1
         customer_price = _safe_float(item.get("price"))
         add_on_total = _safe_float(item.get("addOnTotal"))
+        stored_discount_amount = max(_safe_float(item.get("itemDiscountAmount")), 0.0)
         restaurant_price = _safe_float(item.get("restaurantPrice"))
-        # Pre-discount (gross) customer price reconstructed from restaurantPrice + hike;
-        # pass 0 stored discount so the gross does NOT come from the stored itemDiscountAmount.
-        gross_price = _get_gross_item_price(item, customer_price, 0.0)
-        # Re-derive the per-item coupon discount live by re-fetching the line's
-        # item-offer coupon (instead of trusting the stored itemDiscountAmount).
-        disc = CouponService.get_item_coupon_discount(
-            item.get("itemOfferCouponCode"),
-            gross_price,
-            order.restaurant_id,
-            item_id,
-        )
-        item_discount_amount = round(max(_safe_float(disc.get("discountAmount")), 0.0), 2)
-        # Use the freshly-fetched coupon's issuer; fall back to the stored value
-        # only when no live coupon was applied (keeps commission-base stable).
-        fresh_issuer = disc.get("issuedBy")
-        coupon_issued_by = _normalize_coupon_issuer(
-            fresh_issuer if fresh_issuer is not None else item.get("couponIssuedBy")
-        )
+        gross_price = _get_gross_item_price(item, customer_price, stored_discount_amount)
+        item_discount_amount = round(max(gross_price - customer_price, 0.0), 2)
+        coupon_issued_by = _normalize_coupon_issuer(item.get("couponIssuedBy"))
         item_restaurant_owed = restaurant_price if restaurant_price > 0 else gross_price
         total_items_restaurant_price += item_restaurant_owed * quantity
 
