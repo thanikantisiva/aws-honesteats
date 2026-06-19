@@ -44,7 +44,8 @@ class Restaurant:
         top_offer_banner: Optional[str] = None,
         shift_timings: Optional[List[dict]] = None,
         timezone: Optional[str] = None,
-        theater_mode: Optional[str] = None
+        theater_mode: Optional[str] = None,
+        gst: Optional[str] = None
     ):
         self.location_id = location_id
         self.restaurant_id = restaurant_id
@@ -78,7 +79,10 @@ class Restaurant:
         self.theater_mode = (
             str(theater_mode).strip().upper() if theater_mode else None
         )
-    
+        # GST registration number of the restaurant (used by GST exports). Stored
+        # verbatim from the restaurant entry's `gst` field; may be absent.
+        self.gst = str(gst).strip() if gst else None
+
     @property
     def pk(self) -> str:
         """Get partition key - uses geohash precision 7 for spatial indexing"""
@@ -155,6 +159,8 @@ class Restaurant:
         result["timezone"] = self.timezone
         if self.theater_mode:
             result["theaterMode"] = self.theater_mode
+        if self.gst:
+            result["gst"] = self.gst
         return result
     
     @classmethod
@@ -235,7 +241,8 @@ class Restaurant:
             top_offer_banner=top_offer_banner,
             shift_timings=dynamodb_to_python(item["shiftTimings"]) if "shiftTimings" in item else [],
             timezone=item.get("timezone", {}).get("S", "Asia/Kolkata") if "timezone" in item else "Asia/Kolkata",
-            theater_mode=item.get("theaterMode", {}).get("S") if "theaterMode" in item else None
+            theater_mode=item.get("theaterMode", {}).get("S") if "theaterMode" in item else None,
+            gst=item.get("gst", {}).get("S") if "gst" in item else None
         )
     
     def to_dynamodb_item(self) -> dict:
@@ -290,5 +297,7 @@ class Restaurant:
         item["timezone"] = {"S": self.timezone}
         if self.theater_mode:
             item["theaterMode"] = {"S": self.theater_mode}
+        if self.gst:
+            item["gst"] = {"S": self.gst}
 
         return item

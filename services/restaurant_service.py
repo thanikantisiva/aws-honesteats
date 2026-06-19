@@ -432,7 +432,8 @@ class RestaurantService:
                     top_offer_banner=updates.get('topOfferBanner', existing_restaurant.top_offer_banner),
                     shift_timings=updates.get('shiftTimings', existing_restaurant.shift_timings),
                     timezone=updates.get('timezone', existing_restaurant.timezone),
-                    theater_mode=updates.get('theaterMode', existing_restaurant.theater_mode)
+                    theater_mode=updates.get('theaterMode', existing_restaurant.theater_mode),
+                    gst=updates.get('gst', existing_restaurant.gst)
                 )
                 
                 logger.info(f"   Creating new entry with geohash: {updated_restaurant.geohash}")

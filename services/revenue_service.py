@@ -160,7 +160,9 @@ def compute_revenue(order) -> Tuple[dict, list]:
         total_items_restaurant_price += item_restaurant_owed * quantity
 
         commission_pct = _resolve_commission_pct(item_id, restaurant_config, global_default_commission)
-        commission_base = customer_price if coupon_issued_by == "YUMDUDE" else gross_price
+       
+        #taking gross price always as commission base, because commission is calculated on gross price, not on customer price
+        commission_base = gross_price
         item_commission_per_unit = round(commission_base * commission_pct / 100.0, 4)
         item_commission = item_commission_per_unit * quantity
 
