@@ -3,7 +3,7 @@ from typing import List
 from botocore.exceptions import ClientError
 from datetime import datetime
 from models.restaurant_earnings import RestaurantEarnings
-from utils.dynamodb import dynamodb_client, TABLES
+from utils.dynamodb import dynamodb_client, TABLES, generate_id
 
 
 class RestaurantEarningsService:
@@ -112,6 +112,52 @@ class RestaurantEarningsService:
             if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
                 return
             raise Exception(f"Failed to add restaurant refund adjustment: {str(e)}")
+
+    @staticmethod
+    def add_manual_adjustment(
+        restaurant_id: str,
+        order_id: str,
+        amount: float,
+        comments: str,
+    ) -> dict:
+        """Add a manual ops adjustment row against a restaurant's earnings ledger.
+
+        Posted from the admin "Order Issues" flow. `amount` is already signed:
+          - positive  → credit (restaurant earns more)
+          - negative  → debit  (restaurant earns less)
+
+        Row key is `YYYY-MM-DD#orderId#ISSUE#adjustmentId` so multiple manual
+        adjustments on the same order co-exist, and the unique generated
+        adjustmentId keeps the attribute_not_exists ConditionExpression a no-op
+        guard against an accidental duplicate write of the same id.
+
+        The row carries `comments` for audit and is left unsettled so it shows
+        up in the restaurant's earnings history alongside order rows.
+        """
+        try:
+            adjustment_id = generate_id('ISSUE')
+            date_prefix = datetime.utcnow().strftime('%Y-%m-%d')
+            earnings = RestaurantEarnings(
+                restaurant_id=restaurant_id,
+                date=f"{date_prefix}#{order_id}#ISSUE#{adjustment_id}",
+                total_orders=0,
+                total_earnings=float(amount),
+                order_id=order_id,
+                settled=False,
+                settled_at=None,
+                settlement_id=None,
+                comments=comments,
+            )
+
+            dynamodb_client.put_item(
+                TableName=TABLES['RESTAURANT_EARNINGS'],
+                Item=earnings.to_dynamodb_item(),
+                ConditionExpression='attribute_not_exists(restaurantId) AND attribute_not_exists(#date)',
+                ExpressionAttributeNames={'#date': 'date'}
+            )
+            return earnings.to_dict()
+        except ClientError as e:
+            raise Exception(f"Failed to add restaurant manual adjustment: {str(e)}")
 
     @staticmethod
     def get_earnings_for_date_range(restaurant_id: str, start_date: str, end_date: str) -> List[RestaurantEarnings]:

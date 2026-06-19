@@ -407,3 +407,54 @@ def register_restaurant_earnings_routes(app):
         except Exception as e:
             logger.error("Error confirming settlement", exc_info=True)
             return {"error": "Failed to confirm settlement", "message": str(e)}, 500
+
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @app.post("/api/v1/restaurants/<restaurant_id>/earnings/adjustment")
+    @tracer.capture_method
+    def create_earnings_adjustment(restaurant_id: str):
+        """
+        Post a manual ops adjustment ("Order Issues") to a restaurant's earnings.
+
+        Body (JSON):
+          {
+            "orderId":  "ORD-...",     # order the issue relates to
+            "amount":   number,        # signed: positive = credit, negative = debit
+            "comments": "free text"    # required, for audit
+          }
+
+        Records an unsettled, signed row in the restaurant earnings ledger; it
+        shows up in the restaurant's earnings history. Does not touch the
+        order-revenue-based settlement preview.
+        """
+        try:
+            body     = app.current_event.json_body or {}
+            order_id = (body.get('orderId') or '').strip()
+            comments = (body.get('comments') or '').strip()
+
+            if not order_id:
+                return {"error": "orderId is required"}, 400
+            if not comments:
+                return {"error": "comments are required"}, 400
+
+            try:
+                amount = float(body.get('amount'))
+            except (TypeError, ValueError):
+                return {"error": "amount must be a number"}, 400
+            if amount == 0:
+                return {"error": "amount must be non-zero"}, 400
+
+            row = RestaurantEarningsService.add_manual_adjustment(
+                restaurant_id=restaurant_id,
+                order_id=order_id,
+                amount=amount,
+                comments=comments,
+            )
+
+            metrics.add_metric(name="RestaurantEarningsAdjustmentCreated", unit="Count", value=1)
+
+            return row, 201
+
+        except Exception as e:
+            logger.error("Error creating earnings adjustment", exc_info=True)
+            return {"error": "Failed to create earnings adjustment", "message": str(e)}, 500
