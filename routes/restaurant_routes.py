@@ -149,11 +149,11 @@ def register_restaurant_routes(app):
         """Get restaurant by ID"""
         try:
             logger.info(f"Getting restaurant: {restaurant_id}")
-            # Try to get from query params or scan (for now, we'll need location_id)
-            # For MVP, we can list all and filter, but ideally location_id should be provided
-            restaurants = RestaurantService.list_restaurants()
-            restaurant = next((r for r in restaurants if r.restaurant_id == restaurant_id), None)
-            
+            # Direct lookup via the restaurantId-index GSI (ProjectionType: ALL).
+            # The previous scan-and-filter only saw the first ~1MB scan page, so
+            # restaurants beyond it 404'd (e.g. blank GST in the admin export).
+            restaurant = RestaurantService.get_restaurant_by_id(restaurant_id)
+
             if not restaurant:
                 return {"error": "Restaurant not found"}, 404
             
