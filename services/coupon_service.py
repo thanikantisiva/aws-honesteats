@@ -186,6 +186,7 @@ class CouponService:
             "minOrderValue": float(item.get("minOrderValue", {}).get("N") or 0) or None,
             "couponRestaurant": item.get("couponRestaurant", {}).get("S"),
             "couponItem": item.get("couponItem", {}).get("S"),
+            "couponItems": item.get("couponItems", {}).get("SS", []),
             "description": item.get("description", {}).get("S") or None,
             "targetCustomerPhones": item.get("targetCustomerPhones", {}).get("SS", []),
         }
@@ -409,7 +410,15 @@ class CouponService:
             return none_result
 
         coupon_item = str(coupon.get("couponItem") or "").strip()
-        if coupon_item and coupon_item != str(item_id or "").strip():
+        coupon_items = {
+            str(value or "").strip()
+            for value in (coupon.get("couponItems") or [])
+            if str(value or "").strip()
+        }
+        normalized_item_id = str(item_id or "").strip()
+        if coupon_item and coupon_item != normalized_item_id:
+            return none_result
+        if coupon_items and normalized_item_id not in coupon_items:
             return none_result
 
         # No customer identity in this path, so targeted coupons must not apply.

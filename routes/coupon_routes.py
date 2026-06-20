@@ -43,6 +43,49 @@ def register_coupon_routes(app):
             )
         return normalized, None
 
+    def _normalize_item_ids(body: dict, fallback_item_id):
+        """Normalize itemId/itemIds payloads to a de-duplicated list of item IDs."""
+        raw_values = []
+        if fallback_item_id:
+            raw_values.append(fallback_item_id)
+
+        multi_value = None
+        for field_name in ("itemIds", "item_ids", "couponItems"):
+            if field_name in body and body[field_name] is not None:
+                multi_value = body[field_name]
+                break
+
+        if multi_value is not None:
+            if isinstance(multi_value, str):
+                raw_values.extend(part.strip() for part in multi_value.replace("\n", ",").split(","))
+            elif isinstance(multi_value, (list, tuple, set)):
+                for item_id in multi_value:
+                    if not isinstance(item_id, str):
+                        return [], ({"error": "itemIds must contain only strings"}, 400)
+                    raw_values.append(item_id.strip())
+            else:
+                return [], ({"error": "itemIds must be an array of strings or a comma-separated string"}, 400)
+
+        normalized = []
+        seen = set()
+        for item_id in raw_values:
+            value = str(item_id or "").strip()
+            if value and value not in seen:
+                normalized.append(value)
+                seen.add(value)
+        return normalized, None
+
+    def _coupon_item_ids(coupon: dict) -> list:
+        """Return item IDs from either legacy couponItem or multi-item couponItems."""
+        item_ids = []
+        seen = set()
+        for item_id in [coupon.get("couponItem"), *(coupon.get("couponItems") or [])]:
+            value = str(item_id or "").strip()
+            if value and value not in seen:
+                item_ids.append(value)
+                seen.add(value)
+        return item_ids
+
     def _normalize_target_customer_phones(body: dict):
         """Normalize optional targeted-customer phone lists for special coupons."""
         field_names = ("targetCustomerPhones", "targetCustomers", "eligibleCustomerPhones")
@@ -128,6 +171,10 @@ def register_coupon_routes(app):
             value = str(item.get(field, {}).get('S') or '').strip()
             if value:
                 coupon[field] = value
+
+        coupon_items = item.get('couponItems', {}).get('SS', [])
+        if coupon_items:
+            coupon['couponItems'] = sorted(coupon_items)
 
         min_order_value_raw = item.get('minOrderValue', {}).get('N')
         if min_order_value_raw is not None:
@@ -221,7 +268,12 @@ def register_coupon_routes(app):
                 is_once_per_day = bool(is_once_per_day)
 
             coupon_target_raw = str(body.get('couponTarget') or 'delivery').strip().lower()
-            coupon_target = 'order' if coupon_target_raw == 'order' else 'delivery'
+            if coupon_target_raw == 'item':
+                coupon_target = 'item'
+            elif coupon_target_raw == 'order':
+                coupon_target = 'order'
+            else:
+                coupon_target = 'delivery'
 
             min_order_value = body.get('minOrderValue')
             if min_order_value is not None:
@@ -245,25 +297,36 @@ def register_coupon_routes(app):
             if target_customer_phones_error:
                 return target_customer_phones_error
 
+            normalized_item_ids, item_ids_error = _normalize_item_ids(body, normalized_item_id)
+            if item_ids_error:
+                return item_ids_error
+
             normalized_issued_by = str(issued_by).strip().upper() if issued_by is not None else None
+            has_item_scope = bool(normalized_item_ids)
 
             if normalized_issued_by == 'RESTAURANT' and not normalized_coupon_restaurant:
                 return {"error": "couponRestaurant is required when issuedBy is RESTAURANT"}, 400
-            if normalized_item_id and not normalized_coupon_restaurant:
-                return {"error": "couponRestaurant is required when itemId is provided"}, 400
-            if target_customer_phones_provided and normalized_item_id:
+            if has_item_scope and not normalized_coupon_restaurant:
+                return {"error": "couponRestaurant is required when itemIds are provided"}, 400
+            if coupon_target == 'item' and not has_item_scope:
+                return {"error": "itemIds are required when couponTarget is item"}, 400
+            if has_item_scope:
+                coupon_target = 'item'
+            if target_customer_phones_provided and has_item_scope:
                 return {"error": "targetCustomerPhones is supported only for checkout coupons, not item coupons"}, 400
             # Only non-empty banner text counts as "provided" (null/empty/whitespace = omitted)
-            if item_banner_text and not normalized_item_id:
-                return {"error": "itemId is required when itemBannerText is provided"}, 400
+            if item_banner_text and not has_item_scope:
+                return {"error": "itemIds are required when itemBannerText is provided"}, 400
 
-            if normalized_coupon_restaurant and normalized_item_id:
-                menu_item = MenuService.get_menu_item(normalized_coupon_restaurant, normalized_item_id)
-                if not menu_item:
-                    return {"error": "Menu item not found for couponRestaurant and itemId"}, 404
+            if normalized_coupon_restaurant and has_item_scope:
+                for selected_item_id in normalized_item_ids:
+                    menu_item = MenuService.get_menu_item(normalized_coupon_restaurant, selected_item_id)
+                    if not menu_item:
+                        return {"error": f"Menu item not found: {selected_item_id}"}, 404
 
             pk = f"COUPON#{code}"
             sk = "DETAILS"
+            existing_coupon = CouponService.get_coupon(code)
 
             item = {
                 'partitionkey': {'S': pk},
@@ -279,8 +342,10 @@ def register_coupon_routes(app):
                 item['issuedBy'] = {'S': normalized_issued_by}
             if normalized_coupon_restaurant:
                 item['couponRestaurant'] = {'S': normalized_coupon_restaurant}
-            if normalized_item_id:
-                item['couponItem'] = {'S': normalized_item_id}
+            if len(normalized_item_ids) == 1:
+                item['couponItem'] = {'S': normalized_item_ids[0]}
+            elif len(normalized_item_ids) > 1:
+                item['couponItems'] = {'SS': normalized_item_ids}
             item['isOncePerUser'] = {'BOOL': is_once_per_user}
             item['isOncePerDay'] = {'BOOL': is_once_per_day}
             item['couponTarget'] = {'S': coupon_target}
@@ -296,20 +361,40 @@ def register_coupon_routes(app):
                 Item=item
             )
 
-            if normalized_coupon_restaurant and normalized_item_id:
+            if normalized_coupon_restaurant and has_item_scope:
+                previous_item_ids = set(_coupon_item_ids(existing_coupon or {}))
+                previous_restaurant = str((existing_coupon or {}).get("couponRestaurant") or normalized_coupon_restaurant).strip()
+                selected_item_ids = set(normalized_item_ids)
+                removed_item_ids = previous_item_ids - selected_item_ids
+
+                for removed_item_id in removed_item_ids:
+                    menu_item = MenuService.get_menu_item(previous_restaurant, removed_item_id)
+                    if menu_item and menu_item.item_offer_coupon_code == str(code).strip():
+                        MenuService.update_menu_item(
+                            previous_restaurant,
+                            removed_item_id,
+                            {
+                                "itemOfferCouponCode": None,
+                                "topOfferBanner": None,
+                            },
+                        )
+
                 item_updates = {
                     'itemOfferCouponCode': str(code).strip(),
                 }
                 if item_banner_text:
                     item_updates['topOfferBanner'] = item_banner_text
-                MenuService.update_menu_item(normalized_coupon_restaurant, normalized_item_id, item_updates)
+                for selected_item_id in normalized_item_ids:
+                    MenuService.update_menu_item(normalized_coupon_restaurant, selected_item_id, item_updates)
 
             metrics.add_metric(name="CouponSaved", unit="Count", value=1)
             response = {"message": "Coupon saved", "couponCode": code}
             if normalized_coupon_restaurant:
                 response["couponRestaurant"] = normalized_coupon_restaurant
-            if normalized_item_id:
-                response["itemId"] = normalized_item_id
+            if len(normalized_item_ids) == 1:
+                response["itemId"] = normalized_item_ids[0]
+            elif len(normalized_item_ids) > 1:
+                response["itemIds"] = normalized_item_ids
             if item_banner_text:
                 response["itemBannerText"] = item_banner_text
             if target_customer_phones_provided:
@@ -329,11 +414,13 @@ def register_coupon_routes(app):
             sk = "DETAILS"
 
             coupon_restaurant = str((coupon or {}).get("couponRestaurant") or "").strip()
-            coupon_item = str((coupon or {}).get("couponItem") or "").strip()
+            coupon_item_ids = _coupon_item_ids(coupon or {})
 
-            if coupon_restaurant and coupon_item:
-                menu_item = MenuService.get_menu_item(coupon_restaurant, coupon_item)
-                if menu_item:
+            if coupon_restaurant and coupon_item_ids:
+                for coupon_item in coupon_item_ids:
+                    menu_item = MenuService.get_menu_item(coupon_restaurant, coupon_item)
+                    if not menu_item or menu_item.item_offer_coupon_code != str(coupon_code).strip():
+                        continue
                     MenuService.update_menu_item(
                         coupon_restaurant,
                         coupon_item,
@@ -406,6 +493,8 @@ def register_coupon_routes(app):
             for item in all_items:
                 # Exclude item-level coupons (tied to a specific menu item, not checkout-level)
                 if item.get('couponItem', {}).get('S'):
+                    continue
+                if item.get('couponItems', {}).get('SS'):
                     continue
                 # Exclude coupons whose target is the item itself (item-scoped, not checkout-level)
                 if (item.get('couponTarget', {}).get('S') or '').strip().lower() == 'item':
