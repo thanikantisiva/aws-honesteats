@@ -22,6 +22,7 @@ from services.cod_config_service import fetch_cod_config, parse_hhmm
 from services.user_service import UserService
 from utils import normalize_phone
 from utils.datetime_ist import IST
+from utils.time_window import within_window
 
 logger = Logger()
 tracer = Tracer()
@@ -59,16 +60,11 @@ def _within_cod_hours(cod_config: dict, now_minutes: Optional[int]) -> bool:
     ``availableFrom`` be greater than ``availableTo`` (e.g. 18:00-02:00); to disable
     COD overnight you set the daytime window, e.g. 06:00-21:00.
     """
-    if now_minutes is None:
-        return True
-    start = parse_hhmm(cod_config.get("availableFrom"))
-    end = parse_hhmm(cod_config.get("availableTo"))
-    if start is None or end is None or start == end:
-        return True  # no/incomplete window -> available all day
-    if start < end:
-        return start <= now_minutes < end
-    # Window wraps past midnight.
-    return now_minutes >= start or now_minutes < end
+    return within_window(
+        parse_hhmm(cod_config.get("availableFrom")),
+        parse_hhmm(cod_config.get("availableTo")),
+        now_minutes,
+    )
 
 
 def _decide_cod(

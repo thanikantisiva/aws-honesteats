@@ -18,6 +18,7 @@ from aws_lambda_powertools import Logger
 
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.dynamodb_helpers import dynamodb_to_python
+from utils.time_window import parse_hhmm  # noqa: F401  (re-exported for callers)
 
 logger = Logger()
 
@@ -26,25 +27,6 @@ COD_CONFIG_SK = "CONFIG"
 LEGACY_CONFIG_PK = "CONFIG#GLOBAL"
 LEGACY_CONFIG_SK = "CONFIG"
 LEGACY_COD_KEY = "codConfig"
-
-
-def parse_hhmm(value) -> Optional[int]:
-    """Parse a 24h ``"HH:MM"`` string into minutes-since-midnight.
-
-    Returns None for absent / malformed / out-of-range values.
-    """
-    if not isinstance(value, str):
-        return None
-    parts = value.strip().split(":")
-    if len(parts) != 2:
-        return None
-    try:
-        hours, minutes = int(parts[0]), int(parts[1])
-    except (TypeError, ValueError):
-        return None
-    if not (0 <= hours <= 23 and 0 <= minutes <= 59):
-        return None
-    return hours * 60 + minutes
 
 
 def _read_config_map(pk: str, sk: str) -> Optional[dict]:

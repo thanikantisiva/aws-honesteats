@@ -1,5 +1,6 @@
 """Coupon routes"""
 from aws_lambda_powertools import Logger, Tracer, Metrics
+from services.coupon_config_service import coupons_enabled_now
 from services.coupon_service import CouponService
 from services.menu_service import MenuService
 from utils import normalize_phone
@@ -449,6 +450,10 @@ def register_coupon_routes(app):
     def get_available_coupons():
         """Return all active, eligible coupons for a given restaurant and user."""
         try:
+            # Global coupon kill-switch / time window — hide all coupons when off.
+            if not coupons_enabled_now():
+                return {'coupons': []}, 200
+
             restaurant_id = app.current_event.get_query_string_value('restaurantId')
             mobile_number = normalize_phone(app.current_event.get_query_string_value('mobileNumber'))
             blocked_coupon_codes = CouponService.get_blocked_coupon_codes_for_restaurant(restaurant_id)

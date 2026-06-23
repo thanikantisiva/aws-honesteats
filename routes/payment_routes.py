@@ -258,9 +258,17 @@ def register_payment_routes(app):
             if not receiver_phone:
                 return {"error": "receiverPhone is required"}, 400
 
+            from services.coupon_config_service import (
+                coupons_enabled_now,
+                strip_coupon_from_fee_response,
+            )
+            coupons_on = coupons_enabled_now()
+
             if coupon_code:
                 from services.coupon_service import CouponService
 
+                if not coupons_on:
+                    return {"error": "Coupons are disabled at this time"}, 400
                 coupon = CouponService.get_coupon(coupon_code)
                 if not coupon or not CouponService.is_coupon_active(coupon.get("startDate"), coupon.get("endDate")):
                     return {"error": "Coupon is inactive or invalid"}, 400
@@ -270,7 +278,14 @@ def register_payment_routes(app):
                     return {"error": "Coupon is not valid for this restaurant"}, 400
                 if not CouponService.is_coupon_valid_for_customer(coupon, customer_phone):
                     return {"error": "Coupon is not valid for this customer"}, 403
-            
+
+            # Safety net: when coupons are globally off, never let a (possibly fabricated
+            # or stale) calculatedFeeResponse carry a checkout-coupon discount into the
+            # order — this transitively keeps settlement + usage commits clean.
+            if not coupons_on:
+                strip_coupon_from_fee_response(calculated_fee_response)
+                coupon_applied = False
+
             # Generate IDs
             payment_id = generate_id('PAY')
             order_id = generate_id('ORD')

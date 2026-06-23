@@ -4,6 +4,7 @@ from typing import Optional
 
 from aws_lambda_powertools import Logger, Tracer, Metrics
 from config.pricing import compute_gst_breakdown
+from services.coupon_config_service import coupons_enabled_now
 from services.coupon_service import CouponService
 from services.restaurant_service import RestaurantService
 from utils.dynamodb import dynamodb_client, TABLES
@@ -378,6 +379,15 @@ def register_delivery_routes(app):
             # Coupon is informational only: discount is reported but deliveryFee is unchanged.
             coupon_applied = False
             if coupon_code:
+                # Global coupon kill-switch / time window (CONFIG#COUPONS).
+                if not coupons_enabled_now():
+                    logger.info(
+                        "Coupon not applied — coupon usage globally disabled / outside window: "
+                        f"couponCode={coupon_code}"
+                    )
+                    result['couponApplied'] = False
+                    result['couponRejectedReason'] = 'coupons_disabled'
+                    return result, 200
                 try:
                     # Fetch coupon record + user usage records in one BatchGetItem round trip
                     # instead of 2-3 sequential GetItem calls.

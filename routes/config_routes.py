@@ -8,6 +8,7 @@ from services.cod_config_service import (
     LEGACY_COD_KEY,
     parse_hhmm,
 )
+from services.coupon_config_service import COUPON_CONFIG_PK, COUPON_CONFIG_SK
 from services.yumcoins_config_service import (
     YUMCOINS_CONFIG_PK,
     YUMCOINS_CONFIG_SK,
@@ -359,6 +360,68 @@ def register_config_routes(app):
         except Exception as e:
             logger.error("Error saving COD config", exc_info=True)
             return {"error": "Failed to save COD config", "message": str(e)}, 500
+
+    @app.get("/api/v1/coupon-config")
+    @tracer.capture_method
+    def get_coupon_config():
+        """Fetch the global coupon-usage config (enabled / availableFrom / availableTo).
+        Returns defaults (enabled, no window) when the row hasn't been created."""
+        try:
+            item = _fetch_config_item(COUPON_CONFIG_PK, COUPON_CONFIG_SK)
+            config = {}
+            updated_at = None
+            if item:
+                parsed = dynamodb_to_python(item.get("config", {"NULL": True}))
+                config = parsed if isinstance(parsed, dict) else {}
+                updated_at = item.get("updatedAt", {}).get("S")
+            metrics.add_metric(name="CouponConfigFetched", unit="Count", value=1)
+            return {
+                "couponConfig": {
+                    "enabled": bool(config.get("enabled", True)),
+                    "availableFrom": config.get("availableFrom", ""),
+                    "availableTo": config.get("availableTo", ""),
+                },
+                "updatedAt": updated_at,
+            }, 200
+        except Exception as e:
+            logger.error("Error fetching coupon config", exc_info=True)
+            return {"error": "Failed to fetch coupon config", "message": str(e)}, 500
+
+    @app.post("/api/v1/coupon-config")
+    @tracer.capture_method
+    def save_coupon_config():
+        """Create/replace the global coupon-usage config row. Accepts the settings
+        either at the top level or nested under `couponConfig`."""
+        try:
+            body = app.current_event.json_body or {}
+            source = body.get("couponConfig") if isinstance(body.get("couponConfig"), dict) else body
+            if not isinstance(source, dict):
+                return {"error": "Body must be a JSON object"}, 400
+
+            config = {"enabled": _coerce_bool(source.get("enabled", True), True)}
+            for key in ("availableFrom", "availableTo"):
+                value = source.get(key)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    continue
+                if parse_hhmm(value) is None:
+                    return {"error": f"{key} must be a 24h time in HH:MM format"}, 400
+                config[key] = value.strip()
+            if ("availableFrom" in config) != ("availableTo" in config):
+                return {"error": "availableFrom and availableTo must be set together"}, 400
+
+            item = {
+                "partitionkey": {"S": COUPON_CONFIG_PK},
+                "sortKey": {"S": COUPON_CONFIG_SK},
+                "config": python_to_dynamodb(config),
+                "updatedAt": {"S": now_ist_iso()},
+            }
+            dynamodb_client.put_item(TableName=TABLES["CONFIG"], Item=item)
+
+            metrics.add_metric(name="CouponConfigSaved", unit="Count", value=1)
+            return {"message": "Coupon config saved", "couponConfig": config}, 200
+        except Exception as e:
+            logger.error("Error saving coupon config", exc_info=True)
+            return {"error": "Failed to save coupon config", "message": str(e)}, 500
 
     @app.get("/api/v1/config/home-hero-banner")
     @tracer.capture_method
