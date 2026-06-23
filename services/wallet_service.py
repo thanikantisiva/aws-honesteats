@@ -93,7 +93,6 @@ class WalletService:
         category: str,
         amount: float,
         reference_id: str,
-        expires_at: Optional[str] = None,
         reference_type: Optional[str] = None,
         description: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -116,7 +115,6 @@ class WalletService:
             direction=Wallet.DIRECTION_CREDIT,
             category=category,
             amount=amount,
-            expires_at=expires_at,
             reference_id=reference_id,
             reference_type=reference_type,
             description=description,
@@ -171,7 +169,7 @@ class WalletService:
         reference_id: str,
         description: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Idempotently debit YumCoins (redemption / expiry).
+        """Idempotently debit YumCoins (redemption).
 
         DESIGN-ONLY — not yet wired to any route. Guards against driving the
         balance negative via a conditional update on the summary row; if the

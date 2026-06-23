@@ -21,8 +21,7 @@ class Wallet:
     CATEGORY_ORDER_CASHBACK = "ORDER_CASHBACK"
     CATEGORY_REFERRAL = "REFERRAL"                # credit to the referrer
     CATEGORY_REFERRAL_SIGNUP = "REFERRAL_SIGNUP"  # credit to the referred user
-    CATEGORY_REDEMPTION = "REDEMPTION"            # future DEBIT (spend at checkout)
-    CATEGORY_EXPIRY = "EXPIRY"                     # future DEBIT (expiry sweep)
+    CATEGORY_REDEMPTION = "REDEMPTION"            # DEBIT (spend at checkout)
 
     # Directions.
     DIRECTION_CREDIT = "CREDIT"
@@ -41,7 +40,6 @@ class Wallet:
         category: Optional[str] = None,
         amount: float = 0.0,
         balance_after: Optional[float] = None,
-        expires_at: Optional[str] = None,
         reference_id: Optional[str] = None,
         reference_type: Optional[str] = None,
         description: Optional[str] = None,
@@ -56,7 +54,6 @@ class Wallet:
         self.category = category
         self.amount = amount
         self.balance_after = balance_after
-        self.expires_at = expires_at
         self.reference_id = reference_id
         self.reference_type = reference_type
         self.description = description
@@ -87,8 +84,6 @@ class Wallet:
         }
         if self.balance_after is not None:
             result["balanceAfter"] = self.balance_after
-        if self.expires_at:
-            result["expiresAt"] = self.expires_at
         if self.reference_id:
             result["referenceId"] = self.reference_id
         if self.reference_type:
@@ -107,7 +102,6 @@ class Wallet:
             category=item.get("category", {}).get("S") if "category" in item else None,
             amount=float(item.get("amount", {}).get("N", "0")) if "amount" in item else 0.0,
             balance_after=float(item.get("balanceAfter", {}).get("N")) if "balanceAfter" in item else None,
-            expires_at=item.get("expiresAt", {}).get("S") if "expiresAt" in item else None,
             reference_id=item.get("referenceId", {}).get("S") if "referenceId" in item else None,
             reference_type=item.get("referenceType", {}).get("S") if "referenceType" in item else None,
             description=item.get("description", {}).get("S") if "description" in item else None,
@@ -140,8 +134,6 @@ class Wallet:
             item["category"] = {"S": self.category}
         if self.balance_after is not None:
             item["balanceAfter"] = {"N": str(self.balance_after)}
-        if self.expires_at:
-            item["expiresAt"] = {"S": self.expires_at}
         if self.reference_id:
             item["referenceId"] = {"S": self.reference_id}
         if self.reference_type:

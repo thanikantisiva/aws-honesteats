@@ -138,7 +138,6 @@ class ReferralService:
         if not cfg.get("enabled"):
             return
 
-        expiry = cfg.get("expiry")
         referrer_reward = ReferralService._as_int(cfg.get("referrerReward"))
         referee_reward = ReferralService._as_int(cfg.get("refereeReward"))
 
@@ -150,7 +149,6 @@ class ReferralService:
                 amount=referrer_reward,
                 reference_id=referee_phone,  # uniquely identifies this referral
                 reference_type="REFERRAL",
-                expires_at=expiry,
                 description=f"Referral reward — {referee_phone} signed up with your code",
             )
 
@@ -162,7 +160,6 @@ class ReferralService:
                 amount=referee_reward,
                 reference_id=referee_phone,
                 reference_type="REFERRAL",
-                expires_at=expiry,
                 description=f"Welcome referral reward (referred by {referrer_phone})",
             )
 
@@ -213,7 +210,6 @@ class ReferralService:
             amount=coins,
             reference_id=order.order_id,
             reference_type="ORDER",
-            expires_at=cfg.get("expiry"),
             description=f"Cashback for order {order.order_id}",
         )
 
