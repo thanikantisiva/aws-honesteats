@@ -2,6 +2,11 @@
 import json
 from datetime import datetime, timezone
 from aws_lambda_powertools import Logger, Tracer, Metrics
+from services.yumcoins_config_service import (
+    YUMCOINS_CONFIG_PK,
+    YUMCOINS_CONFIG_SK,
+    YUMCOINS_KEYS,
+)
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.dynamodb_helpers import python_to_dynamodb, dynamodb_to_python
 from utils.datetime_ist import now_ist_iso, now_ist_strftime
@@ -197,6 +202,78 @@ def register_config_routes(app):
         except Exception as e:
             logger.error("Error fetching config", exc_info=True)
             return {"error": "Failed to fetch config", "message": str(e)}, 500
+
+    @app.get("/api/v1/yumcoins-config")
+    @tracer.capture_method
+    def get_yumcoins_config():
+        """Fetch the dedicated YumCoins config (walletConfig / referralConfig /
+        orderCashbackConfig). Falls back to legacy CONFIG#GLOBAL keys if the
+        dedicated row hasn't been created yet."""
+        try:
+            item = _fetch_config_item(YUMCOINS_CONFIG_PK, YUMCOINS_CONFIG_SK)
+            source = "YUMCOINS"
+            updated_at = None
+            config = {}
+
+            if item:
+                parsed = dynamodb_to_python(item.get("config", {"NULL": True}))
+                config = parsed if isinstance(parsed, dict) else {}
+                updated_at = item.get("updatedAt", {}).get("S")
+            else:
+                # Legacy fallback: pull the coin keys out of the global config row.
+                legacy = _fetch_config_item(CONFIG_PK, CONFIG_SK)
+                if legacy:
+                    parsed = dynamodb_to_python(legacy.get("config", {"NULL": True}))
+                    if isinstance(parsed, dict):
+                        config = {k: parsed[k] for k in YUMCOINS_KEYS if k in parsed}
+                source = "GLOBAL_LEGACY"
+
+            metrics.add_metric(name="YumCoinsConfigFetched", unit="Count", value=1)
+            return {
+                "walletConfig": config.get("walletConfig", {}),
+                "referralConfig": config.get("referralConfig", {}),
+                "orderCashbackConfig": config.get("orderCashbackConfig", {}),
+                "updatedAt": updated_at,
+                "source": source,
+            }, 200
+        except Exception as e:
+            logger.error("Error fetching YumCoins config", exc_info=True)
+            return {"error": "Failed to fetch YumCoins config", "message": str(e)}, 500
+
+    @app.post("/api/v1/yumcoins-config")
+    @tracer.capture_method
+    def save_yumcoins_config():
+        """Create/replace the dedicated YumCoins config row. Accepts the three
+        config objects either at the top level or nested under `config`; only the
+        known keys are persisted."""
+        try:
+            body = app.current_event.json_body or {}
+            source = body.get("config") if isinstance(body.get("config"), dict) else body
+            if not isinstance(source, dict):
+                return {"error": "Body must be a JSON object"}, 400
+
+            config = {}
+            for key in YUMCOINS_KEYS:
+                value = source.get(key)
+                if value is None:
+                    continue
+                if not isinstance(value, dict):
+                    return {"error": f"{key} must be an object"}, 400
+                config[key] = value
+
+            item = {
+                "partitionkey": {"S": YUMCOINS_CONFIG_PK},
+                "sortKey": {"S": YUMCOINS_CONFIG_SK},
+                "config": python_to_dynamodb(config),
+                "updatedAt": {"S": now_ist_iso()},
+            }
+            dynamodb_client.put_item(TableName=TABLES["CONFIG"], Item=item)
+
+            metrics.add_metric(name="YumCoinsConfigSaved", unit="Count", value=1)
+            return {"message": "YumCoins config saved", "config": config}, 200
+        except Exception as e:
+            logger.error("Error saving YumCoins config", exc_info=True)
+            return {"error": "Failed to save YumCoins config", "message": str(e)}, 500
 
     @app.get("/api/v1/config/home-hero-banner")
     @tracer.capture_method

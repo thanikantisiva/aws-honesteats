@@ -12,29 +12,19 @@ from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 
 from models.wallet import Wallet
+from services.yumcoins_config_service import fetch_yumcoins_config
 from utils.datetime_ist import now_ist_iso
 from utils.dynamodb import dynamodb_client, TABLES
-from utils.dynamodb_helpers import dynamodb_to_python
 
 logger = Logger()
 
-CONFIG_PK = "CONFIG#GLOBAL"
-CONFIG_SK = "CONFIG"
 DEFAULT_CONVERSION_RATE = 1.0
 
 
 def _fetch_wallet_conversion_rate() -> float:
-    """Read ₹-per-YumCoin from CONFIG#GLOBAL.config.walletConfig.yumConversionRate."""
+    """Read ₹-per-YumCoin from the YumCoins config (walletConfig.yumConversionRate)."""
     try:
-        response = dynamodb_client.get_item(
-            TableName=TABLES["CONFIG"],
-            Key={"partitionkey": {"S": CONFIG_PK}, "sortKey": {"S": CONFIG_SK}},
-        )
-        item = response.get("Item")
-        if not item:
-            return DEFAULT_CONVERSION_RATE
-        config = dynamodb_to_python(item.get("config", {"NULL": True}))
-        wallet_cfg = config.get("walletConfig") if isinstance(config, dict) else None
+        wallet_cfg = fetch_yumcoins_config().get("walletConfig")
         if isinstance(wallet_cfg, dict):
             rate = float(wallet_cfg.get("yumConversionRate"))
             if rate > 0:
@@ -47,7 +37,7 @@ def _fetch_wallet_conversion_rate() -> float:
 
 
 def _fetch_redemption_config() -> dict:
-    """Read coin-redemption settings from CONFIG#GLOBAL.config.walletConfig.
+    """Read coin-redemption settings from the YumCoins config (walletConfig).
 
     Returns a dict with redemption-OFF defaults so a missing/partial config can
     never let coins be spent unexpectedly:
@@ -61,15 +51,7 @@ def _fetch_redemption_config() -> dict:
         "minOrderValue": 0.0,
     }
     try:
-        response = dynamodb_client.get_item(
-            TableName=TABLES["CONFIG"],
-            Key={"partitionkey": {"S": CONFIG_PK}, "sortKey": {"S": CONFIG_SK}},
-        )
-        item = response.get("Item")
-        if not item:
-            return cfg
-        config = dynamodb_to_python(item.get("config", {"NULL": True}))
-        wallet_cfg = config.get("walletConfig") if isinstance(config, dict) else None
+        wallet_cfg = fetch_yumcoins_config().get("walletConfig")
         if not isinstance(wallet_cfg, dict):
             return cfg
         rate = float(wallet_cfg.get("yumConversionRate", DEFAULT_CONVERSION_RATE) or DEFAULT_CONVERSION_RATE)

@@ -9,7 +9,8 @@ Responsibilities:
   * On order delivery: credit the buyer's own order-cashback YumCoins.
 
 All YumCoin movements go through the idempotent ``WalletService.credit`` and all
-tunables (referral rewards, cashback %) live in ``CONFIG#GLOBAL.config``.
+tunables (referral rewards, cashback %) live in the dedicated YumCoins config row
+(``CONFIG#YUMCOINS``); see services/yumcoins_config_service.py.
 """
 import math
 import random
@@ -21,14 +22,11 @@ from botocore.exceptions import ClientError
 from models.wallet import Wallet
 from services.user_service import UserService
 from services.wallet_service import WalletService
+from services.yumcoins_config_service import fetch_yumcoins_config
 from utils.datetime_ist import now_ist_iso
 from utils.dynamodb import dynamodb_client, TABLES
-from utils.dynamodb_helpers import dynamodb_to_python
 
 logger = Logger()
-
-CONFIG_PK = "CONFIG#GLOBAL"
-CONFIG_SK = "CONFIG"
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no ambiguous 0/O/1/I
 CODE_LEN = 6
@@ -42,19 +40,8 @@ class ReferralService:
     # ------------------------------------------------------------------ config
     @staticmethod
     def _fetch_global_config() -> dict:
-        try:
-            response = dynamodb_client.get_item(
-                TableName=TABLES["CONFIG"],
-                Key={"partitionkey": {"S": CONFIG_PK}, "sortKey": {"S": CONFIG_SK}},
-            )
-            item = response.get("Item")
-            if not item:
-                return {}
-            payload = dynamodb_to_python(item.get("config", {"NULL": True}))
-            return payload if isinstance(payload, dict) else {}
-        except Exception as e:
-            logger.warning(f"Failed to fetch referral/cashback config: {e}")
-            return {}
+        """YumCoins config map ({referralConfig, orderCashbackConfig, ...})."""
+        return fetch_yumcoins_config()
 
     # --------------------------------------------------- referral code lifecycle
     @staticmethod
