@@ -2,6 +2,12 @@
 import json
 from datetime import datetime, timezone
 from aws_lambda_powertools import Logger, Tracer, Metrics
+from services.cod_config_service import (
+    COD_CONFIG_PK,
+    COD_CONFIG_SK,
+    LEGACY_COD_KEY,
+    parse_hhmm,
+)
 from services.yumcoins_config_service import (
     YUMCOINS_CONFIG_PK,
     YUMCOINS_CONFIG_SK,
@@ -274,6 +280,85 @@ def register_config_routes(app):
         except Exception as e:
             logger.error("Error saving YumCoins config", exc_info=True)
             return {"error": "Failed to save YumCoins config", "message": str(e)}, 500
+
+    @app.get("/api/v1/cod-config")
+    @tracer.capture_method
+    def get_cod_config():
+        """Fetch the dedicated COD config (disableCod / minAmount / maxAmount).
+        Falls back to legacy CONFIG#GLOBAL.codConfig if the dedicated row hasn't
+        been created yet."""
+        try:
+            item = _fetch_config_item(COD_CONFIG_PK, COD_CONFIG_SK)
+            source = "COD"
+            updated_at = None
+            cod = {}
+
+            if item:
+                parsed = dynamodb_to_python(item.get("config", {"NULL": True}))
+                cod = parsed if isinstance(parsed, dict) else {}
+                updated_at = item.get("updatedAt", {}).get("S")
+            else:
+                legacy = _fetch_config_item(CONFIG_PK, CONFIG_SK)
+                if legacy:
+                    parsed = dynamodb_to_python(legacy.get("config", {"NULL": True}))
+                    if isinstance(parsed, dict) and isinstance(parsed.get(LEGACY_COD_KEY), dict):
+                        cod = parsed[LEGACY_COD_KEY]
+                source = "GLOBAL_LEGACY"
+
+            metrics.add_metric(name="CodConfigFetched", unit="Count", value=1)
+            return {"codConfig": cod, "updatedAt": updated_at, "source": source}, 200
+        except Exception as e:
+            logger.error("Error fetching COD config", exc_info=True)
+            return {"error": "Failed to fetch COD config", "message": str(e)}, 500
+
+    @app.post("/api/v1/cod-config")
+    @tracer.capture_method
+    def save_cod_config():
+        """Create/replace the dedicated COD config row. Accepts the settings
+        either at the top level or nested under `codConfig`."""
+        try:
+            body = app.current_event.json_body or {}
+            source = body.get("codConfig") if isinstance(body.get("codConfig"), dict) else body
+            if not isinstance(source, dict):
+                return {"error": "Body must be a JSON object"}, 400
+
+            cod = {}
+            if "disableCod" in source:
+                cod["disableCod"] = _coerce_bool(source.get("disableCod"))
+            for key in ("minAmount", "maxAmount"):
+                if source.get(key) is None:
+                    continue
+                try:
+                    cod[key] = float(source[key])
+                except (TypeError, ValueError):
+                    return {"error": f"{key} must be a number"}, 400
+            if "minAmount" in cod and "maxAmount" in cod and cod["minAmount"] > cod["maxAmount"]:
+                return {"error": "minAmount cannot exceed maxAmount"}, 400
+
+            # Optional availability window (24h "HH:MM"). Empty string clears it.
+            for key in ("availableFrom", "availableTo"):
+                value = source.get(key)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    continue
+                if parse_hhmm(value) is None:
+                    return {"error": f"{key} must be a 24h time in HH:MM format"}, 400
+                cod[key] = value.strip()
+            if ("availableFrom" in cod) != ("availableTo" in cod):
+                return {"error": "availableFrom and availableTo must be set together"}, 400
+
+            item = {
+                "partitionkey": {"S": COD_CONFIG_PK},
+                "sortKey": {"S": COD_CONFIG_SK},
+                "config": python_to_dynamodb(cod),
+                "updatedAt": {"S": now_ist_iso()},
+            }
+            dynamodb_client.put_item(TableName=TABLES["CONFIG"], Item=item)
+
+            metrics.add_metric(name="CodConfigSaved", unit="Count", value=1)
+            return {"message": "COD config saved", "codConfig": cod}, 200
+        except Exception as e:
+            logger.error("Error saving COD config", exc_info=True)
+            return {"error": "Failed to save COD config", "message": str(e)}, 500
 
     @app.get("/api/v1/config/home-hero-banner")
     @tracer.capture_method
