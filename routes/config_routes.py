@@ -8,7 +8,18 @@ from services.cod_config_service import (
     LEGACY_COD_KEY,
     parse_hhmm,
 )
-from services.coupon_config_service import COUPON_CONFIG_PK, COUPON_CONFIG_SK
+from services.coupon_config_service import (
+    COUPON_CONFIG_PK,
+    COUPON_CONFIG_SK,
+    BLOCKED_KEY,
+    fetch_blocked_coupons,
+    write_config_keys,
+)
+from services.rider_config_service import (
+    RIDER_CONFIG_PK,
+    RIDER_CONFIG_SK,
+    RIDER_KEYS,
+)
 from services.yumcoins_config_service import (
     YUMCOINS_CONFIG_PK,
     YUMCOINS_CONFIG_SK,
@@ -398,30 +409,145 @@ def register_config_routes(app):
             if not isinstance(source, dict):
                 return {"error": "Body must be a JSON object"}, 400
 
-            config = {"enabled": _coerce_bool(source.get("enabled", True), True)}
+            updates = {"enabled": _coerce_bool(source.get("enabled", True), True)}
+            window = {}
             for key in ("availableFrom", "availableTo"):
                 value = source.get(key)
-                if value is None or (isinstance(value, str) and not value.strip()):
-                    continue
-                if parse_hhmm(value) is None:
+                value = value.strip() if isinstance(value, str) else ""
+                if value and parse_hhmm(value) is None:
                     return {"error": f"{key} must be a 24h time in HH:MM format"}, 400
-                config[key] = value.strip()
-            if ("availableFrom" in config) != ("availableTo" in config):
+                window[key] = value
+            if bool(window["availableFrom"]) != bool(window["availableTo"]):
                 return {"error": "availableFrom and availableTo must be set together"}, 400
+            updates.update(window)
+
+            # Targeted write so the per-restaurant blocklist sharing this row is not clobbered.
+            write_config_keys(updates)
+
+            metrics.add_metric(name="CouponConfigSaved", unit="Count", value=1)
+            return {"message": "Coupon config saved", "couponConfig": updates}, 200
+        except Exception as e:
+            logger.error("Error saving coupon config", exc_info=True)
+            return {"error": "Failed to save coupon config", "message": str(e)}, 500
+
+    @app.get("/api/v1/coupon-blocks")
+    @tracer.capture_method
+    def get_coupon_blocks():
+        """Per-restaurant coupon blocklist (moved to CONFIG#COUPONS; falls back to
+        the legacy CONFIG#GLOBAL keys until migrated)."""
+        try:
+            blocked = fetch_blocked_coupons()
+            item = _fetch_config_item(COUPON_CONFIG_PK, COUPON_CONFIG_SK)
+            source = "COUPONS" if item and BLOCKED_KEY in (
+                dynamodb_to_python(item.get("config", {"NULL": True})) or {}
+            ) else "GLOBAL_LEGACY"
+            metrics.add_metric(name="CouponBlocksFetched", unit="Count", value=1)
+            return {"blockedCouponsByRestaurant": blocked, "source": source}, 200
+        except Exception as e:
+            logger.error("Error fetching coupon blocks", exc_info=True)
+            return {"error": "Failed to fetch coupon blocks", "message": str(e)}, 500
+
+    @app.post("/api/v1/coupon-blocks")
+    @tracer.capture_method
+    def save_coupon_blocks():
+        """Replace the per-restaurant coupon blocklist (targeted write to CONFIG#COUPONS)."""
+        try:
+            body = app.current_event.json_body or {}
+            source = body.get("blockedCouponsByRestaurant")
+            if source is None and isinstance(body.get("config"), dict):
+                source = body["config"].get("blockedCouponsByRestaurant")
+            if not isinstance(source, dict):
+                return {"error": "blockedCouponsByRestaurant must be an object"}, 400
+
+            cleaned = {}
+            for restaurant_id, codes in source.items():
+                rid = str(restaurant_id or "").strip()
+                if not rid:
+                    continue
+                if isinstance(codes, str):
+                    codes = codes.replace("\n", ",").split(",")
+                if not isinstance(codes, (list, tuple, set)):
+                    return {"error": f"codes for {rid} must be a list"}, 400
+                norm = sorted({str(c).strip().upper() for c in codes if str(c or "").strip()})
+                if norm:
+                    cleaned[rid] = norm
+
+            write_config_keys({BLOCKED_KEY: cleaned})
+            metrics.add_metric(name="CouponBlocksSaved", unit="Count", value=1)
+            return {"message": "Coupon blocks saved", "blockedCouponsByRestaurant": cleaned}, 200
+        except Exception as e:
+            logger.error("Error saving coupon blocks", exc_info=True)
+            return {"error": "Failed to save coupon blocks", "message": str(e)}, 500
+
+    @app.get("/api/v1/rider-config")
+    @tracer.capture_method
+    def get_rider_config():
+        """Fetch the dedicated rider config (riderSlots / riderBonusConfig /
+        riderSlotsSettings). Falls back to legacy CONFIG#GLOBAL keys if the
+        dedicated row hasn't been created yet."""
+        try:
+            item = _fetch_config_item(RIDER_CONFIG_PK, RIDER_CONFIG_SK)
+            source = "RIDER"
+            updated_at = None
+            config = {}
+
+            if item:
+                parsed = dynamodb_to_python(item.get("config", {"NULL": True}))
+                config = parsed if isinstance(parsed, dict) else {}
+                updated_at = item.get("updatedAt", {}).get("S")
+            else:
+                legacy = _fetch_config_item(CONFIG_PK, CONFIG_SK)
+                if legacy:
+                    parsed = dynamodb_to_python(legacy.get("config", {"NULL": True}))
+                    if isinstance(parsed, dict):
+                        config = {k: parsed[k] for k in RIDER_KEYS if k in parsed}
+                source = "GLOBAL_LEGACY"
+
+            metrics.add_metric(name="RiderConfigFetched", unit="Count", value=1)
+            response = {"updatedAt": updated_at, "source": source}
+            for key in RIDER_KEYS:
+                response[key] = config.get(key)
+            return response, 200
+        except Exception as e:
+            logger.error("Error fetching rider config", exc_info=True)
+            return {"error": "Failed to fetch rider config", "message": str(e)}, 500
+
+    @app.post("/api/v1/rider-config")
+    @tracer.capture_method
+    def save_rider_config():
+        """Create/replace the dedicated rider config row. Accepts the keys either at
+        the top level or nested under `config`; only the known keys are persisted."""
+        try:
+            body = app.current_event.json_body or {}
+            source = body.get("config") if isinstance(body.get("config"), dict) else body
+            if not isinstance(source, dict):
+                return {"error": "Body must be a JSON object"}, 400
+
+            config = {}
+            for key in RIDER_KEYS:
+                value = source.get(key)
+                if value is None:
+                    continue
+                if key == "riderSlots":
+                    if not isinstance(value, list):
+                        return {"error": "riderSlots must be a list"}, 400
+                elif not isinstance(value, dict):
+                    return {"error": f"{key} must be an object"}, 400
+                config[key] = value
 
             item = {
-                "partitionkey": {"S": COUPON_CONFIG_PK},
-                "sortKey": {"S": COUPON_CONFIG_SK},
+                "partitionkey": {"S": RIDER_CONFIG_PK},
+                "sortKey": {"S": RIDER_CONFIG_SK},
                 "config": python_to_dynamodb(config),
                 "updatedAt": {"S": now_ist_iso()},
             }
             dynamodb_client.put_item(TableName=TABLES["CONFIG"], Item=item)
 
-            metrics.add_metric(name="CouponConfigSaved", unit="Count", value=1)
-            return {"message": "Coupon config saved", "couponConfig": config}, 200
+            metrics.add_metric(name="RiderConfigSaved", unit="Count", value=1)
+            return {"message": "Rider config saved", "config": config}, 200
         except Exception as e:
-            logger.error("Error saving coupon config", exc_info=True)
-            return {"error": "Failed to save coupon config", "message": str(e)}, 500
+            logger.error("Error saving rider config", exc_info=True)
+            return {"error": "Failed to save rider config", "message": str(e)}, 500
 
     @app.get("/api/v1/config/home-hero-banner")
     @tracer.capture_method

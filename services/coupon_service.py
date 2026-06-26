@@ -6,6 +6,7 @@ from typing import Optional
 from aws_lambda_powertools import Logger
 
 from config.pricing import round_nearest_half
+from services.coupon_config_service import fetch_blocked_config_map
 from utils import normalize_phone
 from utils.dynamodb import TABLES, dynamodb_client
 from utils.dynamodb_helpers import dynamodb_to_python
@@ -76,7 +77,7 @@ class CouponService:
         if not normalized_restaurant_id:
             return set()
 
-        config_payload = config if isinstance(config, dict) else CouponService._fetch_global_config()
+        config_payload = config if isinstance(config, dict) else fetch_blocked_config_map()
         field_names = (
             "blockedCouponsByRestaurant",
             "couponBlocklistByRestaurant",

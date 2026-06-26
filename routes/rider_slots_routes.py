@@ -96,6 +96,46 @@ def register_rider_slots_routes(app):
             logger.error("Error listing rider slots", exc_info=True)
             return {"error": "ListSlotsFailed", "message": str(e)}, 500
 
+    @app.post("/api/v1/ops/rider-slots/settings")
+    @tracer.capture_method
+    def ops_update_slot_settings():
+        """Admin — update rider slot settings (persisted to CONFIG#RIDER)."""
+        try:
+            body = app.current_event.json_body or {}
+            source = body.get("settings") if isinstance(body.get("settings"), dict) else body
+            settings = RiderSlotsService.update_settings(source)
+            return {"settings": settings}, 200
+        except SlotError as e:
+            return {"error": e.code, "message": e.message}, e.http_status
+        except Exception as e:
+            logger.error("Error updating rider slot settings", exc_info=True)
+            return {"error": "UpdateSettingsFailed", "message": str(e)}, 500
+
+    @app.get("/api/v1/ops/rider-bonus")
+    @tracer.capture_method
+    def ops_get_bonus_config():
+        """Admin — current rider bonus campaign config (raw, incl. disabled/expired)."""
+        try:
+            return {"bonusConfig": RiderSlotsService.get_bonus_config()}, 200
+        except Exception as e:
+            logger.error("Error fetching rider bonus config", exc_info=True)
+            return {"error": "GetBonusFailed", "message": str(e)}, 500
+
+    @app.post("/api/v1/ops/rider-bonus")
+    @tracer.capture_method
+    def ops_update_bonus_config():
+        """Admin — update the rider bonus campaign (persisted to CONFIG#RIDER)."""
+        try:
+            body = app.current_event.json_body or {}
+            source = body.get("bonusConfig") if isinstance(body.get("bonusConfig"), dict) else body
+            bonus = RiderSlotsService.update_bonus_config(source)
+            return {"bonusConfig": bonus}, 200
+        except SlotError as e:
+            return {"error": e.code, "message": e.message}, e.http_status
+        except Exception as e:
+            logger.error("Error updating rider bonus config", exc_info=True)
+            return {"error": "UpdateBonusFailed", "message": str(e)}, 500
+
     # ----------------------------------------------------------------- RIDER (JWT)
     @app.get("/api/v1/riders/<rider_id>/slots/available")
     @tracer.capture_method

@@ -10,14 +10,11 @@ from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 
 from models.rider_earnings import RiderEarnings
+from services.rider_config_service import fetch_rider_config
 from utils.datetime_ist import IST, now_ist_iso
 from utils.dynamodb import TABLES, dynamodb_client
-from utils.dynamodb_helpers import dynamodb_to_python
 
 logger = Logger()
-
-CONFIG_PK = "CONFIG#GLOBAL"
-CONFIG_SK = "CONFIG"
 
 
 def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
@@ -87,18 +84,8 @@ class EarningsService:
 
     @staticmethod
     def _fetch_global_config() -> dict:
-        response = dynamodb_client.get_item(
-            TableName=TABLES["CONFIG"],
-            Key={
-                "partitionkey": {"S": CONFIG_PK},
-                "sortKey": {"S": CONFIG_SK},
-            },
-        )
-        item = response.get("Item")
-        if not item:
-            return {}
-        payload = dynamodb_to_python(item.get("config", {"NULL": True}))
-        return payload if isinstance(payload, dict) else {}
+        """Rider config map ({riderBonusConfig, ...}) from the dedicated rider row."""
+        return fetch_rider_config()
 
     @staticmethod
     def get_bonus_campaign(reference_time: Optional[datetime] = None) -> Optional[dict]:

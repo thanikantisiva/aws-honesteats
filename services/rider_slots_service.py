@@ -1,9 +1,9 @@
 """Rider slots service — Zomato-style committed shift booking + compliance.
 
-Slot *definitions* and *settings* live as sibling keys inside the existing global
-config row (``CONFIG#GLOBAL`` / ``CONFIG``) alongside ``riderBonusConfig``:
+Slot *settings* live in the dedicated rider config row (``CONFIG#RIDER`` / ``CONFIG``)
+alongside ``riderBonusConfig`` (see services/rider_config_service.py; reads fall back
+to the legacy ``CONFIG#GLOBAL`` keys until migrated):
 
-    config.riderSlots          -> list[ slot ]
     config.riderSlotsSettings  -> { complianceThresholdPct, maxRejectionsAllowed,
                                     noShowPenalty, staleSeconds, noShowBanThreshold,
                                     noShowBanWindowDays, noShowBanDurationDays }
@@ -28,13 +28,15 @@ import boto3
 from botocore.exceptions import ClientError
 from aws_lambda_powertools import Logger
 
+from services.rider_config_service import RIDER_CONFIG_PK, fetch_rider_config
 from utils.dynamodb import dynamodb_client, TABLES, generate_id
 from utils.dynamodb_helpers import python_to_dynamodb, dynamodb_to_python
 from utils.datetime_ist import IST, now_ist_iso
 
 logger = Logger()
 
-CONFIG_PK = "CONFIG#GLOBAL"
+# Rider config (settings/bonus) lives in its own row now; slots are separate items.
+CONFIG_PK = RIDER_CONFIG_PK
 CONFIG_SK = "CONFIG"
 SETTINGS_KEY = "riderSlotsSettings"
 
@@ -161,15 +163,8 @@ class RiderSlotsService:
     # ------------------------------------------------------------------ config row helpers
     @staticmethod
     def _get_config_map() -> dict:
-        resp = dynamodb_client.get_item(
-            TableName=TABLES["CONFIG"],
-            Key={"partitionkey": {"S": CONFIG_PK}, "sortKey": {"S": CONFIG_SK}},
-        )
-        item = resp.get("Item")
-        if not item:
-            return {}
-        cfg = dynamodb_to_python(item.get("config", {"M": {}}))
-        return cfg if isinstance(cfg, dict) else {}
+        # Reads the dedicated rider config row, falling back to legacy CONFIG#GLOBAL.
+        return fetch_rider_config()
 
     @staticmethod
     def _write_config_key(key: str, value) -> None:
@@ -210,6 +205,91 @@ class RiderSlotsService:
         if isinstance(stored, dict):
             merged.update({k: v for k, v in stored.items() if v is not None})
         return merged
+
+    # Fields stored as floats; everything else in DEFAULT_SETTINGS is a non-negative int.
+    _FLOAT_SETTINGS = {"complianceThresholdPct", "noShowPenalty"}
+
+    @staticmethod
+    def update_settings(partial: dict) -> dict:
+        """Validate + persist rider slot settings (riderSlotsSettings in CONFIG#RIDER).
+
+        Accepts a partial dict (unknown keys ignored); merges over current values.
+        """
+        if not isinstance(partial, dict):
+            raise SlotError("InvalidSettings", "settings must be an object")
+
+        merged = RiderSlotsService.get_settings()
+        for key in DEFAULT_SETTINGS:
+            if key not in partial or partial[key] is None:
+                continue
+            try:
+                merged[key] = (
+                    float(partial[key]) if key in RiderSlotsService._FLOAT_SETTINGS
+                    else int(float(partial[key]))
+                )
+            except (TypeError, ValueError):
+                raise SlotError("InvalidSettings", f"{key} must be a number")
+
+        if not (0.0 <= float(merged["complianceThresholdPct"]) <= 1.0):
+            raise SlotError("InvalidSettings", "complianceThresholdPct must be between 0 and 1")
+        for key in DEFAULT_SETTINGS:
+            if float(merged[key]) < 0:
+                raise SlotError("InvalidSettings", f"{key} must be >= 0")
+
+        RiderSlotsService._write_config_key(SETTINGS_KEY, merged)
+        return RiderSlotsService.get_settings()
+
+    # ------------------------------------------------------------------ rider bonus config
+    @staticmethod
+    def get_bonus_config() -> dict:
+        """Raw riderBonusConfig from CONFIG#RIDER (empty dict if unset)."""
+        bonus = RiderSlotsService._get_config_map().get("riderBonusConfig")
+        return bonus if isinstance(bonus, dict) else {}
+
+    @staticmethod
+    def update_bonus_config(data: dict) -> dict:
+        """Validate + persist the rider bonus campaign (riderBonusConfig in CONFIG#RIDER)."""
+        if not isinstance(data, dict):
+            raise SlotError("InvalidBonus", "bonusConfig must be an object")
+
+        clean: dict = {"enabled": bool(data.get("enabled", False))}
+
+        try:
+            clean["targetStops"] = int(float(data.get("targetStops") or 0))
+        except (TypeError, ValueError):
+            raise SlotError("InvalidBonus", "targetStops must be a number")
+        if clean["targetStops"] < 0:
+            raise SlotError("InvalidBonus", "targetStops must be >= 0")
+
+        for key in ("title", "description", "startDate", "endDate"):
+            value = str(data.get(key) or "").strip()
+            if value:
+                clean[key] = value
+
+        milestones = []
+        raw = data.get("milestones")
+        if raw is not None:
+            if not isinstance(raw, list):
+                raise SlotError("InvalidBonus", "milestones must be a list")
+            for entry in raw:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    stops = int(float(entry.get("stops")))
+                    amount = float(entry.get("amount"))
+                except (TypeError, ValueError):
+                    raise SlotError("InvalidBonus", "each milestone needs numeric stops and amount")
+                if stops <= 0 or amount < 0:
+                    raise SlotError("InvalidBonus", "milestone stops must be > 0 and amount >= 0")
+                milestones.append({"stops": stops, "amount": round(amount, 2)})
+            milestones.sort(key=lambda m: m["stops"])
+        clean["milestones"] = milestones
+
+        if clean["enabled"] and (not clean.get("startDate") or not clean.get("endDate")):
+            raise SlotError("InvalidBonus", "startDate and endDate are required when the campaign is enabled")
+
+        RiderSlotsService._write_config_key("riderBonusConfig", clean)
+        return RiderSlotsService.get_bonus_config()
 
     @staticmethod
     def _write_slot(slot: dict) -> None:
