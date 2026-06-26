@@ -6,6 +6,7 @@ from aws_lambda_powertools import Logger, Tracer, Metrics
 from config.pricing import compute_gst_breakdown
 from services.coupon_config_service import coupons_enabled_now
 from services.coupon_service import CouponService
+from services.effective_config_service import fetch_effective_config
 from services.restaurant_service import RestaurantService
 from utils.dynamodb import dynamodb_client, TABLES
 from utils.dynamodb_helpers import dynamodb_to_python
@@ -44,21 +45,13 @@ def _to_float(value):
         return None
 
 
-def _fetch_global_delivery_config():
-    """Fetch and validate global delivery fee config from config table."""
-    response = dynamodb_client.get_item(
-        TableName=TABLES["CONFIG"],
-        Key={
-            "partitionkey": {"S": CONFIG_PK},
-            "sortKey": {"S": CONFIG_SK},
-        },
-    )
-    item = response.get("Item")
-    if not item:
-        return None, REQUIRED_CONFIG_KEYS.copy()
+def _fetch_delivery_config(restaurant_id=None):
+    """Fetch + validate delivery fee config — global with per-restaurant overrides.
 
-    config_payload = dynamodb_to_python(item.get("config", {"NULL": True}))
-    if not isinstance(config_payload, dict):
+    Each field falls back to the global value when the restaurant doesn't set it.
+    """
+    config_payload = fetch_effective_config(restaurant_id)
+    if not isinstance(config_payload, dict) or not config_payload:
         return None, REQUIRED_CONFIG_KEYS.copy()
 
     parsed_config = {}
@@ -294,7 +287,7 @@ def register_delivery_routes(app):
                 f"mobileNumber={mobile_number!r}, mobileNumberPresent={bool(mobile_number)}"
             )
 
-            config, missing_keys = _fetch_global_delivery_config()
+            config, missing_keys = _fetch_delivery_config(restaurant_id)
             if not config:
                 logger.warning(
                     "Global delivery config missing or invalid for calculate-fee: "

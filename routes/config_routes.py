@@ -15,6 +15,12 @@ from services.coupon_config_service import (
     fetch_blocked_coupons,
     write_config_keys,
 )
+from services.effective_config_service import (
+    EDITABLE_FIELDS,
+    fetch_effective_config,
+    patch_config_fields,
+    restaurant_has_own_config,
+)
 from services.rider_config_service import (
     RIDER_CONFIG_PK,
     RIDER_CONFIG_SK,
@@ -220,6 +226,71 @@ def register_config_routes(app):
         except Exception as e:
             logger.error("Error fetching config", exc_info=True)
             return {"error": "Failed to fetch config", "message": str(e)}, 500
+
+    @app.get("/api/v1/effective-config")
+    @tracer.capture_method
+    def get_effective_config():
+        """Global config merged with a restaurant's per-field overrides.
+
+        Pass ``?restaurantId=RES-…`` to get the values that apply to that restaurant
+        (each field uses the restaurant override when set, else the global value).
+        """
+        try:
+            query_params = app.current_event.query_string_parameters or {}
+            restaurant_id = str(query_params.get("restaurantId", "")).strip()
+            config = fetch_effective_config(restaurant_id or None)
+            metrics.add_metric(name="EffectiveConfigFetched", unit="Count", value=1)
+            return {
+                "restaurantId": restaurant_id or None,
+                "hasRestaurantConfig": restaurant_has_own_config(restaurant_id),
+                "config": config,
+            }, 200
+        except Exception as e:
+            logger.error("Error fetching effective config", exc_info=True)
+            return {"error": "Failed to fetch effective config", "message": str(e)}, 500
+
+    @app.post("/api/v1/config-fields")
+    @tracer.capture_method
+    def save_config_fields():
+        """Set fee/commission/hike fields on a config row, preserving other keys.
+
+        Body: ``{"restaurantId": "RES-…"|null, "fields": {"platformFee": 5, ...}}``.
+        With a restaurantId, writes/creates ``CONFIG#RESTAURANT#<id>`` (per-field
+        override of global); without one, updates ``CONFIG#GLOBAL``. Only known
+        numeric fields are accepted; empty values are ignored.
+        """
+        try:
+            body = app.current_event.json_body or {}
+            restaurant_id = str(body.get("restaurantId") or "").strip() or None
+
+            fields_in = body.get("fields")
+            if not isinstance(fields_in, dict) or not fields_in:
+                return {"error": "fields must be a non-empty object"}, 400
+
+            fields = {}
+            for field, raw in fields_in.items():
+                if field not in EDITABLE_FIELDS:
+                    continue  # ignore unknown keys rather than writing junk
+                if raw is None or (isinstance(raw, str) and not raw.strip()):
+                    continue  # blank = leave unset (falls back to global)
+                try:
+                    fields[field] = float(raw)
+                except (TypeError, ValueError):
+                    return {"error": f"{field} must be a number"}, 400
+
+            if not fields:
+                return {"error": "No valid fields to save"}, 400
+
+            config = patch_config_fields(restaurant_id, fields)
+            metrics.add_metric(name="ConfigFieldsSaved", unit="Count", value=1)
+            return {
+                "restaurantId": restaurant_id,
+                "savedFields": sorted(fields.keys()),
+                "config": config,
+            }, 200
+        except Exception as e:
+            logger.error("Error saving config fields", exc_info=True)
+            return {"error": "Failed to save config fields", "message": str(e)}, 500
 
     @app.get("/api/v1/yumcoins-config")
     @tracer.capture_method
