@@ -504,9 +504,17 @@ Resources:
                 - iam:PassRole
               Resource:
                 - !GetAtt SlotComplianceInvokeRole.Arn
+            # Custom broadcast: POST /api/v1/ops/broadcast async-invokes the
+            # customer notification Lambda (the long-running fan-out send).
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource:
+                - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rork-honesteats-custom-notification-${Environment}'
       Environment:
         Variables:
           USERS_TABLE_NAME: !Ref UsersTableV2
+          CUSTOM_NOTIFICATION_FUNCTION_NAME: !Sub 'rork-honesteats-custom-notification-${Environment}'
           RESTAURANTS_TABLE_NAME: !Ref RestaurantsTable
           MENU_ITEMS_TABLE_NAME: !Ref MenuItemsTable
           ORDERS_TABLE_NAME: !Ref OrdersTable

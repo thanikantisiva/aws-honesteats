@@ -15,6 +15,8 @@ Expected event:
 {
   "title": "Optional title",  // default "Notification"
   "customMessage": "Body",    // required
+  "imageUrl": "https://...",  // optional; shown as a large image (Android natively,
+                              //   iOS via the Notification Service Extension)
   "data": { "any": "payload" }// optional; merged into FCM data payload
 }
 """
@@ -80,6 +82,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         custom_message = event.get("customMessage")
         title = event.get("title", "Notification")
         data = event.get("data") or {}
+        image_url = (event.get("imageUrl") or data.get("imageUrl") or "").strip() or None
 
         if not custom_message:
             return {
@@ -118,6 +121,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
                 title=rendered_title,
                 data=payload,
                 body=rendered_body,
+                image_url=image_url,
             )
             if ok:
                 sent += 1

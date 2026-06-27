@@ -9,6 +9,10 @@ Restaurant app equivalent: POST
 `/api/v1/restaurants/{restaurantId}/orders/{orderId}/adjust-items`
 (restaurant JWT — see `restaurant_routes.py`).
 """
+import json
+import os
+
+import boto3
 from aws_lambda_powertools import Logger, Tracer, Metrics
 
 from services.order_adjustment_service import (
@@ -181,3 +185,65 @@ def register_ops_routes(app):
                 f"[phone={phone}] Ops set COD toggles failed", exc_info=True
             )
             return {"error": "SetCodTogglesFailed", "message": str(e)}, 500
+
+    @app.post("/api/v1/ops/broadcast")
+    @tracer.capture_method
+    def send_custom_broadcast():
+        """Fire the customer broadcast notification.
+
+        Admin-only (ADMIN_API_KEY via the `/api/v1/ops` prefix). Sends to all active
+        CUSTOMER users in the operating-area geohash partition. The send can take
+        minutes for thousands of recipients — far past the API Gateway timeout — so we
+        invoke the `custom_notification_handler` Lambda ASYNCHRONOUSLY and return at
+        once. The payload mirrors what the admin Notifications page builds.
+
+        Body:
+          - customMessage: required body text ("{{name}}" -> recipient first name)
+          - title:         optional title (default "Notification")
+          - imageUrl:      optional https image shown as a large notification image
+          - data:          optional FCM data payload object
+        """
+        try:
+            body = app.current_event.json_body or {}
+
+            custom_message = str(body.get("customMessage") or "").strip()
+            if not custom_message:
+                return {"error": "customMessage is required"}, 400
+
+            event = {"customMessage": custom_message}
+            title = str(body.get("title") or "").strip()
+            if title:
+                event["title"] = title
+            image_url = str(body.get("imageUrl") or "").strip()
+            if image_url:
+                if not image_url.lower().startswith("https://"):
+                    return {"error": "imageUrl must be an https URL"}, 400
+                event["imageUrl"] = image_url
+            data = body.get("data")
+            if isinstance(data, dict) and data:
+                event["data"] = data
+
+            function_name = os.environ.get("CUSTOM_NOTIFICATION_FUNCTION_NAME") or (
+                f"rork-honesteats-custom-notification-{os.environ.get('ENVIRONMENT', 'dev')}"
+            )
+
+            logger.info(
+                f"Ops broadcast queued -> {function_name} "
+                f"title='{title[:40]}' hasImage={bool(image_url)}"
+            )
+            response = boto3.client("lambda").invoke(
+                FunctionName=function_name,
+                InvocationType="Event",  # async fire-and-forget (don't block the request)
+                Payload=json.dumps(event).encode("utf-8"),
+            )
+
+            metrics.add_metric(name="OpsBroadcastQueued", unit="Count", value=1)
+            return {
+                "status": "queued",
+                "message": "Broadcast started — sending to all active customers.",
+                "function": function_name,
+                "invokeStatus": response.get("StatusCode"),
+            }, 202
+        except Exception as e:
+            logger.error("Ops broadcast failed", exc_info=True)
+            return {"error": "BroadcastFailed", "message": str(e)}, 500

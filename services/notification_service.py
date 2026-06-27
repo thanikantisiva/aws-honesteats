@@ -73,7 +73,8 @@ class NotificationService:
         fcm_token: str,
         title: str,
         data: dict,
-        body: Optional[str] = None
+        body: Optional[str] = None,
+        image_url: Optional[str] = None
     ) -> bool:
         """Send notification via Firebase Admin SDK (generic; use send_order_status_notification for order updates)."""
         if not FIREBASE_AVAILABLE:
@@ -96,6 +97,14 @@ class NotificationService:
                 string_data["title"] = title
                 string_data["body"] = body_text
             android_channel_id = string_data.get("channelId") or None
+
+            # Optional rich image. Carried in `data` so the iOS Notification Service
+            # Extension can read userInfo["imageUrl"], on the APNs fcm_options for
+            # FCM-native iOS handling, and on the Android/top-level Notification so
+            # Android renders a big-picture image automatically.
+            image_url = (image_url or "").strip() or None
+            if image_url:
+                string_data["imageUrl"] = image_url
 
             # Data-only messages let Notifee handle rendering on both foreground AND
             # background/killed app states, giving consistent sound + action buttons.
@@ -140,7 +149,8 @@ class NotificationService:
                         badge=1,
                         mutable_content=True,
                     )
-                )
+                ),
+                fcm_options=messaging.APNSFCMOptions(image=image_url) if image_url else None,
             )
             if is_data_only:
                 message = messaging.Message(
@@ -157,12 +167,13 @@ class NotificationService:
                 message = messaging.Message(
                     token=fcm_token,
                     data=string_data,
-                    notification=messaging.Notification(title=title, body=body_text),
+                    notification=messaging.Notification(title=title, body=body_text, image=image_url),
                     android=messaging.AndroidConfig(
                         priority="high",
                         notification=messaging.AndroidNotification(
                             title=title,
                             body=body_text,
+                            image=image_url,
                             sound=string_data.get("sound") or RIDER_NOTIFICATION_SOUND,
                             channel_id=android_channel_id,
                             icon="ic_launcher"
