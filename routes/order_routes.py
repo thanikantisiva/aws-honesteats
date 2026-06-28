@@ -116,7 +116,16 @@ def register_order_routes(app):
             limit = int(query_params.get('limit', default_limit))
             
             customer_phone = normalize_phone(customer_phone)
-            
+
+            # Lightweight tally of a customer's placed orders (admin "ordered N times").
+            count_only = str(query_params.get('countOnly', '')).lower() in ('1', 'true', 'yes')
+            if count_only:
+                if not customer_phone:
+                    return {"error": "countOnly requires customerPhone"}, 400
+                order_count = OrderService.count_orders_by_customer(customer_phone)
+                metrics.add_metric(name="CustomerOrderCountFetched", unit="Count", value=1)
+                return {"customerPhone": customer_phone, "orderCount": order_count}, 200
+
             # Optional status filter
             status_filter = query_params.get('status')
             

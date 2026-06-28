@@ -108,6 +108,40 @@ class OrderService:
             return orders[:limit]
         except ClientError as e:
             raise Exception(f"Failed to list customer orders: {str(e)}")
+
+    @staticmethod
+    def count_orders_by_customer(customer_phone: str) -> int:
+        """Count a customer's placed orders (excludes INITIATED carts) via the GSI.
+
+        Uses Select='COUNT' so DynamoDB returns just the tally (no item payloads),
+        paginating to sum across pages. `status` is filtered server-side (the GSI is
+        ProjectionType: ALL), matching what list_orders_by_customer shows.
+        """
+        try:
+            query_params = {
+                'TableName': TABLES['ORDERS'],
+                'IndexName': 'customer-phone-statusCreatedAt-index',
+                'KeyConditionExpression': 'customerPhone = :phone',
+                'FilterExpression': '#s <> :initiated',
+                'ExpressionAttributeNames': {'#s': 'status'},
+                'ExpressionAttributeValues': {
+                    ':phone': {'S': customer_phone},
+                    ':initiated': {'S': Order.STATUS_INITIATED},
+                },
+                'Select': 'COUNT',
+            }
+            total = 0
+            while True:
+                response = dynamodb_client.query(**query_params)
+                total += response.get('Count', 0)
+                if 'LastEvaluatedKey' not in response:
+                    break
+                query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+            logger.info(f"Counted {total} placed orders for customer={customer_phone}")
+            return total
+        except ClientError as e:
+            raise Exception(f"Failed to count customer orders: {str(e)}")
     
     @staticmethod
     def list_orders_by_restaurant(restaurant_id: str, status: str = None, limit: int = 500) -> List[Order]:
