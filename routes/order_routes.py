@@ -17,6 +17,11 @@ tracer = Tracer()
 metrics = Metrics()
 
 
+def _normalize_cooking_instructions(value):
+    text = str(value or "").strip()
+    return text[:500] if text else None
+
+
 def register_order_routes(app):
     """Register order routes"""
 
@@ -210,6 +215,7 @@ def register_order_routes(app):
             food_total = body.get('foodTotal', 0)
             delivery_fee = body.get('deliveryFee', 0)
             calculated_fee_response = body.get('calculatedFeeResponse')
+            cooking_instructions = _normalize_cooking_instructions(body.get('cookingInstructions'))
             # Enforce the global coupon switch at this (legacy) creation path too.
             from services.coupon_config_service import coupons_enabled_now, strip_coupon_from_fee_response
             if not coupons_enabled_now():
@@ -271,6 +277,7 @@ def register_order_routes(app):
                 delivery_address=body.get('deliveryAddress'),
                 formatted_address=body.get('formattedAddress'),
                 address_id=address_id,
+                cooking_instructions=cooking_instructions,
                 calculated_fee_response=calculated_fee_response,
                 # Pickup location (restaurant)
                 pickup_address=pickup_address,

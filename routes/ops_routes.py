@@ -19,6 +19,7 @@ from services.order_adjustment_service import (
     OrderAdjustmentService,
     OrderAdjustmentError,
 )
+from services.notification_service import NotificationService
 from services.user_service import UserService
 from utils import normalize_phone
 
@@ -247,3 +248,77 @@ def register_ops_routes(app):
         except Exception as e:
             logger.error("Ops broadcast failed", exc_info=True)
             return {"error": "BroadcastFailed", "message": str(e)}, 500
+
+    @app.post("/api/v1/ops/notifications/test-customer")
+    @tracer.capture_method
+    def send_customer_test_notification():
+        """Send one customer push notification for admin testing.
+
+        Admin-only (ADMIN_API_KEY via the `/api/v1/ops` prefix). This mirrors
+        the broadcast payload, but resolves exactly one CUSTOMER by phone and
+        sends to that customer's latest FCM token.
+
+        Body:
+          - phone:         required customer phone number
+          - customMessage: required body text ("{{name}}" -> first name)
+          - title:         optional title (default "Notification")
+          - imageUrl:      optional https image shown as a large notification image
+          - data:          optional FCM data payload object
+        """
+        try:
+            body = app.current_event.json_body or {}
+            phone = normalize_phone(body.get("phone"))
+            if not phone:
+                return {"error": "phone is required"}, 400
+
+            custom_message = str(body.get("customMessage") or "").strip()
+            if not custom_message:
+                return {"error": "customMessage is required"}, 400
+
+            title = str(body.get("title") or "").strip() or "Notification"
+            image_url = str(body.get("imageUrl") or "").strip()
+            if image_url and not image_url.lower().startswith("https://"):
+                return {"error": "imageUrl must be an https URL"}, 400
+
+            user = UserService.get_user_by_role(phone, "CUSTOMER")
+            if not user:
+                return {"error": "Customer not found"}, 404
+            if not user.fcm_token:
+                return {
+                    "error": "Customer has no FCM token",
+                    "message": "Open the customer app on this phone and allow notifications, then try again.",
+                }, 409
+
+            first_name = ((user.name or "").strip().split() or ["there"])[0]
+            rendered_title = title.replace("{{name}}", first_name)
+            rendered_body = custom_message.replace("{{name}}", first_name)
+
+            payload = body.get("data") if isinstance(body.get("data"), dict) else {}
+            payload = dict(payload)
+            payload.setdefault("type", "custom_test")
+            payload["targetPhone"] = phone
+
+            logger.info(
+                f"Ops test notification sending to customer {phone[:5]}*** "
+                f"hasImage={bool(image_url)}"
+            )
+            ok = NotificationService.send_via_firebase(
+                fcm_token=user.fcm_token,
+                title=rendered_title,
+                data=payload,
+                body=rendered_body,
+                image_url=image_url or None,
+            )
+            if not ok:
+                return {"error": "NotificationSendFailed"}, 502
+
+            metrics.add_metric(name="OpsCustomerTestNotificationSent", unit="Count", value=1)
+            return {
+                "status": "sent",
+                "message": "Test notification sent to the selected customer.",
+                "phone": phone,
+                "hasImage": bool(image_url),
+            }, 200
+        except Exception as e:
+            logger.error("Ops customer test notification failed", exc_info=True)
+            return {"error": "TestNotificationFailed", "message": str(e)}, 500

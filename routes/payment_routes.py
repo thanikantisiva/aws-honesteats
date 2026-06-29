@@ -26,6 +26,11 @@ RAZORPAY_FETCH_MAX_ATTEMPTS = 6
 RAZORPAY_FETCH_RETRY_SECONDS = 2
 
 
+def _normalize_cooking_instructions(value):
+    text = str(value or "").strip()
+    return text[:500] if text else None
+
+
 def _commit_theater_inventory(order: "Order") -> tuple:
     """Atomically decrement inventoryCount for each line item on a theater order.
 
@@ -205,6 +210,7 @@ def register_payment_routes(app):
             delivery_address = body.get('deliveryAddress')
             formatted_address = body.get('formattedAddress')
             address_id = body.get('addressId')
+            cooking_instructions = _normalize_cooking_instructions(body.get('cookingInstructions'))
             restaurant_image = body.get('restaurantImage')
             coupon_code = body.get('couponCode')
             coupon_applied = bool(body.get('couponApplied'))
@@ -468,6 +474,7 @@ def register_payment_routes(app):
                 delivery_address=delivery_address,
                 formatted_address=formatted_address,
                 address_id=address_id,
+                cooking_instructions=cooking_instructions,
                 calculated_fee_response=calculated_fee_response,
                 pickup_address=pickup_address,
                 pickup_lat=pickup_lat,

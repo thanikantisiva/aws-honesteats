@@ -80,6 +80,7 @@ class Order:
         delivery_address: Optional[str] = None,
         formatted_address: Optional[str] = None,
         address_id: Optional[str] = None,
+        cooking_instructions: Optional[str] = None,
         payment_id: Optional[str] = None,
         payment_method: Optional[str] = None,
         payment_channel: Optional[str] = None,
@@ -143,6 +144,7 @@ class Order:
         self.delivery_address = delivery_address
         self.formatted_address = formatted_address
         self.address_id = address_id
+        self.cooking_instructions = cooking_instructions
         self.payment_id = payment_id
         self.payment_method = payment_method
         self.payment_channel = payment_channel
@@ -225,6 +227,8 @@ class Order:
             result["formattedAddress"] = self.formatted_address
         if self.address_id:
             result["addressId"] = self.address_id
+        if self.cooking_instructions:
+            result["cookingInstructions"] = self.cooking_instructions
         if self.payment_id:
             result["paymentId"] = self.payment_id
         if self.payment_method:
@@ -360,6 +364,7 @@ class Order:
             delivery_address=item.get("deliveryAddress", {}).get("S") if "deliveryAddress" in item else None,
             formatted_address=item.get("formattedAddress", {}).get("S") if "formattedAddress" in item else None,
             address_id=item.get("addressId", {}).get("S") if "addressId" in item else None,
+            cooking_instructions=item.get("cookingInstructions", {}).get("S") if "cookingInstructions" in item else None,
             payment_id=item.get("paymentId", {}).get("S") if "paymentId" in item else None,
             payment_method=item.get("paymentMethod", {}).get("S") if "paymentMethod" in item else None,
             payment_channel=item.get("paymentChannel", {}).get("S") if "paymentChannel" in item else None,
@@ -448,6 +453,8 @@ class Order:
             item["formattedAddress"] = {"S": self.formatted_address}
         if self.address_id:
             item["addressId"] = {"S": self.address_id}
+        if self.cooking_instructions:
+            item["cookingInstructions"] = {"S": self.cooking_instructions}
         if self.payment_id:
             item["paymentId"] = {"S": self.payment_id}
         if self.payment_method:
