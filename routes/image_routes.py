@@ -2,9 +2,10 @@
 import base64
 import os
 from datetime import datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import boto3
+import requests
 from botocore.exceptions import ClientError
 from aws_lambda_powertools import Logger, Tracer, Metrics
 
@@ -18,6 +19,9 @@ LOGIN_PREFIX = "login/"
 RESTAURANT_IMAGES_BUCKET = os.environ.get("RESTAURANT_IMAGES_BUCKET", "yumdude-restaurant-images-dev")
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg")
 IMAGE_CDN_BASE_URL = os.environ.get("IMAGE_CDN_BASE_URL", "").rstrip("/")
+# Limits for downloading images from a remote URL (admin-supplied "source" links).
+IMAGE_DOWNLOAD_TIMEOUT = int(os.environ.get("IMAGE_DOWNLOAD_TIMEOUT", "10"))
+MAX_IMAGE_BYTES = int(os.environ.get("MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))  # 10 MB
 
 
 def _list_s3_objects(s3_client, bucket: str, prefix: str):
@@ -96,6 +100,60 @@ def _decode_base64_image(value: str):
                 extension = "svg" if mime == "svg+xml" else mime
     data = base64.b64decode(payload)
     return data, extension
+
+
+def _extension_from_content_type(content_type: str) -> str:
+    """Map an image/* content-type to a file extension (empty if unknown)."""
+    mime = (content_type or "").split(";")[0].strip().lower()
+    mapping = {
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+        "image/gif": "gif",
+        "image/bmp": "bmp",
+        "image/svg+xml": "svg",
+    }
+    return mapping.get(mime, "")
+
+
+def _extension_from_url(url: str) -> str:
+    """Infer a file extension from the URL path (empty if none recognised)."""
+    path = urlparse(url or "").path.lower()
+    for ext in IMAGE_EXTENSIONS:
+        if path.endswith(ext):
+            return "jpg" if ext == ".jpeg" else ext.lstrip(".")
+    return ""
+
+
+def _download_image(url: str):
+    """
+    Download an image from a public http(s) URL and return (bytes, extension).
+
+    Used by /images/upload so an admin can hand us a "source" link from anywhere
+    and we mirror the file onto our own CDN. Raises on bad scheme / fetch error /
+    oversized payload.
+    """
+    cleaned = (url or "").strip()
+    parsed = urlparse(cleaned)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Image URL must be a valid http(s) URL")
+
+    response = requests.get(cleaned, timeout=IMAGE_DOWNLOAD_TIMEOUT)
+    response.raise_for_status()
+
+    content = response.content
+    if not content:
+        raise ValueError("Downloaded image is empty")
+    if len(content) > MAX_IMAGE_BYTES:
+        raise ValueError(f"Image exceeds {MAX_IMAGE_BYTES // (1024 * 1024)}MB limit")
+
+    extension = (
+        _extension_from_content_type(response.headers.get("Content-Type", ""))
+        or _extension_from_url(cleaned)
+        or "jpg"
+    )
+    return content, extension
 
 
 def register_image_routes(app):
@@ -262,9 +320,10 @@ def register_image_routes(app):
         """
         Upload image list and return CDN urls.
 
-        Request body:
+        Request body (provide listBase64 and/or listUrls — at least one):
         {
           "listBase64": ["data:image/jpeg;base64,..."],
+          "listUrls": ["https://other-source.example/photo.jpg"],  # server downloads each
           "entity": "RESTAURANT" | "ITEM" | "SUBCATEGORY" | "HEROBANNER" | "PACKAGE_EVIDENCE",
           "restaurantId": "RES-...",
           "itemId": "ITEM-...",   # required for ITEM
@@ -276,13 +335,18 @@ def register_image_routes(app):
                 return {"error": "CDN base URL not configured"}, 500
             body = app.current_event.json_body or {}
             list_base64 = body.get("listBase64") or []
+            list_urls = body.get("listUrls") or []
             entity = str(body.get("entity") or "").upper()
             restaurant_id = body.get("restaurantId")
             item_id = body.get("itemId")
             order_id = body.get("orderId")
 
-            if not isinstance(list_base64, list) or len(list_base64) == 0:
-                return {"error": "listBase64 must be a non-empty array"}, 400
+            if not isinstance(list_base64, list):
+                list_base64 = []
+            if not isinstance(list_urls, list):
+                list_urls = []
+            if len(list_base64) == 0 and len(list_urls) == 0:
+                return {"error": "Provide a non-empty listBase64 or listUrls array"}, 400
             if entity not in ("RESTAURANT", "ITEM", "SUBCATEGORY", "HEROBANNER", "PACKAGE_EVIDENCE"):
                 return {"error": "entity must be RESTAURANT, ITEM, SUBCATEGORY, HEROBANNER, or PACKAGE_EVIDENCE"}, 400
             if entity in ("RESTAURANT", "ITEM") and not restaurant_id:
@@ -304,11 +368,24 @@ def register_image_routes(app):
                 # Keep under restaurant-images/* so CloudFront behavior routes to RestaurantImagesOrigin.
                 base_prefix = "restaurant-images/subcategory"
 
+            # Collect raw image bytes from inline base64 payloads and/or remote URLs.
+            # URLs are downloaded server-side, then both paths share the same S3 put.
+            sources = []  # list of (image_bytes, extension)
+            for encoded in list_base64:
+                image_data, extension = _decode_base64_image(encoded)
+                sources.append((image_data, extension))
+            for url in list_urls:
+                try:
+                    image_data, extension = _download_image(url)
+                except Exception as e:
+                    logger.warning(f"Failed to download image url={url}: {e}")
+                    return {"error": "Failed to download image from url", "url": url, "message": str(e)}, 400
+                sources.append((image_data, extension))
+
             uploaded = []
             now = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
 
-            for idx, encoded in enumerate(list_base64):
-                image_data, extension = _decode_base64_image(encoded)
+            for idx, (image_data, extension) in enumerate(sources):
                 key = f"{base_prefix}/{now}-{idx + 1}.{extension}"
 
                 s3_client.put_object(
