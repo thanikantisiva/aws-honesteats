@@ -126,20 +126,54 @@ def _extension_from_url(url: str) -> str:
     return ""
 
 
+def _sniff_image_extension(data: bytes) -> str:
+    """
+    Detect the image type from the file's magic bytes. This is the source of
+    truth (a remote host's Content-Type / the URL extension can lie). Returns ''
+    when the bytes are not a recognised image — e.g. an HTML error/anti-bot page.
+    """
+    if not data:
+        return ""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "gif"
+    if data.startswith(b"BM"):
+        return "bmp"
+    if len(data) >= 12 and data[0:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    head = data[:512].lstrip().lower()
+    if head.startswith(b"<?xml") or b"<svg" in head:
+        return "svg"
+    return ""
+
+
+# Browser-like headers — some hosts return an HTML error / anti-hotlink page (HTTP
+# 200) to a header-less request, which we'd otherwise store as a broken "image".
+_DOWNLOAD_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; YumDudeImageFetcher/1.0)",
+    "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
+}
+
+
 def _download_image(url: str):
     """
     Download an image from a public http(s) URL and return (bytes, extension).
 
     Used by /images/upload so an admin can hand us a "source" link from anywhere
     and we mirror the file onto our own CDN. Raises on bad scheme / fetch error /
-    oversized payload.
+    oversized payload / non-image content (so we never store a broken image).
     """
     cleaned = (url or "").strip()
     parsed = urlparse(cleaned)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError("Image URL must be a valid http(s) URL")
 
-    response = requests.get(cleaned, timeout=IMAGE_DOWNLOAD_TIMEOUT)
+    response = requests.get(
+        cleaned, timeout=IMAGE_DOWNLOAD_TIMEOUT, headers=_DOWNLOAD_HEADERS, allow_redirects=True
+    )
     response.raise_for_status()
 
     content = response.content
@@ -148,11 +182,16 @@ def _download_image(url: str):
     if len(content) > MAX_IMAGE_BYTES:
         raise ValueError(f"Image exceeds {MAX_IMAGE_BYTES // (1024 * 1024)}MB limit")
 
-    extension = (
-        _extension_from_content_type(response.headers.get("Content-Type", ""))
-        or _extension_from_url(cleaned)
-        or "jpg"
-    )
+    content_type = response.headers.get("Content-Type", "")
+    sniffed = _sniff_image_extension(content)
+    # Reject anything that isn't actually an image (e.g. an HTML page returned with
+    # a 200) instead of silently storing bytes that will never render.
+    if not sniffed and not content_type.lower().startswith("image/"):
+        raise ValueError(
+            f"URL did not return an image (content-type: {content_type or 'unknown'})"
+        )
+
+    extension = sniffed or _extension_from_content_type(content_type) or _extension_from_url(cleaned) or "jpg"
     return content, extension
 
 
