@@ -543,7 +543,9 @@ Resources:
           MESSAGE_CENTRAL_COUNTRY_CODE: !Sub "/rork-honesteats/${Environment}/MESSAGE_CENTRAL_COUNTRY_CODE"
           MESSAGE_CENTRAL_VERIFY_URL: https://cpaas.messagecentral.com/verification/v3/validateOtp
           GOOGLE_MAPS_API_KEY: !Sub "/rork-honesteats/${Environment}/GOOGLE_MAPS_API_KEY"
-          RAZORPAY_MODE: live
+          # prod uses live Razorpay keys; dev uses test keys so payments can be
+          # exercised end-to-end without real charges.
+          RAZORPAY_MODE: !If [IsProd, live, test]
           RAZORPAY_TEST_KEY_ID: !Sub "/rork-honesteats/${Environment}/RAZORPAY_TEST_KEY_ID"
           RAZORPAY_TEST_KEY_SECRET: !Sub "/rork-honesteats/${Environment}/RAZORPAY_TEST_KEY_SECRET"
           RAZORPAY_LIVE_KEY_ID: !Sub "/rork-honesteats/${Environment}/RAZORPAY_LIVE_KEY_ID"
@@ -1231,11 +1233,13 @@ Resources:
       Runtime: python3.11
       Architectures:
         - x86_64
-      # Sized for ~4000 sequential FCM sends. At ~100-150 ms per send_via_firebase
-      # call (FCM round-trip + occasional retry), 4000 tokens ≈ 400-600 s; 600 s
-      # leaves comfortable headroom for slow-tail latencies, GSI pagination, and
-      # the one-time Firebase Admin SDK init.
-      Timeout: 600
+      # Sized for sequential FCM sends. At ~100-150 ms per send_via_firebase call
+      # (FCM round-trip + occasional retry), ~4000 tokens ≈ 400-600 s. Set to the
+      # Lambda hard maximum of 900 s for extra headroom on large/slow-tail sends.
+      # NOTE: 900 s is the AWS ceiling — a send that still exceeds it will be
+      # retried by the async invoke (see duplicate-notification risk); the durable
+      # fix is batched multicast + MaximumRetryAttempts:0, not a higher timeout.
+      Timeout: 900
       MemorySize: 256
       Policies:
         - AWSLambdaBasicExecutionRole
