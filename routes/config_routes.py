@@ -42,6 +42,11 @@ metrics = Metrics()
 # Fixed keys for global app config (not from request body)
 CONFIG_PK = "CONFIG#GLOBAL"
 CONFIG_SK = "CONFIG"
+DAILY_DEAL_SLIDE_CONTENT_KEYS = (
+    "title", "subtitle", "contentType", "imageUrl", "imageAlt", "chipText", "eyebrow",
+    "headline", "description", "statOneValue", "statOneLabel", "statTwoValue",
+    "statTwoLabel", "videoUrl", "html", "ctaLabel", "ctaAction",
+)
 
 
 def _restaurant_config_pk(restaurant_id: str) -> str:
@@ -102,27 +107,19 @@ def _normalize_home_hero_banner(banner: dict) -> dict:
     return normalized
 
 
-def _is_active_in_date(config: dict, today: str) -> bool:
-    """Return true when a config object is active and inside its date window."""
-    if not isinstance(config, dict):
-        return False
-    is_active = _coerce_bool(config.get("isActive"), True)
-    starts_ok = not config.get("startDate") or config["startDate"] <= today
-    ends_ok = not config.get("endDate") or config["endDate"] >= today
-    return bool(is_active and starts_ok and ends_ok)
-
-
 def _normalize_daily_deal_popup(popup: dict) -> dict:
     """Normalize popup and slide content types while preserving admin-authored content."""
     normalized = dict(popup)
+    root_start_date = normalized.get("startDate")
+    root_end_date = normalized.get("endDate")
     content_type = str(normalized.get("contentType") or "image").lower()
     if content_type not in {"image", "html", "video"}:
         content_type = "image"
     normalized["contentType"] = content_type
 
     slides = normalized.get("slides")
+    clean_slides = []
     if isinstance(slides, list):
-        clean_slides = []
         for index, slide in enumerate(slides):
             if not isinstance(slide, dict):
                 continue
@@ -132,10 +129,35 @@ def _normalize_daily_deal_popup(popup: dict) -> dict:
                 slide_type = content_type
             clean_slide["contentType"] = slide_type
             clean_slide["id"] = str(clean_slide.get("id") or f"slide-{index + 1}")
+            if not clean_slide.get("startDate") and root_start_date:
+                clean_slide["startDate"] = root_start_date
+            if not clean_slide.get("endDate") and root_end_date:
+                clean_slide["endDate"] = root_end_date
             clean_slides.append(clean_slide)
-        normalized["slides"] = clean_slides
+    elif any(normalized.get(key) for key in DAILY_DEAL_SLIDE_CONTENT_KEYS):
+        legacy_slide = {key: normalized[key] for key in DAILY_DEAL_SLIDE_CONTENT_KEYS if key in normalized}
+        legacy_slide["id"] = str(normalized.get("id") or "slide-1")
+        legacy_slide["contentType"] = content_type
+        if root_start_date:
+            legacy_slide["startDate"] = root_start_date
+        if root_end_date:
+            legacy_slide["endDate"] = root_end_date
+        clean_slides.append(legacy_slide)
+
+    normalized["slides"] = clean_slides
+    normalized.pop("startDate", None)
+    normalized.pop("endDate", None)
 
     return normalized
+
+
+def _is_daily_deal_slide_active(slide: dict, today: str) -> bool:
+    """Return true when a daily deal slide is inside its date window."""
+    if not isinstance(slide, dict):
+        return False
+    starts_ok = not slide.get("startDate") or slide["startDate"] <= today
+    ends_ok = not slide.get("endDate") or slide["endDate"] >= today
+    return bool(starts_ok and ends_ok)
 
 
 def register_config_routes(app):
@@ -812,8 +834,21 @@ def register_config_routes(app):
                 return {"popup": popup}, 200
 
             today = now_ist_strftime("%Y-%m-%d")
-            if not _is_active_in_date(config, today):
+            if not _coerce_bool(popup.get("isActive"), True):
                 return {"popup": None}, 200
+
+            active_slides = [
+                slide for slide in popup.get("slides", [])
+                if _is_daily_deal_slide_active(slide, today)
+            ]
+            if not active_slides:
+                return {"popup": None}, 200
+
+            popup["slides"] = active_slides
+            first_slide = active_slides[0]
+            for key in DAILY_DEAL_SLIDE_CONTENT_KEYS:
+                if key in first_slide:
+                    popup[key] = first_slide[key]
 
             return {"popup": popup}, 200
         except Exception as e:
